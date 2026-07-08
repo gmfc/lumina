@@ -29,3 +29,4 @@ grep-regex.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 imara-diff.workspace = true
+arboard.workspace = true

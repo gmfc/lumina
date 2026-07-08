@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod clipboard;
 mod commands;
 mod config;
 mod editor;
