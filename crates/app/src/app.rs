@@ -285,6 +285,7 @@ impl App {
         }
         match id {
             "config.reload" => self.reload_config(),
+            "view.toggleTheme" => self.toggle_theme(),
             other => {
                 if !self.registry.dispatch_command(other, &mut self.editor) {
                     self.editor.status_message = Some(format!("Unknown command: {other}"));
@@ -667,6 +668,96 @@ impl App {
         }
     }
 
+    // --- multi-cursor ----------------------------------------------------------
+
+    /// Ctrl+D: first press selects the word under the cursor; each subsequent press adds a
+    /// selection at the next occurrence of the current selection's text (wrapping).
+    fn add_cursor_next_match(&mut self) {
+        let Some(doc) = self.editor.active_document_mut() else {
+            return;
+        };
+        let primary = doc.selections.primary();
+        if primary.is_empty() {
+            let (s, e) = motion::word_at(doc, primary.head);
+            if s < e {
+                doc.selections.set_single(Selection::new(s, e));
+            }
+            return;
+        }
+        let chars: Vec<char> = doc.text.chars().collect();
+        let needle: Vec<char> = chars[primary.from()..primary.to()].to_vec();
+        if needle.is_empty() {
+            return;
+        }
+        let search_from = doc
+            .selections
+            .ranges()
+            .iter()
+            .map(|s| s.to())
+            .max()
+            .unwrap_or(0);
+        if let Some((ms, me)) = find_next_occurrence(&chars, &needle, search_from) {
+            // Skip if that range is already selected.
+            if doc
+                .selections
+                .ranges()
+                .iter()
+                .any(|s| s.from() == ms && s.to() == me)
+            {
+                return;
+            }
+            doc.selections.push(Selection::new(ms, me));
+            doc.selections.normalize();
+            // Make the newly added match the primary so the viewport follows it.
+            if let Some(idx) = doc.selections.ranges().iter().position(|s| s.head == me) {
+                doc.selections.set_primary(idx);
+            }
+        }
+    }
+
+    /// Alt+Up / Alt+Down: add a caret one line above/below at the same display column.
+    fn add_cursor_vertical(&mut self, dir: isize) {
+        let Some(doc) = self.editor.active_document_mut() else {
+            return;
+        };
+        let primary = doc.selections.primary();
+        let (line, col) = doc.char_to_line_col(primary.head);
+        let line_text = doc.line_text(line);
+        let line_body = line_text.trim_end_matches(['\n', '\r']);
+        let display_col = editor_core::view::char_to_display_col(line_body, col, doc.tab_width);
+        let target = (line as isize + dir).clamp(0, doc.len_lines() as isize - 1) as usize;
+        if target == line {
+            return;
+        }
+        let target_text = doc.line_text(target);
+        let target_body = target_text.trim_end_matches(['\n', '\r']);
+        let ch = editor_core::view::display_col_to_char(target_body, display_col, doc.tab_width);
+        let head = doc.line_to_char(target) + ch;
+        doc.selections.push(Selection::caret(head));
+        doc.selections.normalize();
+        if let Some(idx) = doc.selections.ranges().iter().position(|s| s.head == head) {
+            doc.selections.set_primary(idx);
+        }
+    }
+
+    /// Toggle between the dark and light themes.
+    fn toggle_theme(&mut self) {
+        let truecolor = crate::theme::truecolor_supported();
+        self.theme = if self.theme.is_dark() {
+            crate::theme::Theme::default_light(truecolor)
+        } else {
+            crate::theme::Theme::default_dark(truecolor)
+        };
+        self.editor.status_message = Some(format!(
+            "Theme: {}",
+            if self.theme.is_dark() {
+                "dark"
+            } else {
+                "light"
+            }
+        ));
+    }
+
     // --- clipboard -------------------------------------------------------------
 
     fn selection_text(&self) -> Option<String> {
@@ -685,7 +776,17 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if in_rect(self.regions.editor, col, row) {
                     self.editor.focus = Focus::Editor;
-                    self.editor_click(col, row);
+                    if m.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
+                        // Alt+Click adds a cursor (multi-cursor).
+                        if let Some(off) = self.editor_offset_at(col, row) {
+                            self.with_doc(|d| {
+                                d.selections.push(Selection::caret(off));
+                                d.selections.normalize();
+                            });
+                        }
+                    } else {
+                        self.editor_click(col, row);
+                    }
                 } else if in_rect(self.regions.tabs, col, row) {
                     self.tab_bar_click(col);
                 } else if self.regions.sidebar.is_some_and(|r| in_rect(r, col, row)) {
@@ -951,6 +1052,11 @@ impl App {
                 self.with_doc(|d| edit::insert_text(d, "    ", editor_core::GroupBreak::Force))
             }
             Command::Outdent => {} // Phase 2 polish
+
+            // --- multi-cursor ---
+            Command::AddCursorAtNextMatch => self.add_cursor_next_match(),
+            Command::AddCursorAbove => self.add_cursor_vertical(-1),
+            Command::AddCursorBelow => self.add_cursor_vertical(1),
             Command::Paste(s) => {
                 let text = if s.is_empty() {
                     self.clipboard.clone()
@@ -1012,14 +1118,11 @@ impl App {
             Command::QuickOpen => self.open_quick_open(),
             Command::GotoLine => self.open_goto_line(),
 
-            // --- not yet implemented in this phase: surface as a hint + try registry ---
+            // A plugin-contributed command referenced by id.
             Command::Run(id) => {
                 if !self.registry.dispatch_command(&id, &mut self.editor) {
                     self.editor.status_message = Some(format!("Unknown command: {id}"));
                 }
-            }
-            other => {
-                self.editor.status_message = Some(format!("{other:?} — not yet implemented"));
             }
         }
 
@@ -1151,6 +1254,23 @@ fn chords_label(chords: &[Chord]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Find the next occurrence of `needle` in `chars` at/after `from`, wrapping to the start.
+fn find_next_occurrence(chars: &[char], needle: &[char], from: usize) -> Option<(usize, usize)> {
+    let n = chars.len();
+    let m = needle.len();
+    if m == 0 || m > n {
+        return None;
+    }
+    let span = n - m + 1; // number of valid start positions
+    for off in 0..span {
+        let i = (from + off) % span;
+        if &chars[i..i + m] == needle {
+            return Some((i, i + m));
+        }
+    }
+    None
 }
 
 /// True if screen cell `(col, row)` falls within `rect`.
@@ -1614,6 +1734,80 @@ mod tests {
             .iter()
             .any(|h| h.text.contains("find_me")));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ctrl_d_selects_word_then_adds_next_match() {
+        let path = temp_file("foo bar foo baz foo");
+        let mut app = app_with(&path);
+        app.dispatch(Command::AddCursorAtNextMatch); // select "foo" under cursor
+        assert_eq!(app.editor.active_document().unwrap().selections.len(), 1);
+        let sel = app.editor.active_document().unwrap().selections.primary();
+        assert_eq!((sel.from(), sel.to()), (0, 3));
+        app.dispatch(Command::AddCursorAtNextMatch); // add next "foo"
+        assert_eq!(app.editor.active_document().unwrap().selections.len(), 2);
+        app.dispatch(Command::AddCursorAtNextMatch); // third "foo"
+        assert_eq!(app.editor.active_document().unwrap().selections.len(), 3);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn multi_cursor_typing_edits_all() {
+        let path = temp_file("foo bar foo baz foo");
+        let mut app = app_with(&path);
+        for _ in 0..3 {
+            app.dispatch(Command::AddCursorAtNextMatch);
+        }
+        // Replace each selected "foo" by typing.
+        app.dispatch(Command::InsertText("X".into()));
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "X bar X baz X"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn add_cursor_below_creates_two_carets() {
+        let path = temp_file("aaa\nbbb\nccc");
+        let mut app = app_with(&path);
+        app.editor.active_document_mut().unwrap().set_caret(1); // col 1 line 0
+        app.dispatch(Command::AddCursorBelow);
+        let doc = app.editor.active_document().unwrap();
+        assert_eq!(doc.selections.len(), 2);
+        // Second caret is on line 1 at the same column.
+        assert!(doc
+            .selections
+            .ranges()
+            .iter()
+            .any(|s| doc.char_to_line(s.head) == 1));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn alt_click_adds_cursor() {
+        use crossterm::event::KeyModifiers;
+        let path = temp_file("hello\nworld");
+        let mut app = app_with(&path);
+        app.regions.editor = Rect::new(0, 0, 80, 24);
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 1,
+            modifiers: KeyModifiers::ALT,
+        });
+        assert_eq!(app.editor.active_document().unwrap().selections.len(), 2);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn theme_toggles() {
+        let path = temp_file("x");
+        let mut app = app_with(&path);
+        let was_dark = app.theme.is_dark();
+        app.exec_id("view.toggleTheme");
+        assert_ne!(app.theme.is_dark(), was_dark);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

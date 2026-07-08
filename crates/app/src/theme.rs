@@ -17,6 +17,7 @@ pub struct Theme {
     map: HashMap<String, CaptureStyle>,
     pub selection_bg: Color,
     pub gutter_fg: Color,
+    dark: bool,
 }
 
 /// Detect truecolor support from the environment (plan §4).
@@ -79,7 +80,56 @@ impl Theme {
             map,
             selection_bg: c(50, 60, 90, Color::Blue),
             gutter_fg: c(92, 99, 112, Color::DarkGray),
+            dark: true,
         }
+    }
+
+    /// A light theme (same capture set, darker inks on a light ground).
+    pub fn default_light(truecolor: bool) -> Theme {
+        let c = |r: u8, g: u8, b: u8, ansi: Color| -> Color {
+            if truecolor {
+                Color::Rgb(r, g, b)
+            } else {
+                ansi
+            }
+        };
+        let plain = |fg: Color| CaptureStyle {
+            fg,
+            modifier: Modifier::empty(),
+        };
+        let italic = |fg: Color| CaptureStyle {
+            fg,
+            modifier: Modifier::ITALIC,
+        };
+        let mut map = HashMap::new();
+        let mut set = |k: &str, v: CaptureStyle| {
+            map.insert(k.to_string(), v);
+        };
+        set("keyword", plain(c(167, 29, 93, Color::Magenta)));
+        set("function", plain(c(0, 92, 197, Color::Blue)));
+        set("function.macro", plain(c(0, 134, 179, Color::Cyan)));
+        set("type", plain(c(121, 94, 38, Color::Yellow)));
+        set("constructor", plain(c(121, 94, 38, Color::Yellow)));
+        set("string", plain(c(3, 47, 98, Color::Green)));
+        set("number", plain(c(0, 92, 197, Color::Yellow)));
+        set("constant", plain(c(0, 92, 197, Color::Yellow)));
+        set("constant.builtin", plain(c(0, 134, 179, Color::Cyan)));
+        set("comment", italic(c(106, 115, 125, Color::DarkGray)));
+        set("property", plain(c(215, 58, 73, Color::Red)));
+        set("variable", plain(c(36, 41, 46, Color::Black)));
+        set("operator", plain(c(36, 41, 46, Color::Black)));
+        set("punctuation", plain(c(36, 41, 46, Color::Black)));
+        set("attribute", plain(c(0, 134, 179, Color::Cyan)));
+        Theme {
+            map,
+            selection_bg: c(200, 220, 250, Color::Blue),
+            gutter_fg: c(160, 165, 170, Color::DarkGray),
+            dark: false,
+        }
+    }
+
+    pub fn is_dark(&self) -> bool {
+        self.dark
     }
 
     /// Load user theme overrides from `<config>/lumina/theme.toml` if present.
