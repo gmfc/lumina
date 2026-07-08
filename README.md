@@ -47,6 +47,7 @@ tab_width = 4
 sidebar_width = 30
 follow_mode = true          # auto-scroll to external edits as an agent writes files
 poll_watch = false          # set true on devcontainer/NFS mounts where inotify is unreliable
+icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
 
 [keys]
 "ctrl+k ctrl+u" = "shout.line"

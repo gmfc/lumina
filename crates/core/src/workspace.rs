@@ -70,6 +70,23 @@ impl Workspace {
         }
     }
 
+    /// Move the tab at `from` to index `to` (drag-to-reorder), keeping the same document
+    /// focused wherever it lands.
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        let n = self.tabs.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let active_id = self.tabs.get(self.active_tab).copied();
+        let id = self.tabs.remove(from);
+        self.tabs.insert(to, id);
+        if let Some(aid) = active_id {
+            if let Some(pos) = self.tabs.iter().position(|&t| t == aid) {
+                self.active_tab = pos;
+            }
+        }
+    }
+
     pub fn focus_doc(&mut self, id: DocId) {
         if let Some(pos) = self.tabs.iter().position(|&t| t == id) {
             self.active_tab = pos;
@@ -109,5 +126,17 @@ mod tests {
         ws.close_tab(0);
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.active_doc(), Some(b));
+    }
+
+    #[test]
+    fn move_tab_reorders_and_keeps_focus() {
+        let mut ws = Workspace::new(PathBuf::from("/tmp"));
+        let a = ws.open_document(Document::from_str("a"));
+        let b = ws.open_document(Document::from_str("b"));
+        let c = ws.open_document(Document::from_str("c"));
+        ws.focus_doc(a); // active is the first tab
+        ws.move_tab(0, 2); // move "a" to the end
+        assert_eq!(ws.tabs, vec![b, c, a]);
+        assert_eq!(ws.active_doc(), Some(a)); // focus follows the moved doc
     }
 }

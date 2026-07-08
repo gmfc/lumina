@@ -49,6 +49,8 @@ pub struct App {
     clipboard: crate::clipboard::Clipboard,
     /// Char offset where the current drag began (selection anchor).
     drag_anchor: Option<usize>,
+    /// Index of the tab currently being dragged to reorder, if any.
+    tab_drag: Option<usize>,
     /// Last click for multi-click detection.
     last_click: Option<ClickState>,
     // --- Phase 8: background workers + external sync ---
@@ -79,10 +81,11 @@ impl App {
     pub fn new(arg: Option<String>) -> Result<App> {
         let (root, open_file) = resolve_arg(arg);
         let mut editor = EditorState::new(root);
+        let config = crate::config::Config::load();
 
         // Built-in plugins + any external (script) plugins from the plugins dirs. Both
         // register through the same Registry — the external tier has no special path.
-        let mut plugins = editor_builtins::all_builtins();
+        let mut plugins = editor_builtins::all_builtins_with(config.icons);
         for dir in external_plugin_dirs(&editor.workspace.root) {
             plugins.extend(editor_plugin::runtime::load_dir(&dir));
         }
@@ -120,7 +123,6 @@ impl App {
         let mut theme = crate::theme::Theme::default_dark(truecolor);
         theme.load_user_overrides();
 
-        let config = crate::config::Config::load();
         editor.sidebar_width = config.sidebar_width;
         let follow_mode = config.follow_mode;
         let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
@@ -156,6 +158,7 @@ impl App {
             config,
             clipboard: crate::clipboard::Clipboard::new(),
             drag_anchor: None,
+            tab_drag: None,
             last_click: None,
             worker_tx,
             worker_rx,
@@ -851,8 +854,26 @@ impl App {
                     self.sidebar_click(col, row);
                 }
             }
+            MouseEventKind::Down(MouseButton::Middle) => {
+                // Middle-click closes a tab (VS Code parity).
+                if in_rect(self.regions.tabs, col, row) {
+                    if let Some((i, _)) = self.tab_at(col) {
+                        self.request_close(i);
+                    }
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some(anchor) = self.drag_anchor {
+                if let Some(from) = self.tab_drag {
+                    // Dragging a tab within the bar reorders it.
+                    if in_rect(self.regions.tabs, col, row) {
+                        if let Some((to, _)) = self.tab_at(col) {
+                            if to != from {
+                                self.editor.workspace.move_tab(from, to);
+                                self.tab_drag = Some(to);
+                            }
+                        }
+                    }
+                } else if let Some(anchor) = self.drag_anchor {
                     if let Some(off) = self.editor_offset_at(col, row) {
                         self.with_doc(|d| {
                             d.selections.set_single(Selection::new(anchor, off));
@@ -862,6 +883,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag_anchor = None;
+                self.tab_drag = None;
             }
             MouseEventKind::ScrollUp => self.scroll_editor(-3),
             MouseEventKind::ScrollDown => self.scroll_editor(3),
@@ -925,14 +947,13 @@ impl App {
         }
     }
 
-    fn tab_bar_click(&mut self, col: u16) {
+    /// Hit-test a tab-bar column, returning `(tab_index, on_close_marker)`.
+    fn tab_at(&self, col: u16) -> Option<(usize, bool)> {
         // Tabs render as " name marker " segments; recompute their extents to hit-test.
         let ws = &self.editor.workspace;
         let mut x = self.regions.tabs.x;
         for (i, &id) in ws.tabs.iter().enumerate() {
-            let Some(doc) = ws.documents.get(id) else {
-                continue;
-            };
+            let doc = ws.documents.get(id)?;
             let name = doc
                 .path
                 .as_ref()
@@ -942,15 +963,22 @@ impl App {
             let label_w = 1 + name.chars().count() + 1 + 1 + 1; // " name _ marker _ "
             let seg_end = x + label_w as u16;
             if col >= x && col < seg_end {
-                // The marker (× / ●) sits near the segment's right edge -> close.
-                if col >= seg_end.saturating_sub(2) {
-                    self.editor.workspace.close_tab(i);
-                } else {
-                    self.editor.workspace.focus_tab(i);
-                }
-                return;
+                // The marker (× / ●) sits near the segment's right edge.
+                return Some((i, col >= seg_end.saturating_sub(2)));
             }
             x = seg_end;
+        }
+        None
+    }
+
+    fn tab_bar_click(&mut self, col: u16) {
+        if let Some((i, on_close)) = self.tab_at(col) {
+            if on_close {
+                self.request_close(i);
+            } else {
+                self.editor.workspace.focus_tab(i);
+                self.tab_drag = Some(i); // arm a potential drag-to-reorder
+            }
         }
     }
 
