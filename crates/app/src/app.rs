@@ -3737,9 +3737,10 @@ mod tests {
     }
 
     /// Drive the terminal panel end-to-end against a real PTY + `/bin/sh`: render, spawn, type,
-    /// switch tabs, scroll, and close. Unix-only (ConPTY/`cmd` behavior differs on Windows) and
+    /// switch tabs, scroll, and close. Scoped to Linux — the only platform where coverage is
+    /// collected, so there's no reason to take on macOS PTY / Windows ConPTY variance — and
     /// guarded so a runner without a usable PTY skips cleanly rather than failing.
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn terminal_end_to_end_drive() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -3821,7 +3822,7 @@ mod tests {
     }
 
     /// Drain PTY output and redraw until `needle` renders, or a short timeout elapses.
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn pump_until(app: &mut App, needle: &str) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
