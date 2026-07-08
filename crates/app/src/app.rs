@@ -1395,12 +1395,24 @@ impl App {
             Command::SelectLine => self.with_doc(edit::select_line),
 
             // --- editing ---
-            Command::InsertChar(c) => self.with_doc(|d| edit::insert_char(d, c)),
-            Command::InsertNewline => self.with_doc(edit::insert_newline),
+            Command::InsertChar(c) => {
+                let (pairs, indent) = (self.config.auto_pairs, self.config.auto_indent);
+                let table = editor_core::PairTable::default();
+                self.with_doc(|d| edit::insert_char_smart(d, c, &table, pairs, indent));
+            }
+            Command::InsertNewline => {
+                let indent = self.config.auto_indent;
+                let table = editor_core::PairTable::default();
+                self.with_doc(|d| edit::insert_newline_smart(d, &table, indent));
+            }
             Command::InsertText(s) => {
                 self.with_doc(|d| edit::insert_text(d, &s, editor_core::GroupBreak::Force))
             }
-            Command::DeleteBackward => self.with_doc(edit::delete_backward),
+            Command::DeleteBackward => {
+                let pairs = self.config.auto_pairs;
+                let table = editor_core::PairTable::default();
+                self.with_doc(|d| edit::delete_backward_smart(d, &table, pairs));
+            }
             Command::DeleteForward => self.with_doc(edit::delete_forward),
             Command::DeleteWordBackward => self.with_doc(edit::delete_word_backward),
             Command::DuplicateLine => self.with_doc(edit::duplicate_line),
@@ -1771,6 +1783,54 @@ mod tests {
         assert_eq!(app.editor.active_document().unwrap().to_string(), "");
         app.dispatch(Command::Redo);
         assert_eq!(app.editor.active_document().unwrap().to_string(), "hi");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn auto_pairs_multi_cursor_dispatch() {
+        // plan §1.1 acceptance: three cursors, typing `(` yields three `()` with a caret
+        // inside each, routed through the real Command dispatch (auto_pairs on by default).
+        let path = temp_file("a\nb\nc\n");
+        let mut app = app_with(&path);
+        {
+            let doc = app.editor.active_document_mut().unwrap();
+            doc.selections = editor_core::Selections::from_iter([
+                Selection::caret(0),
+                Selection::caret(2),
+                Selection::caret(4),
+            ]);
+        }
+        app.dispatch(Command::InsertChar('('));
+        let doc = app.editor.active_document().unwrap();
+        assert_eq!(doc.to_string(), "()a\n()b\n()c\n");
+        assert_eq!(doc.selections.len(), 3);
+        for s in doc.selections.ranges() {
+            assert!(s.is_empty(), "caret stays a caret");
+            assert_eq!(doc.text.char(s.head), ')', "caret sits before the closer");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn auto_indent_newline_dispatch() {
+        // Auto-indent in isolation (auto-pairs off so the braces aren't auto-closed): a
+        // newline after `{` indents the fresh line, and typing `}` on it dedents (plan §1.2).
+        let path = temp_file("");
+        let mut app = app_with(&path);
+        app.config.auto_pairs = false;
+        for c in "fn f() {".chars() {
+            app.dispatch(Command::InsertChar(c));
+        }
+        app.dispatch(Command::InsertNewline);
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "fn f() {\n    "
+        );
+        app.dispatch(Command::InsertChar('}'));
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "fn f() {\n}"
+        );
         std::fs::remove_file(&path).ok();
     }
 
