@@ -15,6 +15,48 @@ pub mod transport;
 
 pub use client::{LspClient, LspHandle};
 
+/// A message from a server to the client: either a diagnostics notification or a response to
+/// one of our requests (correlated by `id`).
+#[derive(Debug, Clone)]
+pub enum Incoming {
+    Diagnostics(DiagnosticsUpdate),
+    Response { id: i64, result: serde_json::Value },
+}
+
+/// A source location in (line, UTF-16 char) coordinates — the result of go-to-definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    pub uri: String,
+    pub line: u32,
+    pub character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+}
+
+/// A completion candidate: what the palette shows and what gets inserted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionItem {
+    pub label: String,
+    pub detail: Option<String>,
+    pub insert_text: String,
+}
+
+/// A single text edit in (line, UTF-16 char) coordinates (used by rename).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEdit {
+    pub start_line: u32,
+    pub start_char16: u32,
+    pub end_line: u32,
+    pub end_char16: u32,
+    pub new_text: String,
+}
+
+/// A set of edits grouped by document URI — a `WorkspaceEdit` (used by rename).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceEdit {
+    pub changes: Vec<(String, Vec<TextEdit>)>,
+}
+
 /// Severity of a diagnostic (simplified from `lsp_types::DiagnosticSeverity`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {

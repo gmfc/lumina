@@ -59,6 +59,11 @@ pub enum Command {
     ReplaceCurrent,
     ReplaceAll,
     ProjectSearch,
+    // language server
+    Hover,
+    GotoDefinition,
+    Completion,
+    RenameSymbol,
     // ui
     ToggleSidebar,
     FocusSidebar,
