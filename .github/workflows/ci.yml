@@ -79,5 +79,5 @@ jobs:
       # that phase (the type it tests will exist and the suite will start enforcing):
       #
       - run: cargo test -p editor-core --features proptests --test transaction_roundtrip --test selection_invariants   # Phase 2
-      # - run: cargo test -p editor-core --features proptests --test coordinate_mapping                                  # Phase 3
+      - run: cargo test -p editor-core --features proptests --test coordinate_mapping                                  # Phase 3
       # - run: cargo test -p editor-builtins --features proptests --test self_hosting                                    # Phase 7

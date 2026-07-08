@@ -227,6 +227,40 @@ fn word_end_right(doc: &Document, pos: usize) -> usize {
     i
 }
 
+/// The `[start, end)` char range of the word (or whitespace/punct run) containing `pos`.
+/// Used by double-click word selection.
+pub fn word_at(doc: &Document, pos: usize) -> (usize, usize) {
+    let chars: Vec<char> = doc.text.chars().collect();
+    let n = chars.len();
+    if n == 0 {
+        return (0, 0);
+    }
+    let idx = pos.min(n - 1);
+    let cls = class_of(chars[idx]);
+    let mut start = idx;
+    while start > 0 && class_of(chars[start - 1]) == cls {
+        start -= 1;
+    }
+    let mut end = idx;
+    while end < n && class_of(chars[end]) == cls {
+        end += 1;
+    }
+    (start, end)
+}
+
+/// The `[start, end)` char range of the whole line containing `pos`, including its
+/// trailing newline (so triple-click selects the line and its break). Used by triple-click.
+pub fn line_at(doc: &Document, pos: usize) -> (usize, usize) {
+    let line = doc.char_to_line(pos);
+    let start = doc.line_to_char(line);
+    let end = if line + 1 < doc.len_lines() {
+        doc.line_to_char(line + 1)
+    } else {
+        doc.len_chars()
+    };
+    (start, end)
+}
+
 fn matching_bracket(doc: &Document, pos: usize) -> Option<usize> {
     let chars: Vec<char> = doc.text.chars().collect();
     let n = chars.len();

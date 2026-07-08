@@ -31,21 +31,42 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Remember body height for PageUp/PageDown next tick.
     app.page_height = body.height.saturating_sub(0) as usize;
 
-    let editor_area = if app.editor.sidebar_visible {
+    let (editor_area, sidebar_area) = if app.editor.sidebar_visible {
         let [sidebar, editors] = Layout::horizontal([
             Constraint::Length(app.editor.sidebar_width),
             Constraint::Min(0),
         ])
         .areas(body);
         render_sidebar(f, app, sidebar);
-        editors
+        (editors, Some(sidebar))
     } else {
-        body
+        (body, None)
     };
 
     render_tabs(f, app, tabs_area);
     render_editor(f, app, editor_area);
     render_status(f, app, status_area);
+
+    // Record laid-out regions so the mouse router (which runs outside draw) can hit-test.
+    app.regions = Regions {
+        tabs: tabs_area,
+        sidebar: sidebar_area,
+        editor: editor_area,
+    };
+}
+
+/// Screen regions from the last frame, for mouse hit-testing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Regions {
+    pub tabs: Rect,
+    pub sidebar: Option<Rect>,
+    pub editor: Rect,
+}
+
+/// Gutter width for a document (digits + one padding space). Shared with the mouse router.
+pub fn gutter_width(doc: &Document) -> u16 {
+    let digits = ((doc.len_lines().max(1)) as f64).log10().floor() as u16 + 1;
+    digits.max(3) + 1
 }
 
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
@@ -321,11 +342,6 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // --- small buffer helpers ------------------------------------------------------
-
-fn gutter_width(doc: &Document) -> u16 {
-    let digits = ((doc.len_lines().max(1)) as f64).log10().floor() as u16 + 1;
-    digits.max(3) + 1
-}
 
 fn char_cells(ch: char, col: usize, tab_width: usize) -> usize {
     if ch == '\t' {
