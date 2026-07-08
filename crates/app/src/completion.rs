@@ -45,7 +45,7 @@ impl CompletionState {
             .filter_map(|(i, it)| score(&it.label, &prefix).map(|s| (s, i)))
             .collect();
         // Higher score first; stable within a score so server order is preserved.
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
         self.filtered = scored.into_iter().map(|(_, i)| i).collect();
         self.selected = 0;
     }
