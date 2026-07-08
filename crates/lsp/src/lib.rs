@@ -33,12 +33,14 @@ pub struct Location {
     pub end_character: u32,
 }
 
-/// A completion candidate: what the palette shows and what gets inserted.
+/// A completion candidate: what the popup shows and what gets inserted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionItem {
     pub label: String,
     pub detail: Option<String>,
     pub insert_text: String,
+    /// LSP `CompletionItemKind` (1..=25), if the server sent one — drives the kind glyph.
+    pub kind: Option<u8>,
 }
 
 /// A single text edit in (line, UTF-16 char) coordinates (used by rename).

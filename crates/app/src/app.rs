@@ -261,28 +261,7 @@ impl App {
                 self.editor.overlay = Some(crate::editor::Overlay::Info(text));
             }
             LspEvent::Goto(loc) => self.goto_location(loc),
-            LspEvent::Completion(items) => {
-                let entries: Vec<crate::picker::PickerItem> = items
-                    .into_iter()
-                    .map(|c| {
-                        let label = match &c.detail {
-                            Some(d) => format!("{}  {}", c.label, d),
-                            None => c.label.clone(),
-                        };
-                        crate::picker::PickerItem {
-                            id: c.insert_text,
-                            label,
-                        }
-                    })
-                    .collect();
-                if !entries.is_empty() {
-                    self.editor.picker = Some(crate::picker::Picker::new(
-                        crate::picker::PickerKind::Completion,
-                        "Suggestions",
-                        entries,
-                    ));
-                }
-            }
+            LspEvent::Completion(items) => self.open_completion(items),
             LspEvent::Rename(edit) => self.apply_workspace_edit(edit),
         }
     }
@@ -422,6 +401,11 @@ impl App {
         if self.handle_modal_key(key) {
             return;
         }
+        // Completion popup: navigation / accept / dismiss keys are consumed here; anything
+        // else falls through to edit the buffer, then re-syncs the popup below (plan §2.1).
+        if self.editor.completion.is_some() && self.completion_key(key) {
+            return;
+        }
         // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
         if self.editor.focus == Focus::Sidebar && self.handle_sidebar_key(key) {
             return;
@@ -440,6 +424,20 @@ impl App {
                 self.editor.status_message = Some(format!("{} …", chords_label(&self.pending)));
             }
             Resolve::None => self.text_entry_fallback(key),
+        }
+
+        // Keep the completion popup in sync with the edit just made, or drop it if a modal
+        // opened on top of it.
+        if self.editor.completion.is_some() {
+            if self.editor.overlay.is_some()
+                || self.editor.picker.is_some()
+                || self.editor.find.is_some()
+                || self.search.is_some()
+            {
+                self.editor.completion = None;
+            } else {
+                self.refresh_completion();
+            }
         }
     }
 
@@ -859,10 +857,99 @@ impl App {
                     self.goto_line(line.saturating_sub(1));
                 }
             }
-            PickerKind::Completion => {
-                if let Some(item) = picker.selected_item() {
-                    let insert = item.id.clone();
+        }
+    }
+
+    /// Open a caret-anchored completion popup from server `items` (plan §2.1). Anchors at the
+    /// start of the identifier under the caret so the popup filters on what's already typed.
+    fn open_completion(&mut self, items: Vec<editor_lsp::CompletionItem>) {
+        if items.is_empty() {
+            return;
+        }
+        let Some(doc) = self.editor.active_document() else {
+            return;
+        };
+        let head = doc.selections.primary().head;
+        let mut anchor = head;
+        while anchor > 0 {
+            let ch = doc.text.char(anchor - 1);
+            if ch.is_alphanumeric() || ch == '_' {
+                anchor -= 1;
+            } else {
+                break;
+            }
+        }
+        let prefix = doc.text.slice(anchor..head).to_string();
+        let state = crate::completion::CompletionState::new(items, anchor, prefix);
+        if !state.is_empty() {
+            self.editor.completion = Some(state);
+        }
+    }
+
+    /// Handle a key while the completion popup is open. Returns `true` when it fully consumed
+    /// the key (navigation / accept / dismiss); `false` lets the key edit the buffer normally,
+    /// after which `refresh_completion` re-syncs the popup to the new text.
+    fn completion_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Down => {
+                if let Some(c) = self.editor.completion.as_mut() {
+                    c.move_sel(1);
+                }
+                true
+            }
+            KeyCode::Up => {
+                if let Some(c) = self.editor.completion.as_mut() {
+                    c.move_sel(-1);
+                }
+                true
+            }
+            KeyCode::Esc => {
+                self.editor.completion = None;
+                true
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                let insert = self
+                    .editor
+                    .completion
+                    .as_ref()
+                    .and_then(|c| c.selected_item().map(|it| it.insert_text.clone()));
+                self.editor.completion = None;
+                if let Some(insert) = insert {
                     self.insert_completion(&insert);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// After a buffer edit while the popup is open, recompute the typed prefix and re-filter,
+    /// dismissing when the caret leaves the identifier or nothing matches.
+    fn refresh_completion(&mut self) {
+        let Some(anchor) = self.editor.completion.as_ref().map(|c| c.anchor) else {
+            return;
+        };
+        let prefix = self.editor.active_document().and_then(|doc| {
+            let head = doc.selections.primary().head;
+            if head < anchor {
+                return None;
+            }
+            let p = doc.text.slice(anchor..head).to_string();
+            if p.chars().any(|c| !(c.is_alphanumeric() || c == '_')) {
+                return None;
+            }
+            Some(p)
+        });
+        match prefix {
+            None => self.editor.completion = None,
+            Some(prefix) => {
+                if let Some(c) = self.editor.completion.as_mut() {
+                    c.prefix = prefix;
+                    c.refilter();
+                    if c.is_empty() {
+                        self.editor.completion = None;
+                    }
                 }
             }
         }
@@ -2355,6 +2442,60 @@ mod tests {
             app.editor.active_document().unwrap().to_string(),
             "println!"
         );
+    }
+
+    fn ci(label: &str, kind: u8) -> editor_lsp::CompletionItem {
+        editor_lsp::CompletionItem {
+            label: label.to_string(),
+            detail: None,
+            insert_text: label.to_string(),
+            kind: Some(kind),
+        }
+    }
+
+    #[test]
+    fn completion_popup_navigates_and_accepts() {
+        let path = temp_file("pr");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.open_completion(vec![ci("print", 3), ci("println", 3), ci("procedure", 3)]);
+        assert!(app.editor.completion.is_some());
+        // Down selects the 2nd item ("println"); Enter accepts and replaces the typed "pr".
+        app.on_key(KeyEvent::from(KeyCode::Down));
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.editor.completion.is_none());
+        assert_eq!(app.editor.active_document().unwrap().to_string(), "println");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn completion_filters_as_you_type_then_dismisses() {
+        let path = temp_file("p");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.open_completion(vec![ci("print", 3), ci("procedure", 3), ci("foo", 3)]);
+        assert_eq!(app.editor.completion.as_ref().unwrap().filtered.len(), 2); // print, procedure
+        app.on_key(KeyEvent::from(KeyCode::Char('r'))); // "pr"
+        assert_eq!(app.editor.active_document().unwrap().to_string(), "pr");
+        assert_eq!(app.editor.completion.as_ref().unwrap().filtered.len(), 2);
+        app.on_key(KeyEvent::from(KeyCode::Char('i'))); // "pri" → only print
+        assert_eq!(app.editor.completion.as_ref().unwrap().filtered.len(), 1);
+        // A non-identifier char leaves the word and dismisses the popup.
+        app.on_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(app.editor.completion.is_none());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn completion_esc_dismisses_without_editing() {
+        let path = temp_file("pr");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.open_completion(vec![ci("print", 3)]);
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.editor.completion.is_none());
+        assert_eq!(app.editor.active_document().unwrap().to_string(), "pr");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

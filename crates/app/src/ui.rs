@@ -51,6 +51,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     render_status(f, app, status_area);
 
     // Overlays draw last, on top of the body (plan §4).
+    render_completion(f, app, editor_area);
     render_find(f, app, editor_area);
     render_search(f, app, body);
     render_picker(f, app, body);
@@ -165,6 +166,105 @@ fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                 .style(Style::default().bg(Color::Rgb(30, 33, 39)));
             f.render_widget(Paragraph::new(text).block(block), rect);
         }
+    }
+}
+
+/// The completion popup: a caret-anchored floating list (plan §2.1). Positioned via
+/// `char_to_screen` on the popup anchor, below the caret line (flipped above when it would
+/// overflow the pane), scrolled to keep the selection visible.
+fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
+    use ratatui::widgets::Clear;
+    let Some(comp) = &app.editor.completion else {
+        return;
+    };
+    if comp.filtered.is_empty() || editor_area.width < 8 || editor_area.height < 2 {
+        return;
+    }
+    let Some(doc) = app.editor.active_document() else {
+        return;
+    };
+    let geo = editor_core::view::PaneGeometry {
+        origin_x: editor_area.x,
+        origin_y: editor_area.y,
+        gutter: gutter_width(doc),
+        scroll_line: doc.view.scroll_line,
+        tab_width: doc.tab_width,
+        height: editor_area.height,
+    };
+    let Some((ax, ay)) = editor_core::view::char_to_screen(doc, &geo, comp.anchor) else {
+        return;
+    };
+
+    // Scroll a window of rows so the selection is always visible.
+    let max_rows = 8usize
+        .min(editor_area.height.saturating_sub(1) as usize)
+        .max(1);
+    let total = comp.filtered.len();
+    let offset = if comp.selected >= max_rows {
+        comp.selected + 1 - max_rows
+    } else {
+        0
+    };
+    let end = (offset + max_rows).min(total);
+    let shown = &comp.filtered[offset..end];
+
+    // Width from the widest "kind label  detail" row, clamped to the pane.
+    let mut width = 14usize;
+    for &idx in shown {
+        let it = &comp.items[idx];
+        let w = 3
+            + it.label.chars().count()
+            + it.detail
+                .as_ref()
+                .map(|d| 2 + d.chars().count())
+                .unwrap_or(0);
+        width = width.max(w);
+    }
+    let width = (width + 1)
+        .min(editor_area.width.saturating_sub(1) as usize)
+        .max(4) as u16;
+
+    let rows = shown.len() as u16;
+    // Prefer below the anchor; flip above when it would overflow the pane bottom.
+    let below = ay.saturating_add(1);
+    let y = if below + rows <= editor_area.y + editor_area.height {
+        below
+    } else {
+        ay.saturating_sub(rows)
+    };
+    let x = ax.min(editor_area.x + editor_area.width.saturating_sub(width));
+    let rect = Rect::new(x, y, width, rows);
+    f.render_widget(Clear, rect);
+
+    let buf = f.buffer_mut();
+    for (i, &idx) in shown.iter().enumerate() {
+        let it = &comp.items[idx];
+        let selected = offset + i == comp.selected;
+        let (fg, bg) = if selected {
+            (Color::Black, CLR_ACCENT)
+        } else {
+            (Color::Gray, Color::Rgb(40, 44, 52))
+        };
+        let kind = crate::completion::kind_label(it.kind);
+        let mut text = format!("{kind} {}", it.label);
+        if let Some(d) = &it.detail {
+            text.push_str("  ");
+            text.push_str(d);
+        }
+        // Truncate then pad to the box width so the whole row carries the background.
+        let mut s: String = text.chars().take(width as usize).collect();
+        let len = s.chars().count();
+        if len < width as usize {
+            s.push_str(&" ".repeat(width as usize - len));
+        }
+        put_str(
+            buf,
+            x,
+            y + i as u16,
+            &s,
+            Style::default().fg(fg).bg(bg),
+            x + width,
+        );
     }
 }
 

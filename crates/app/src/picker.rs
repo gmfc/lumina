@@ -11,8 +11,6 @@ pub enum PickerKind {
     File,
     /// A line-number prompt; `query` holds the digits.
     GotoLine,
-    /// LSP completion candidates; `id` holds the text to insert.
-    Completion,
 }
 
 /// One selectable row.
