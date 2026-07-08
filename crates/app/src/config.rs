@@ -12,6 +12,8 @@ pub struct Config {
     pub sidebar_width: u16,
     pub follow_mode: bool,
     pub poll_watch: bool,
+    /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
+    pub icons: bool,
     /// `language → server command (split into program + args)`.
     pub lsp_servers: std::collections::HashMap<String, Vec<String>>,
 }
@@ -24,6 +26,7 @@ impl Default for Config {
             sidebar_width: 30,
             follow_mode: false,
             poll_watch: false,
+            icons: false,
             lsp_servers: std::collections::HashMap::new(),
         }
     }
@@ -60,6 +63,9 @@ impl Config {
             }
             if let Some(b) = settings.get("poll_watch").and_then(|v| v.as_bool()) {
                 cfg.poll_watch = b;
+            }
+            if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
+                cfg.icons = b;
             }
         }
 

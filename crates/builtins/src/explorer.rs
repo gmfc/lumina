@@ -29,20 +29,45 @@ pub struct ExplorerPlugin {
     expanded: BTreeSet<PathBuf>,
     visible: Vec<Row>,
     selected: usize,
+    /// Draw Nerd Font glyphs instead of ASCII `▸ ▾` markers (user config).
+    icons: bool,
 }
 
 impl Default for ExplorerPlugin {
     fn default() -> Self {
+        ExplorerPlugin::new(false)
+    }
+}
+
+/// A Nerd Font glyph for a file, chosen by extension (requires a patched font; opt-in).
+fn file_glyph(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("rs") => "\u{e7a8}",                   //
+        Some("py") => "\u{e606}",                   //
+        Some("js" | "mjs" | "cjs") => "\u{e781}",   //
+        Some("ts" | "tsx") => "\u{e628}",           //
+        Some("json") => "\u{e60b}",                 //
+        Some("toml" | "ini" | "cfg") => "\u{e615}", //
+        Some("md" | "markdown") => "\u{e73e}",      //
+        Some("c" | "h") => "\u{e61e}",              //
+        Some("go") => "\u{e627}",                   //
+        Some("lock") => "\u{f023}",                 //
+        _ => "\u{f15b}",                            //
+    }
+}
+
+impl ExplorerPlugin {
+    /// Build an explorer, optionally rendering Nerd Font glyphs.
+    pub fn new(icons: bool) -> Self {
         ExplorerPlugin {
             root: PathBuf::new(),
             expanded: BTreeSet::new(),
             visible: Vec::new(),
             selected: 0,
+            icons,
         }
     }
-}
 
-impl ExplorerPlugin {
     /// List a directory's children, honoring `.gitignore` (plan §6: `ignore`-walked).
     /// Dotfiles are shown (VS Code-style), but ignored/`.git` content is hidden.
     fn list_children(dir: &Path) -> Vec<(PathBuf, bool)> {
@@ -105,9 +130,22 @@ impl ExplorerPlugin {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let (marker, style) = if row.is_dir {
-                    (if row.expanded { "▾ " } else { "▸ " }, "dir")
+                    let m = if self.icons {
+                        if row.expanded {
+                            "\u{e5fe} \u{f07c} " //   open-folder
+                        } else {
+                            "\u{e5ff} \u{f07b} " //   folder
+                        }
+                    } else if row.expanded {
+                        "▾ "
+                    } else {
+                        "▸ "
+                    };
+                    (m.to_string(), "dir")
+                } else if self.icons {
+                    (format!("  {} ", file_glyph(&row.path)), "file")
                 } else {
-                    ("  ", "file")
+                    ("  ".to_string(), "file")
                 };
                 PanelLine::new(vec![Span::new(format!("{marker}{name}"), style)])
                     .payload(row.path.to_string_lossy().into_owned())

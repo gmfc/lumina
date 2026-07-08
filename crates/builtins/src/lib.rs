@@ -13,7 +13,13 @@ pub mod explorer;
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
 /// config can filter the list to disable any of them (the litmus test for self-hosting).
 pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
+    all_builtins_with(false)
+}
+
+/// Like [`all_builtins`], but with runtime options threaded in from user config (e.g. whether
+/// the explorer draws Nerd Font glyphs).
+pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // Plugins are added phase by phase: explorer (Phase 4), find/replace (Phase 6),
     // palette + quick-open (Phase 7), search + sync (Phase 8), lsp (Phase 10).
-    vec![Box::new(explorer::ExplorerPlugin::default())]
+    vec![Box::new(explorer::ExplorerPlugin::new(icons))]
 }
