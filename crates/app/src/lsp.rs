@@ -1,5 +1,6 @@
 //! LSP integration (plan §10): manages a language server per language, forwards document
-//! open/change notifications, and collects diagnostics onto one channel the app drains.
+//! open/change notifications, and correlates request responses (diagnostics, hover,
+//! go-to-definition, completion, rename) into high-level [`LspEvent`]s the app acts on.
 //!
 //! Servers are configured in `config.toml` (`[lsp] rust = "rust-analyzer"`); with none
 //! configured the manager is inert, so CI and default runs never require a server.
@@ -8,12 +9,33 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use editor_lsp::{DiagnosticsUpdate, LspClient, LspHandle};
+use editor_lsp::client::{parse_completion, parse_hover, parse_locations, parse_workspace_edit};
+use editor_lsp::{
+    CompletionItem, DiagnosticsUpdate, Incoming, Location, LspClient, LspHandle, WorkspaceEdit,
+};
 
-/// Owns the running servers and the merged diagnostics stream.
+/// What a pending request was, so its response can be interpreted when it arrives.
+#[derive(Debug, Clone, Copy)]
+enum Pending {
+    Hover,
+    Definition,
+    Completion,
+    Rename,
+}
+
+/// A high-level LSP result, handed to the app after correlating a response with its request.
+pub enum LspEvent {
+    Diagnostics(DiagnosticsUpdate),
+    Hover(String),
+    Goto(Location),
+    Completion(Vec<CompletionItem>),
+    Rename(WorkspaceEdit),
+}
+
+/// Owns the running servers and the merged incoming-message stream.
 pub struct LspManager {
-    tx: Sender<DiagnosticsUpdate>,
-    rx: Receiver<DiagnosticsUpdate>,
+    tx: Sender<Incoming>,
+    rx: Receiver<Incoming>,
     /// Configured `language → server command` (with args split on whitespace).
     servers: HashMap<String, Vec<String>>,
     /// Live handles by language id.
@@ -22,6 +44,8 @@ pub struct LspManager {
     failed: HashMap<String, ()>,
     /// Per-document version counter for didChange.
     versions: HashMap<String, i64>,
+    /// In-flight requests by JSON-RPC id, so responses can be interpreted.
+    pending: HashMap<i64, Pending>,
     root_uri: String,
 }
 
@@ -35,17 +59,116 @@ impl LspManager {
             clients: HashMap::new(),
             failed: HashMap::new(),
             versions: HashMap::new(),
+            pending: HashMap::new(),
             root_uri: uri_for(root),
         }
     }
 
-    /// Drain any diagnostics that have arrived since the last call.
-    pub fn poll(&self) -> Vec<DiagnosticsUpdate> {
+    /// Drain incoming messages, turning responses into high-level [`LspEvent`]s by matching
+    /// each against the request that produced it.
+    pub fn poll(&mut self) -> Vec<LspEvent> {
         let mut out = Vec::new();
-        while let Ok(u) = self.rx.try_recv() {
-            out.push(u);
+        while let Ok(msg) = self.rx.try_recv() {
+            match msg {
+                Incoming::Diagnostics(u) => out.push(LspEvent::Diagnostics(u)),
+                Incoming::Response { id, result } => {
+                    let Some(kind) = self.pending.remove(&id) else {
+                        continue;
+                    };
+                    match kind {
+                        Pending::Hover => {
+                            if let Some(text) = parse_hover(&result) {
+                                out.push(LspEvent::Hover(text));
+                            }
+                        }
+                        Pending::Definition => {
+                            if let Some(loc) = parse_locations(&result).into_iter().next() {
+                                out.push(LspEvent::Goto(loc));
+                            }
+                        }
+                        Pending::Completion => {
+                            out.push(LspEvent::Completion(parse_completion(&result)));
+                        }
+                        Pending::Rename => {
+                            out.push(LspEvent::Rename(parse_workspace_edit(&result)));
+                        }
+                    }
+                }
+            }
         }
         out
+    }
+
+    /// Send a request for the active document, recording its kind for response correlation.
+    /// `line`/`character` are LSP coordinates (character is a UTF-16 column).
+    fn send_request<F>(&mut self, language: &str, kind: Pending, build: F) -> bool
+    where
+        F: FnOnce(&LspHandle) -> std::io::Result<i64>,
+    {
+        if !self.ensure_client(language) {
+            return false;
+        }
+        let Some(client) = self.clients.get(language) else {
+            return false;
+        };
+        match build(client) {
+            Ok(id) => {
+                self.pending.insert(id, kind);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn request_hover(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, Pending::Hover, |c| c.hover(&uri, line, character))
+    }
+
+    pub fn request_definition(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, Pending::Definition, |c| {
+            c.definition(&uri, line, character)
+        })
+    }
+
+    pub fn request_completion(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, Pending::Completion, |c| {
+            c.completion(&uri, line, character)
+        })
+    }
+
+    pub fn request_rename(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, Pending::Rename, |c| {
+            c.rename(&uri, line, character, new_name)
+        })
     }
 
     /// Ensure a server is running for `language`, spawning + wiring its diagnostics if so.

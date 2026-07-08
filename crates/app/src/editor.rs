@@ -24,6 +24,16 @@ pub enum Focus {
 pub enum Overlay {
     /// Closing a dirty tab: save / discard / cancel.
     ConfirmClose { tab: usize },
+    /// A dismissable information popup (e.g. LSP hover).
+    Info(String),
+    /// Rename prompt for the symbol at `(line, character)` in `path` (LSP rename).
+    RenameInput {
+        path: PathBuf,
+        language: String,
+        line: u32,
+        character: u32,
+        buffer: String,
+    },
 }
 
 /// Everything rendered + mutated by plugins.

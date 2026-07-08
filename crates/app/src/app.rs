@@ -203,6 +203,142 @@ impl App {
         }
     }
 
+    /// LSP position of the primary cursor: `(path, language, line, utf16_char)`.
+    fn lsp_position(&self) -> Option<(PathBuf, String, u32, u32)> {
+        let doc = self.editor.active_document()?;
+        let path = doc.path.clone()?;
+        let lang = doc.language.clone()?;
+        let head = doc.selections.primary().head;
+        let (line, col) = doc.char_to_line_col(head);
+        let text = doc.line_text(line);
+        let text = text.trim_end_matches(['\n', '\r']);
+        let char16 = editor_lsp::position::char_col_to_utf16(text, col);
+        Some((path, lang, line as u32, char16))
+    }
+
+    /// Open the rename prompt, prefilled with the identifier under the cursor.
+    fn open_rename(&mut self) {
+        let Some((path, language, line, character)) = self.lsp_position() else {
+            return;
+        };
+        let buffer = self
+            .editor
+            .active_document()
+            .map(|d| {
+                let head = d.selections.primary().head;
+                let (s, e) = motion::word_at(d, head);
+                d.text.slice(s..e).to_string()
+            })
+            .unwrap_or_default();
+        self.editor.overlay = Some(crate::editor::Overlay::RenameInput {
+            path,
+            language,
+            line,
+            character,
+            buffer,
+        });
+    }
+
+    /// Act on a high-level LSP event (response or notification).
+    fn handle_lsp_event(&mut self, event: crate::lsp::LspEvent) {
+        use crate::lsp::LspEvent;
+        match event {
+            LspEvent::Diagnostics(update) => {
+                if let Some(path) = crate::lsp::path_from_uri(&update.uri) {
+                    if let Some(id) = self.editor.workspace.find_by_path(&path) {
+                        self.editor.diagnostics.insert(id, update.diagnostics);
+                    }
+                }
+            }
+            LspEvent::Hover(text) => {
+                self.editor.overlay = Some(crate::editor::Overlay::Info(text));
+            }
+            LspEvent::Goto(loc) => self.goto_location(loc),
+            LspEvent::Completion(items) => {
+                let entries: Vec<crate::picker::PickerItem> = items
+                    .into_iter()
+                    .map(|c| {
+                        let label = match &c.detail {
+                            Some(d) => format!("{}  {}", c.label, d),
+                            None => c.label.clone(),
+                        };
+                        crate::picker::PickerItem {
+                            id: c.insert_text,
+                            label,
+                        }
+                    })
+                    .collect();
+                if !entries.is_empty() {
+                    self.editor.picker = Some(crate::picker::Picker::new(
+                        crate::picker::PickerKind::Completion,
+                        "Suggestions",
+                        entries,
+                    ));
+                }
+            }
+            LspEvent::Rename(edit) => self.apply_workspace_edit(edit),
+        }
+    }
+
+    /// Open a definition location and place the cursor on it.
+    fn goto_location(&mut self, loc: editor_lsp::Location) {
+        let Some(path) = crate::lsp::path_from_uri(&loc.uri) else {
+            return;
+        };
+        self.open_path(&path);
+        if let Some(doc) = self.editor.active_document_mut() {
+            let off = lsp_pos_to_char(doc, loc.line, loc.character);
+            doc.set_caret(off);
+        }
+    }
+
+    /// Apply an LSP `WorkspaceEdit` (rename) across the affected documents as transactions.
+    fn apply_workspace_edit(&mut self, edit: editor_lsp::WorkspaceEdit) {
+        let mut count = 0usize;
+        for (uri, edits) in edit.changes {
+            let Some(path) = crate::lsp::path_from_uri(&uri) else {
+                continue;
+            };
+            if self.editor.workspace.find_by_path(&path).is_none() {
+                self.open_path(&path);
+            }
+            let Some(id) = self.editor.workspace.find_by_path(&path) else {
+                continue;
+            };
+            let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
+                continue;
+            };
+            let mut changes: Vec<editor_core::transaction::Change> = edits
+                .iter()
+                .map(|te| {
+                    let start = lsp_pos_to_char(doc, te.start_line, te.start_char16);
+                    let end = lsp_pos_to_char(doc, te.end_line, te.end_char16);
+                    let (lo, hi) = (start.min(end), start.max(end));
+                    editor_core::transaction::Change {
+                        at: lo,
+                        removed: doc.text.slice(lo..hi).to_string(),
+                        inserted: te.new_text.clone(),
+                    }
+                })
+                .collect();
+            changes.sort_by_key(|c| c.at);
+            let txn = editor_core::Transaction::from_changes(changes);
+            if txn.is_empty() {
+                continue;
+            }
+            let before = doc.selections.clone();
+            let inverse = txn.apply(doc);
+            doc.dirty = true;
+            let after = doc.selections.clone();
+            doc.history
+                .record(txn, inverse, before, after, editor_core::GroupBreak::Force);
+            count += 1;
+        }
+        if count > 0 {
+            self.editor.status_message = Some(format!("Renamed across {count} file(s)"));
+        }
+    }
+
     /// The active project-search state (read by the renderer).
     pub fn search(&self) -> Option<&crate::search::SearchState> {
         self.search.as_ref()
@@ -376,6 +512,51 @@ impl App {
                 }
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('c') => {
                     self.editor.overlay = None;
+                }
+                _ => {}
+            },
+            crate::editor::Overlay::Info(_) => {
+                // Any key dismisses an info popup.
+                self.editor.overlay = None;
+            }
+            crate::editor::Overlay::RenameInput {
+                path,
+                language,
+                line,
+                character,
+                mut buffer,
+            } => match key.code {
+                KeyCode::Esc => self.editor.overlay = None,
+                KeyCode::Enter => {
+                    self.editor.overlay = None;
+                    if !buffer.is_empty() {
+                        self.lsp
+                            .request_rename(&path, &language, line, character, &buffer);
+                    }
+                }
+                KeyCode::Backspace => {
+                    buffer.pop();
+                    self.editor.overlay = Some(crate::editor::Overlay::RenameInput {
+                        path,
+                        language,
+                        line,
+                        character,
+                        buffer,
+                    });
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    buffer.push(c);
+                    self.editor.overlay = Some(crate::editor::Overlay::RenameInput {
+                        path,
+                        language,
+                        line,
+                        character,
+                        buffer,
+                    });
                 }
                 _ => {}
             },
@@ -638,7 +819,41 @@ impl App {
                     self.goto_line(line.saturating_sub(1));
                 }
             }
+            PickerKind::Completion => {
+                if let Some(item) = picker.selected_item() {
+                    let insert = item.id.clone();
+                    self.insert_completion(&insert);
+                }
+            }
         }
+    }
+
+    /// Insert a completion, replacing the identifier prefix already typed before the cursor.
+    fn insert_completion(&mut self, insert: &str) {
+        self.with_doc(|d| {
+            let head = d.selections.primary().head;
+            // Walk back over identifier chars to find the prefix to replace.
+            let mut start = head;
+            while start > 0 {
+                let ch = d.text.char(start - 1);
+                if ch.is_alphanumeric() || ch == '_' {
+                    start -= 1;
+                } else {
+                    break;
+                }
+            }
+            editor_core::edit::edit_selections(
+                d,
+                |_doc, sel| {
+                    if sel.head == head {
+                        (start..head, insert.to_string())
+                    } else {
+                        (sel.span(), insert.to_string())
+                    }
+                },
+                editor_core::GroupBreak::Force,
+            );
+        });
     }
 
     fn goto_line(&mut self, line: usize) {
@@ -1019,13 +1234,9 @@ impl App {
             self.registry.broadcast(&ev, &mut self.editor);
         }
 
-        // LSP diagnostics: map each update's URI back to an open document.
-        for update in self.lsp.poll() {
-            if let Some(path) = crate::lsp::path_from_uri(&update.uri) {
-                if let Some(id) = self.editor.workspace.find_by_path(&path) {
-                    self.editor.diagnostics.insert(id, update.diagnostics);
-                }
-            }
+        // LSP responses/notifications: diagnostics, hover, goto, completion, rename.
+        for event in self.lsp.poll() {
+            self.handle_lsp_event(event);
         }
 
         // Background worker messages (FS watch, project search).
@@ -1223,6 +1434,24 @@ impl App {
                 }
             }
 
+            // --- language server ---
+            Command::Hover => {
+                if let Some((p, l, line, ch)) = self.lsp_position() {
+                    self.lsp.request_hover(&p, &l, line, ch);
+                }
+            }
+            Command::GotoDefinition => {
+                if let Some((p, l, line, ch)) = self.lsp_position() {
+                    self.lsp.request_definition(&p, &l, line, ch);
+                }
+            }
+            Command::Completion => {
+                if let Some((p, l, line, ch)) = self.lsp_position() {
+                    self.lsp.request_completion(&p, &l, line, ch);
+                }
+            }
+            Command::RenameSymbol => self.open_rename(),
+
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
             Command::FocusSidebar => self.editor.focus = Focus::Sidebar,
@@ -1332,6 +1561,15 @@ fn toggle_and<F: FnOnce(&mut FindState)>(find: &mut Option<FindState>, f: F) {
     if let Some(fs) = find {
         f(fs);
     }
+}
+
+/// Convert an LSP `(line, utf16_char)` position to a char offset in `doc`.
+fn lsp_pos_to_char(doc: &Document, line: u32, char16: u32) -> usize {
+    let line = (line as usize).min(doc.len_lines().saturating_sub(1));
+    let text = doc.line_text(line);
+    let text = text.trim_end_matches(['\n', '\r']);
+    let col = editor_lsp::position::utf16_to_char_col(text, char16);
+    doc.line_to_char(line) + col
 }
 
 /// The line-comment token for a language id (used by `edit.toggleComment`).
@@ -1771,6 +2009,51 @@ mod tests {
             "hellohello"
         );
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn workspace_edit_applies_rename_across_occurrences() {
+        let path = temp_file("let foo = foo + 1;");
+        let mut app = app_with(&path);
+        let uri = crate::lsp::uri_for(&path);
+        let edit = editor_lsp::WorkspaceEdit {
+            changes: vec![(
+                uri,
+                vec![
+                    editor_lsp::TextEdit {
+                        start_line: 0,
+                        start_char16: 4,
+                        end_line: 0,
+                        end_char16: 7,
+                        new_text: "bar".into(),
+                    },
+                    editor_lsp::TextEdit {
+                        start_line: 0,
+                        start_char16: 10,
+                        end_line: 0,
+                        end_char16: 13,
+                        new_text: "bar".into(),
+                    },
+                ],
+            )],
+        };
+        app.apply_workspace_edit(edit);
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "let bar = bar + 1;"
+        );
+    }
+
+    #[test]
+    fn completion_replaces_typed_prefix() {
+        let path = temp_file("pri");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.insert_completion("println!");
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "println!"
+        );
     }
 
     #[test]

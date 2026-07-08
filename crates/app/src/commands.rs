@@ -77,6 +77,11 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "search.findPrev" => Command::FindPrev,
         "search.replaceAll" => Command::ReplaceAll,
         "search.project" => Command::ProjectSearch,
+        // language server
+        "lsp.hover" => Command::Hover,
+        "lsp.gotoDefinition" => Command::GotoDefinition,
+        "lsp.completion" => Command::Completion,
+        "lsp.rename" => Command::RenameSymbol,
         // ui
         "view.toggleSidebar" => Command::ToggleSidebar,
         "view.focusSidebar" => Command::FocusSidebar,
@@ -117,6 +122,10 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("search.findPrev", "Find: Previous Match"),
         ("search.replaceAll", "Replace: All"),
         ("search.project", "Search: Find in Files"),
+        ("lsp.hover", "Go: Show Hover"),
+        ("lsp.gotoDefinition", "Go: Go to Definition"),
+        ("lsp.completion", "Edit: Trigger Suggest"),
+        ("lsp.rename", "Refactor: Rename Symbol"),
         ("view.toggleSidebar", "View: Toggle Sidebar"),
         ("view.toggleTheme", "View: Toggle Light/Dark Theme"),
         ("cursor.addAbove", "Multi-cursor: Add Cursor Above"),
@@ -195,5 +204,9 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+alt+down", "cursor.addBelow"),
         ("f3", "search.findNext"),
         ("shift+f3", "search.findPrev"),
+        ("f12", "lsp.gotoDefinition"),
+        ("f2", "lsp.rename"),
+        ("ctrl+space", "lsp.completion"),
+        ("ctrl+k ctrl+i", "lsp.hover"),
     ]
 }

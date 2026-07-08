@@ -99,6 +99,50 @@ fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                 .style(Style::default().bg(Color::Rgb(30, 33, 39)));
             f.render_widget(Paragraph::new(text).block(block), rect);
         }
+        Overlay::Info(body_text) => {
+            // A hover/info popup: wrap the text into a centered box, capped in size.
+            let lines: Vec<Line> = body_text
+                .lines()
+                .take(body.height.saturating_sub(4) as usize)
+                .map(|l| Line::from(l.to_string()))
+                .collect();
+            let w = body_text
+                .lines()
+                .map(|l| l.chars().count())
+                .max()
+                .unwrap_or(20)
+                .clamp(20, body.width.saturating_sub(8) as usize) as u16;
+            let h = (lines.len() as u16 + 2).min(body.height.saturating_sub(2));
+            let rect = centered(body, w + 4, h);
+            f.render_widget(Clear, rect);
+            let block = Block::default()
+                .title(" Hover ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CLR_ACCENT))
+                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+            f.render_widget(Paragraph::new(lines).block(block), rect);
+        }
+        Overlay::RenameInput { buffer, .. } => {
+            let text = vec![
+                Line::from(TSpan::styled(
+                    " Rename symbol",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!(" › {buffer}▏")),
+                Line::from(TSpan::styled(
+                    " [Enter] Apply   [Esc] Cancel ",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            let rect = centered(body, 44, 6);
+            f.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CLR_ACCENT))
+                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+            f.render_widget(Paragraph::new(text).block(block), rect);
+        }
     }
 }
 
