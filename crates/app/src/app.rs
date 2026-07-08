@@ -1233,7 +1233,15 @@ impl App {
     fn sidebar_click(&mut self, _col: u16, row: u16) {
         // Route to the explorer plugin's panel row, if present (Phase 4).
         if let Some(panel) = self.editor.panels.get("explorer.tree") {
-            let inner_top = self.regions.sidebar.map(|r| r.y).unwrap_or(0);
+            // Panel rows are drawn into the sidebar block's *inner* area (below the
+            // " EXPLORER " title row), so hit-test against that content region — using the
+            // outer region's top would select the row one line below the cursor.
+            let inner_top = self
+                .regions
+                .sidebar_inner
+                .or(self.regions.sidebar)
+                .map(|r| r.y)
+                .unwrap_or(0);
             let idx = row.saturating_sub(inner_top) as usize;
             if let Some(line) = panel.lines.get(idx) {
                 if let Some(payload) = line.payload.clone() {
@@ -2499,6 +2507,62 @@ mod tests {
         app.regions.editor = Rect::new(20, 0, 60, 24);
         app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
         assert_eq!(app.editor.focus, Focus::Sidebar);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sidebar_click_hits_the_row_under_the_cursor() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let dir = temp_dir_with_files();
+        let mut app = app_with(&dir);
+        app.editor.focus = Focus::Sidebar;
+
+        // Render a real frame so `Regions` reflect the laid-out sidebar, including the
+        // " EXPLORER " title row that the block reserves above the panel content.
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+
+        // Locate the screen row where the `sub` directory is actually drawn.
+        let sidebar = app.regions.sidebar.expect("sidebar should be visible");
+        let buf = terminal.backend().buffer();
+        let mut sub_row = None;
+        for y in sidebar.y..(sidebar.y + sidebar.height) {
+            let mut line = String::new();
+            for x in sidebar.x..(sidebar.x + sidebar.width) {
+                line.push_str(buf[(x, y)].symbol());
+            }
+            if line.contains("sub") {
+                sub_row = Some(y);
+                break;
+            }
+        }
+        let sub_row = sub_row.expect("`sub` directory should be visible in the sidebar");
+
+        // Click exactly where `sub` is drawn. It must toggle that directory open — not
+        // open the file rendered on the line below it.
+        app.on_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sidebar.x + 2,
+            sub_row,
+        ));
+        app.drain_workers();
+
+        assert_eq!(
+            app.editor.workspace.tabs.len(),
+            0,
+            "clicking `sub` must not open the file on the row below it",
+        );
+        let panel = app.editor.panels.get("explorer.tree").unwrap();
+        let names: Vec<String> = panel
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.clone()))
+            .collect();
+        assert!(
+            names.iter().any(|t| t.contains("b.txt")),
+            "clicking `sub` should expand it to reveal b.txt",
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -34,16 +34,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Remember body height for PageUp/PageDown next tick.
     app.page_height = body.height.saturating_sub(0) as usize;
 
-    let (editor_area, sidebar_area) = if app.editor.sidebar_visible {
+    let (editor_area, sidebar_area, sidebar_inner) = if app.editor.sidebar_visible {
         let [sidebar, editors] = Layout::horizontal([
             Constraint::Length(app.editor.sidebar_width),
             Constraint::Min(0),
         ])
         .areas(body);
-        render_sidebar(f, app, sidebar);
-        (editors, Some(sidebar))
+        let inner = render_sidebar(f, app, sidebar);
+        (editors, Some(sidebar), Some(inner))
     } else {
-        (body, None)
+        (body, None, None)
     };
 
     render_tabs(f, app, tabs_area);
@@ -60,6 +60,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.regions = Regions {
         tabs: tabs_area,
         sidebar: sidebar_area,
+        sidebar_inner,
         editor: editor_area,
     };
 }
@@ -378,7 +379,11 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Regions {
     pub tabs: Rect,
+    /// The full sidebar region (block + title + border) — used to detect sidebar clicks.
     pub sidebar: Option<Rect>,
+    /// The sidebar's inner content region (panel rows), below the title. Row hit-testing
+    /// maps against this, not `sidebar`, so clicks land on the row actually drawn there.
+    pub sidebar_inner: Option<Rect>,
     pub editor: Rect,
 }
 
@@ -433,7 +438,9 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
+/// Render the sidebar and return its inner content region (below the title), so the mouse
+/// router can hit-test panel rows against the same geometry the rows were drawn into.
+fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
     let focused = app.editor.focus == Focus::Sidebar;
     let border_style = if focused {
         Style::default().fg(CLR_ACCENT)
@@ -485,6 +492,7 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
         ];
         f.render_widget(Paragraph::new(hint), inner);
     }
+    inner
 }
 
 fn style_for(key: &str) -> Style {
