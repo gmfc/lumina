@@ -58,6 +58,8 @@ pub struct App {
     worker_rx: std::sync::mpsc::Receiver<crate::worker::WorkerMsg>,
     /// The filesystem debouncer; kept alive so the watch persists.
     _watcher: Option<Box<dyn std::any::Any>>,
+    /// The user config file path, watched for hot-reload (plan §6).
+    config_path: Option<PathBuf>,
     /// Content hashes of our own pending saves, to suppress save-echo (plan §6).
     pending_self_writes: std::collections::HashMap<PathBuf, u64>,
     /// Auto-scroll to the first externally-changed line on reload (follow mode).
@@ -124,10 +126,19 @@ impl App {
         let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
         let keymap = build_keymap(&config);
 
-        // Background worker channel + directory watcher on the project root (plan §6).
+        // Background worker channel + directory watcher on the project root (plan §6). Also
+        // watch the config dir (non-recursively) so edits to config.toml hot-reload.
         let (worker_tx, worker_rx) = crate::worker::channel();
-        let watcher =
-            crate::worker::spawn_watcher(editor.workspace.root.clone(), worker_tx.clone());
+        let config_path = crate::config::Config::path();
+        let config_dir = config_path
+            .as_ref()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        let watcher = crate::worker::spawn_watcher(
+            editor.workspace.root.clone(),
+            config_dir,
+            config.poll_watch,
+            worker_tx.clone(),
+        );
         if watcher.is_none() {
             editor.status_message =
                 Some("File watching unavailable (edits won't auto-reload)".into());
@@ -149,6 +160,7 @@ impl App {
             worker_tx,
             worker_rx,
             _watcher: watcher,
+            config_path,
             pending_self_writes: std::collections::HashMap::new(),
             follow_mode,
             search: None,
@@ -1007,6 +1019,12 @@ impl App {
 
     /// Reconcile an external on-disk change against the buffer (plan §6 decision matrix).
     fn on_disk_changed(&mut self, path: &std::path::Path) {
+        // A change to the user config file → hot-reload keymap/settings (plan §6).
+        if self.config_path.as_deref() == Some(path) {
+            self.reload_config();
+            return;
+        }
+
         // Not one of our open docs → refresh the tree and move on.
         let Some(id) = self.editor.workspace.find_by_path(path) else {
             self.editor
@@ -1725,6 +1743,22 @@ mod tests {
             "hellohello"
         );
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn config_file_change_triggers_hot_reload() {
+        let path = temp_file("");
+        let mut app = app_with(&path);
+        // Point the watched config path at an arbitrary file and simulate a change event.
+        let cfg = std::env::temp_dir().join(format!("lumina_cfg_{}.toml", std::process::id()));
+        app.config_path = Some(cfg.clone());
+        app.editor.status_message = None;
+        app.on_disk_changed(&cfg);
+        assert_eq!(
+            app.editor.status_message.as_deref(),
+            Some("Configuration reloaded"),
+            "a change to the config file should hot-reload it"
+        );
     }
 
     #[test]
