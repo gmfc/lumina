@@ -362,6 +362,7 @@ impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.quit {
             self.editor.update_highlights(self.page_height);
+            self.editor.update_bracket_match();
             self.update_lsp();
             terminal.draw(|f| ui::draw(f, self))?;
 
@@ -1581,6 +1582,11 @@ impl App {
     }
 
     fn save_active(&mut self) {
+        // Read hygiene settings before borrowing the document (different `self` fields).
+        let (trim, final_nl) = (
+            self.config.trim_trailing_whitespace,
+            self.config.insert_final_newline,
+        );
         let Some(id) = self.editor.workspace.active_doc() else {
             return;
         };
@@ -1591,6 +1597,10 @@ impl App {
             self.editor.status_message = Some("No path (Save As not yet wired)".into());
             return;
         };
+        // On-save hygiene runs as an undoable Transaction before the write (plan §1.4).
+        if trim || final_nl {
+            edit::apply_save_hygiene(doc, trim, final_nl);
+        }
         match files::save(doc, &path) {
             Ok(fp) => {
                 doc.dirty = false;
@@ -1831,6 +1841,48 @@ mod tests {
             app.editor.active_document().unwrap().to_string(),
             "fn f() {\n}"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn bracket_match_precomputed_into_state() {
+        let path = temp_file("a(b)c\n");
+        let mut app = app_with(&path);
+        // Caret on the '(' at offset 1 → highlight it and its partner ')'.
+        app.editor.active_document_mut().unwrap().set_caret(1);
+        app.editor.update_bracket_match();
+        assert_eq!(app.editor.bracket_match, Some((1, 3)));
+        // Caret just after the ')' (offset 4) → matches via the bracket before the caret.
+        app.editor.active_document_mut().unwrap().set_caret(4);
+        app.editor.update_bracket_match();
+        assert_eq!(app.editor.bracket_match, Some((3, 1)));
+        // Caret not adjacent to any bracket → None.
+        app.editor.active_document_mut().unwrap().set_caret(0);
+        app.editor.update_bracket_match();
+        assert_eq!(app.editor.bracket_match, None);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn save_trims_trailing_whitespace_when_enabled() {
+        let path = temp_file("foo   \nbar\t\n");
+        let mut app = app_with(&path);
+        app.config.trim_trailing_whitespace = true;
+        app.dispatch(Command::Save);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "foo\nbar\n");
+        assert!(!app.editor.active_document().unwrap().dirty);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn save_hygiene_preserves_crlf_on_disk() {
+        let path = temp_file("foo  \r\nbar");
+        let mut app = app_with(&path);
+        app.config.trim_trailing_whitespace = true;
+        app.config.insert_final_newline = true;
+        app.dispatch(Command::Save);
+        // Trimmed + final newline added, but the CRLF line ending is preserved.
+        assert_eq!(std::fs::read(&path).unwrap(), b"foo\r\nbar\r\n");
         std::fs::remove_file(&path).ok();
     }
 

@@ -63,6 +63,9 @@ pub struct EditorState {
     pub picker: Option<crate::picker::Picker>,
     /// LSP diagnostics per document (from the language server).
     pub diagnostics: HashMap<DocId, Vec<editor_lsp::Diagnostic>>,
+    /// Precomputed bracket-match highlight for the active doc: `(bracket, partner)` char
+    /// offsets, refreshed after cursor moves so the pure renderer just reads it (plan §1.3).
+    pub bracket_match: Option<(usize, usize)>,
 }
 
 impl EditorState {
@@ -83,7 +86,20 @@ impl EditorState {
             find: None,
             picker: None,
             diagnostics: HashMap::new(),
+            bracket_match: None,
         }
+    }
+
+    /// Recompute the bracket-match highlight for the primary caret of the active document.
+    /// Highlights the bracket the caret is on, or (failing that) the one just before it, plus
+    /// its partner. Cheap — a single bracket scan; run once per frame before draw so the
+    /// renderer stays a pure function of state (invariant #2).
+    pub fn update_bracket_match(&mut self) {
+        self.bracket_match = self.active_document().and_then(|doc| {
+            let head = doc.selections.primary().head;
+            let at = |p: usize| editor_core::motion::matching_bracket(doc, p).map(|q| (p, q));
+            at(head).or_else(|| head.checked_sub(1).and_then(at))
+        });
     }
 
     /// Refresh the active document's syntax highlighting for the visible line range.

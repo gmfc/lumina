@@ -16,6 +16,11 @@ pub struct Config {
     pub auto_pairs: bool,
     /// Copy indent (and adjust for brackets) on newline; dedent on closing bracket (plan §1.2).
     pub auto_indent: bool,
+    /// On save, strip trailing whitespace from every line (plan §1.4). Off by default to
+    /// respect the "never silently rewrite" invariant.
+    pub trim_trailing_whitespace: bool,
+    /// On save, ensure the file ends with a single newline (plan §1.4). Off by default.
+    pub insert_final_newline: bool,
     /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
     pub icons: bool,
     /// `language → server command (split into program + args)`.
@@ -32,6 +37,8 @@ impl Default for Config {
             poll_watch: false,
             auto_pairs: true,
             auto_indent: true,
+            trim_trailing_whitespace: false,
+            insert_final_newline: false,
             icons: false,
             lsp_servers: std::collections::HashMap::new(),
         }
@@ -89,6 +96,18 @@ impl Config {
         }
         if let Some(b) = settings.get("auto_indent").and_then(|v| v.as_bool()) {
             self.auto_indent = b;
+        }
+        if let Some(b) = settings
+            .get("trim_trailing_whitespace")
+            .and_then(|v| v.as_bool())
+        {
+            self.trim_trailing_whitespace = b;
+        }
+        if let Some(b) = settings
+            .get("insert_final_newline")
+            .and_then(|v| v.as_bool())
+        {
+            self.insert_final_newline = b;
         }
         if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
             self.icons = b;

@@ -49,6 +49,8 @@ follow_mode = true          # auto-scroll to external edits as an agent writes f
 poll_watch = false          # set true on devcontainer/NFS mounts where inotify is unreliable
 auto_pairs = true           # auto-close brackets/quotes, type over closers, delete empty pairs
 auto_indent = true          # copy indent on newline (brace-aware); dedent on a closing bracket
+trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from every line
+insert_final_newline = false      # on save, ensure the file ends with a single newline
 icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
 
 [keys]

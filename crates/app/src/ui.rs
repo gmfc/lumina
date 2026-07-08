@@ -520,6 +520,8 @@ struct EditorCtx<'a> {
     find_matches: &'a [(usize, usize)],
     diags: &'a [Diagnostic],
     sels: &'a [editor_core::Selection],
+    /// `(bracket, partner)` char offsets to highlight, precomputed in `EditorState`.
+    bracket_match: Option<(usize, usize)>,
 }
 
 /// The editor pane: gutter + line numbers + text + selections + cursor. Written directly
@@ -560,6 +562,7 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
             .unwrap_or(&[]),
         // Selection spans, precomputed for quick membership tests.
         sels: doc.selections.ranges(),
+        bracket_match: app.editor.bracket_match,
     };
 
     let buf = f.buffer_mut();
@@ -697,6 +700,15 @@ fn cell_style(
         style = style
             .fg(severity_color(sev))
             .add_modifier(Modifier::UNDERLINED);
+    }
+    // Bracket-match emphasis (plan §1.3): the caret's bracket + its partner. Applied before
+    // the selection background so a selected bracket still shows the selection tint.
+    if let Some((a, b)) = ctx.bracket_match {
+        if char_off == a || char_off == b {
+            if let Some(bm) = ctx.theme.style_for("bracket.match") {
+                style = style.patch(bm);
+            }
+        }
     }
     let in_sel = ctx
         .sels
