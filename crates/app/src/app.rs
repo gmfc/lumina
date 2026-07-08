@@ -1514,24 +1514,32 @@ impl App {
             self.handle_lsp_event(event);
         }
 
-        // Background worker messages (FS watch, project search).
+        self.drain_worker_channel();
+    }
+
+    /// Drain background worker messages (FS watch, git, project search) into state.
+    fn drain_worker_channel(&mut self) {
+        use crate::worker::WorkerMsg;
         while let Ok(msg) = self.worker_rx.try_recv() {
             match msg {
-                crate::worker::WorkerMsg::DiskChanged { path } => self.on_disk_changed(&path),
-                crate::worker::WorkerMsg::GitStatus { path, statuses } => {
+                WorkerMsg::DiskChanged { path } => self.on_disk_changed(&path),
+                WorkerMsg::GitStatus { path, statuses } => {
                     if let Some(id) = self.editor.workspace.find_by_path(&path) {
                         self.editor.git_hunks.insert(id, statuses);
                     }
                 }
-                crate::worker::WorkerMsg::SearchComplete { query, hits } => {
-                    if let Some(search) = &mut self.search {
-                        if search.query == query {
-                            search.results = hits;
-                            search.selected = 0;
-                            search.running = false;
-                        }
-                    }
-                }
+                WorkerMsg::SearchComplete { query, hits } => self.on_search_complete(query, hits),
+            }
+        }
+    }
+
+    /// Fold a completed project search into the open search panel, if it's still the live query.
+    fn on_search_complete(&mut self, query: String, hits: Vec<crate::search::SearchHit>) {
+        if let Some(search) = &mut self.search {
+            if search.query == query {
+                search.results = hits;
+                search.selected = 0;
+                search.running = false;
             }
         }
     }
@@ -1739,6 +1747,8 @@ impl App {
             Command::PrevDiagnostic => self.goto_diagnostic(-1),
             Command::FindReferences => self.lsp_request(LspRequest::References),
             Command::DocumentSymbols => self.request_document_symbols(),
+            Command::NextHunk => self.goto_hunk(1),
+            Command::PrevHunk => self.goto_hunk(-1),
 
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
@@ -1839,6 +1849,51 @@ impl App {
                 self.editor.status_message = Some(format!("Open failed: {e}"));
             }
         }
+    }
+
+    /// Jump the caret to the start of the next (`dir > 0`) or previous git hunk in the active
+    /// document, wrapping around (plan §4.2 navigation). A hunk starts at a changed line whose
+    /// predecessor is unchanged.
+    fn goto_hunk(&mut self, dir: isize) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let Some(hunks) = self.editor.git_hunks.get(&id) else {
+            return;
+        };
+        if hunks.is_empty() {
+            return;
+        }
+        let mut starts: Vec<usize> = hunks
+            .keys()
+            .copied()
+            .filter(|&l| l == 0 || !hunks.contains_key(&(l - 1)))
+            .collect();
+        starts.sort_unstable();
+        let Some(doc) = self.editor.workspace.documents.get(id) else {
+            return;
+        };
+        let cur = doc.char_to_line(doc.selections.primary().head);
+        let target = if dir > 0 {
+            starts
+                .iter()
+                .copied()
+                .find(|&l| l > cur)
+                .unwrap_or(starts[0])
+        } else {
+            starts
+                .iter()
+                .rev()
+                .copied()
+                .find(|&l| l < cur)
+                .unwrap_or_else(|| *starts.last().unwrap())
+        };
+        let off = doc.line_to_char(target);
+        if let Some(d) = self.editor.workspace.documents.get_mut(id) {
+            d.set_caret(off);
+        }
+        self.ensure_cursor_visible();
+        self.editor.update_bracket_match();
     }
 
     /// Recompute a document's git change map off the main thread (plan §4.1). No-op when the
@@ -2681,6 +2736,31 @@ mod tests {
             severity: editor_lsp::Severity::Error,
             message: msg.to_string(),
         }
+    }
+
+    #[test]
+    fn hunk_navigation_cycles_over_change_starts() {
+        let path = temp_file("a\nb\nc\nd\ne\nf\ng\n");
+        let mut app = app_with(&path);
+        let id = app.editor.workspace.active_doc().unwrap();
+        let mut hunks = crate::git::LineStatuses::new();
+        hunks.insert(1, crate::git::LineStatus::Modified);
+        hunks.insert(2, crate::git::LineStatus::Modified); // same hunk as line 1
+        hunks.insert(5, crate::git::LineStatus::Added); // separate hunk
+        app.editor.git_hunks.insert(id, hunks);
+        let line = |a: &App| {
+            let d = a.editor.active_document().unwrap();
+            d.char_to_line(d.selections.primary().head)
+        };
+        app.dispatch(Command::NextHunk);
+        assert_eq!(line(&app), 1);
+        app.dispatch(Command::NextHunk);
+        assert_eq!(line(&app), 5);
+        app.dispatch(Command::NextHunk); // wraps to the first hunk
+        assert_eq!(line(&app), 1);
+        app.dispatch(Command::PrevHunk); // wraps to the last hunk
+        assert_eq!(line(&app), 5);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

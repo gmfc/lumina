@@ -748,26 +748,7 @@ fn render_editor_row(
     draw_diag_marker(buf, ctx.area.x, y, &line_diags);
 
     // Git change-bar in the gutter's separator column, just left of the text (plan §4.1).
-    if let Some(git) = ctx.git {
-        if let Some(&status) = git.get(&line_idx) {
-            let (glyph, key) = match status {
-                crate::git::LineStatus::Added => ('▍', "git.add"),
-                crate::git::LineStatus::Modified => ('▍', "git.modify"),
-                crate::git::LineStatus::Deleted => ('▁', "git.delete"),
-            };
-            let color = ctx
-                .theme
-                .style_for(key)
-                .and_then(|s| s.fg)
-                .unwrap_or(Color::Gray);
-            if ctx.gutter > 0 {
-                if let Some(cell) = cell_at(buf, ctx.area.x + ctx.gutter - 1, y) {
-                    cell.set_char(glyph);
-                    cell.set_style(Style::default().fg(color));
-                }
-            }
-        }
-    }
+    draw_git_bar(buf, ctx, line_idx, y);
 
     // Resolve syntax colors per char (shortest span wins for overlaps).
     let char_styles = ctx
@@ -798,6 +779,33 @@ fn render_editor_row(
         primary_screen = Some((ctx.text_x + col, y));
     }
     primary_screen
+}
+
+/// Draw the git change-bar for `line_idx` in the gutter's separator column (plan §4.1).
+fn draw_git_bar(buf: &mut ratatui::buffer::Buffer, ctx: &EditorCtx, line_idx: usize, y: u16) {
+    let Some(git) = ctx.git else {
+        return;
+    };
+    let Some(&status) = git.get(&line_idx) else {
+        return;
+    };
+    if ctx.gutter == 0 {
+        return;
+    }
+    let (glyph, key) = match status {
+        crate::git::LineStatus::Added => ('▍', "git.add"),
+        crate::git::LineStatus::Modified => ('▍', "git.modify"),
+        crate::git::LineStatus::Deleted => ('▁', "git.delete"),
+    };
+    let color = ctx
+        .theme
+        .style_for(key)
+        .and_then(|s| s.fg)
+        .unwrap_or(Color::Gray);
+    if let Some(cell) = cell_at(buf, ctx.area.x + ctx.gutter - 1, y) {
+        cell.set_char(glyph);
+        cell.set_style(Style::default().fg(color));
+    }
 }
 
 /// Past EOF: draw a tilde like Vim.
