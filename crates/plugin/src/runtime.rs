@@ -192,54 +192,60 @@ impl ScriptPlugin {
     /// Apply the actions a script returned, gated by granted capabilities.
     fn apply_actions(&self, panel_ctx: Option<&str>, actions: Array, host: &mut dyn Host) {
         for action in actions {
-            let Some(map) = action.try_cast::<Map>() else {
-                continue;
-            };
-            let kind = map
-                .get("action")
-                .and_then(|d| d.clone().into_string().ok())
-                .unwrap_or_default();
-            match kind.as_str() {
-                "insert" if self.has_cap("edit") => {
-                    if let Some(text) = str_field(&map, "text") {
-                        insert_at_cursor(host, &text);
-                    }
-                }
-                "replace_selection" if self.has_cap("edit") => {
-                    if let Some(text) = str_field(&map, "text") {
-                        replace_selection(host, &text);
-                    }
-                }
-                "replace_line" if self.has_cap("edit") => {
-                    if let Some(text) = str_field(&map, "text") {
-                        replace_line(host, &text);
-                    }
-                }
-                "notify" if self.has_cap("ui") => {
-                    if let Some(msg) = str_field(&map, "message") {
-                        host.notify(msg);
-                    }
-                }
-                "open" if self.has_cap("fs:read") => {
-                    if let Some(path) = str_field(&map, "path") {
-                        host.open_path(Path::new(&path));
-                    }
-                }
-                "run" => {
-                    if let Some(cmd) = str_field(&map, "command") {
-                        host.execute(&cmd);
-                    }
-                }
-                "set_panel" if self.has_cap("ui") => {
-                    let panel_id =
-                        str_field(&map, "panel").or_else(|| panel_ctx.map(str::to_string));
-                    if let Some(panel_id) = panel_id {
-                        let content = panel_from_map(&map);
-                        host.set_panel(&panel_id, content);
-                    }
-                }
-                _ => {}
+            if let Some(map) = action.try_cast::<Map>() {
+                self.apply_action(panel_ctx, &map, host);
             }
+        }
+    }
+
+    /// Dispatch a single action map, gated by granted capabilities.
+    fn apply_action(&self, panel_ctx: Option<&str>, map: &Map, host: &mut dyn Host) {
+        let kind = map
+            .get("action")
+            .and_then(|d| d.clone().into_string().ok())
+            .unwrap_or_default();
+        match kind.as_str() {
+            "insert" | "replace_selection" | "replace_line" if self.has_cap("edit") => {
+                self.apply_edit(&kind, map, host);
+            }
+            "notify" if self.has_cap("ui") => {
+                if let Some(msg) = str_field(map, "message") {
+                    host.notify(msg);
+                }
+            }
+            "open" if self.has_cap("fs:read") => {
+                if let Some(path) = str_field(map, "path") {
+                    host.open_path(Path::new(&path));
+                }
+            }
+            "run" => {
+                if let Some(cmd) = str_field(map, "command") {
+                    host.execute(&cmd);
+                }
+            }
+            "set_panel" if self.has_cap("ui") => self.apply_set_panel(panel_ctx, map, host),
+            _ => {}
+        }
+    }
+
+    /// The three `edit`-gated text mutations, which all read a `text` field.
+    fn apply_edit(&self, kind: &str, map: &Map, host: &mut dyn Host) {
+        let Some(text) = str_field(map, "text") else {
+            return;
+        };
+        match kind {
+            "insert" => insert_at_cursor(host, &text),
+            "replace_selection" => replace_selection(host, &text),
+            "replace_line" => replace_line(host, &text),
+            _ => {}
+        }
+    }
+
+    fn apply_set_panel(&self, panel_ctx: Option<&str>, map: &Map, host: &mut dyn Host) {
+        let panel_id = str_field(map, "panel").or_else(|| panel_ctx.map(str::to_string));
+        if let Some(panel_id) = panel_id {
+            let content = panel_from_map(map);
+            host.set_panel(&panel_id, content);
         }
     }
 }

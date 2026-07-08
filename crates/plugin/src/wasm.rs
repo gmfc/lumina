@@ -170,42 +170,47 @@ impl WasmPlugin {
             return;
         };
         for action in arr {
-            let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("");
-            let field = |k: &str| action.get(k).and_then(|v| v.as_str());
-            match kind {
-                "insert" if self.has_cap("edit") => {
-                    if let Some(text) = field("text") {
-                        runtime::insert_at_cursor(host, text);
-                    }
-                }
-                "replace_selection" if self.has_cap("edit") => {
-                    if let Some(text) = field("text") {
-                        runtime::replace_selection(host, text);
-                    }
-                }
-                "replace_line" if self.has_cap("edit") => {
-                    if let Some(text) = field("text") {
-                        runtime::replace_line(host, text);
-                    }
-                }
-                "notify" if self.has_cap("ui") => {
-                    if let Some(msg) = field("message") {
-                        host.notify(msg.to_string());
-                    }
-                }
-                "open" if self.has_cap("fs:read") => {
-                    if let Some(path) = field("path") {
-                        host.open_path(Path::new(path));
-                    }
-                }
-                "run" => {
-                    if let Some(cmd) = field("command") {
-                        host.execute(cmd);
-                    }
-                }
-                _ => {}
-            }
+            self.apply_action(action, host);
         }
+    }
+
+    /// Dispatch a single action object, gated by granted capabilities.
+    fn apply_action(&self, action: &Value, host: &mut dyn Host) {
+        let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("");
+        let field = |k: &str| action.get(k).and_then(|v| v.as_str());
+        match kind {
+            "insert" | "replace_selection" | "replace_line" if self.has_cap("edit") => {
+                if let Some(text) = field("text") {
+                    apply_edit(kind, host, text);
+                }
+            }
+            "notify" if self.has_cap("ui") => {
+                if let Some(msg) = field("message") {
+                    host.notify(msg.to_string());
+                }
+            }
+            "open" if self.has_cap("fs:read") => {
+                if let Some(path) = field("path") {
+                    host.open_path(Path::new(path));
+                }
+            }
+            "run" => {
+                if let Some(cmd) = field("command") {
+                    host.execute(cmd);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The three `edit`-gated text mutations (mirrors the Rhai tier's `apply_edit`).
+fn apply_edit(kind: &str, host: &mut dyn Host, text: &str) {
+    match kind {
+        "insert" => runtime::insert_at_cursor(host, text),
+        "replace_selection" => runtime::replace_selection(host, text),
+        "replace_line" => runtime::replace_line(host, text),
+        _ => {}
     }
 }
 

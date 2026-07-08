@@ -29,6 +29,13 @@ struct ClickState {
     count: u8,
 }
 
+/// The position-based LSP requests, which all resolve the primary cursor the same way.
+enum LspRequest {
+    Hover,
+    Definition,
+    Completion,
+}
+
 pub struct App {
     pub editor: EditorState,
     pub registry: Registry,
@@ -409,37 +416,14 @@ impl App {
 
     fn on_key(&mut self, key: crossterm::event::KeyEvent) {
         use crate::keymap::{Chord, Resolve};
-        use crossterm::event::KeyCode;
 
         // Modal captures, in priority order.
-        if self.editor.overlay.is_some() {
-            self.overlay_key(key);
+        if self.handle_modal_key(key) {
             return;
         }
-        if self.editor.picker.is_some() {
-            self.picker_key(key);
-            return;
-        }
-        if self.search.is_some() {
-            self.search_key(key);
-            return;
-        }
-        if self.editor.find.is_some() {
-            self.find_key(key);
-            return;
-        }
-
         // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
-        if self.editor.focus == Focus::Sidebar {
-            if key.code == KeyCode::Esc {
-                self.editor.focus = Focus::Editor;
-                return;
-            }
-            if let Some(id) = sidebar_command(key) {
-                self.registry.dispatch_command(id, &mut self.editor);
-                self.drain_workers();
-                return;
-            }
+        if self.editor.focus == Focus::Sidebar && self.handle_sidebar_key(key) {
+            return;
         }
 
         // Chord keymap resolution (defaults + config overrides).
@@ -454,21 +438,56 @@ impl App {
                 // Keep the prefix armed; show it in the status bar.
                 self.editor.status_message = Some(format!("{} …", chords_label(&self.pending)));
             }
-            Resolve::None => {
-                let single = self.pending.len() == 1;
-                self.pending.clear();
-                // Fallback: printable text entry in the editor.
-                if single && self.editor.focus == Focus::Editor {
-                    if let KeyCode::Char(c) = key.code {
-                        let ctrl = key
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::CONTROL);
-                        let alt = key.modifiers.contains(crossterm::event::KeyModifiers::ALT);
-                        if !ctrl && !alt {
-                            self.dispatch(Command::InsertChar(c));
-                        }
-                    }
-                }
+            Resolve::None => self.text_entry_fallback(key),
+        }
+    }
+
+    /// Route a key to an active modal (overlay / picker / search / find), in priority
+    /// order. Returns `true` when a modal consumed the key.
+    fn handle_modal_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        if self.editor.overlay.is_some() {
+            self.overlay_key(key);
+        } else if self.editor.picker.is_some() {
+            self.picker_key(key);
+        } else if self.search.is_some() {
+            self.search_key(key);
+        } else if self.editor.find.is_some() {
+            self.find_key(key);
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Handle a key while the sidebar is focused. Returns `true` when it was consumed;
+    /// `false` lets it fall through to normal chord resolution.
+    fn handle_sidebar_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        if key.code == KeyCode::Esc {
+            self.editor.focus = Focus::Editor;
+            return true;
+        }
+        if let Some(id) = sidebar_command(key) {
+            self.registry.dispatch_command(id, &mut self.editor);
+            self.drain_workers();
+            return true;
+        }
+        false
+    }
+
+    /// Fallback for a key that resolved to nothing: printable text entry into the editor.
+    fn text_entry_fallback(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let single = self.pending.len() == 1;
+        self.pending.clear();
+        if !(single && self.editor.focus == Focus::Editor) {
+            return;
+        }
+        if let KeyCode::Char(c) = key.code {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let alt = key.modifiers.contains(KeyModifiers::ALT);
+            if !ctrl && !alt {
+                self.dispatch(Command::InsertChar(c));
             }
         }
     }
@@ -1048,54 +1067,9 @@ impl App {
     fn on_mouse(&mut self, m: crossterm::event::MouseEvent) {
         let (col, row) = (m.column, m.row);
         match m.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if in_rect(self.regions.editor, col, row) {
-                    self.editor.focus = Focus::Editor;
-                    if m.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
-                        // Alt+Click adds a cursor (multi-cursor).
-                        if let Some(off) = self.editor_offset_at(col, row) {
-                            self.with_doc(|d| {
-                                d.selections.push(Selection::caret(off));
-                                d.selections.normalize();
-                            });
-                        }
-                    } else {
-                        self.editor_click(col, row);
-                    }
-                } else if in_rect(self.regions.tabs, col, row) {
-                    self.tab_bar_click(col);
-                } else if self.regions.sidebar.is_some_and(|r| in_rect(r, col, row)) {
-                    self.editor.focus = Focus::Sidebar;
-                    self.sidebar_click(col, row);
-                }
-            }
-            MouseEventKind::Down(MouseButton::Middle) => {
-                // Middle-click closes a tab (VS Code parity).
-                if in_rect(self.regions.tabs, col, row) {
-                    if let Some((i, _)) = self.tab_at(col) {
-                        self.request_close(i);
-                    }
-                }
-            }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some(from) = self.tab_drag {
-                    // Dragging a tab within the bar reorders it.
-                    if in_rect(self.regions.tabs, col, row) {
-                        if let Some((to, _)) = self.tab_at(col) {
-                            if to != from {
-                                self.editor.workspace.move_tab(from, to);
-                                self.tab_drag = Some(to);
-                            }
-                        }
-                    }
-                } else if let Some(anchor) = self.drag_anchor {
-                    if let Some(off) = self.editor_offset_at(col, row) {
-                        self.with_doc(|d| {
-                            d.selections.set_single(Selection::new(anchor, off));
-                        });
-                    }
-                }
-            }
+            MouseEventKind::Down(MouseButton::Left) => self.mouse_left_down(col, row, m.modifiers),
+            MouseEventKind::Down(MouseButton::Middle) => self.mouse_middle_down(col, row),
+            MouseEventKind::Drag(MouseButton::Left) => self.mouse_left_drag(col, row),
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag_anchor = None;
                 self.tab_drag = None;
@@ -1103,6 +1077,65 @@ impl App {
             MouseEventKind::ScrollUp => self.scroll_editor(-3),
             MouseEventKind::ScrollDown => self.scroll_editor(3),
             _ => {}
+        }
+    }
+
+    /// Left button press: focus + place/add a cursor in the editor, or hit the tab bar
+    /// or sidebar depending on which region was clicked.
+    fn mouse_left_down(&mut self, col: u16, row: u16, mods: crossterm::event::KeyModifiers) {
+        if in_rect(self.regions.editor, col, row) {
+            self.editor.focus = Focus::Editor;
+            if mods.contains(crossterm::event::KeyModifiers::ALT) {
+                // Alt+Click adds a cursor (multi-cursor).
+                if let Some(off) = self.editor_offset_at(col, row) {
+                    self.with_doc(|d| {
+                        d.selections.push(Selection::caret(off));
+                        d.selections.normalize();
+                    });
+                }
+            } else {
+                self.editor_click(col, row);
+            }
+        } else if in_rect(self.regions.tabs, col, row) {
+            self.tab_bar_click(col);
+        } else if self.regions.sidebar.is_some_and(|r| in_rect(r, col, row)) {
+            self.editor.focus = Focus::Sidebar;
+            self.sidebar_click(col, row);
+        }
+    }
+
+    /// Middle-click on the tab bar closes that tab (VS Code parity).
+    fn mouse_middle_down(&mut self, col: u16, row: u16) {
+        if in_rect(self.regions.tabs, col, row) {
+            if let Some((i, _)) = self.tab_at(col) {
+                self.request_close(i);
+            }
+        }
+    }
+
+    /// Left button drag: reorder the dragged tab, or extend the editor selection.
+    fn mouse_left_drag(&mut self, col: u16, row: u16) {
+        if let Some(from) = self.tab_drag {
+            self.drag_tab(from, col, row);
+        } else if let Some(anchor) = self.drag_anchor {
+            if let Some(off) = self.editor_offset_at(col, row) {
+                self.with_doc(|d| {
+                    d.selections.set_single(Selection::new(anchor, off));
+                });
+            }
+        }
+    }
+
+    /// Continue an in-progress tab drag, reordering when the cursor crosses onto a new tab.
+    fn drag_tab(&mut self, from: usize, col: u16, row: u16) {
+        if !in_rect(self.regions.tabs, col, row) {
+            return;
+        }
+        if let Some((to, _)) = self.tab_at(col) {
+            if to != from {
+                self.editor.workspace.move_tab(from, to);
+                self.tab_drag = Some(to);
+            }
         }
     }
 
@@ -1435,21 +1468,9 @@ impl App {
             }
 
             // --- language server ---
-            Command::Hover => {
-                if let Some((p, l, line, ch)) = self.lsp_position() {
-                    self.lsp.request_hover(&p, &l, line, ch);
-                }
-            }
-            Command::GotoDefinition => {
-                if let Some((p, l, line, ch)) = self.lsp_position() {
-                    self.lsp.request_definition(&p, &l, line, ch);
-                }
-            }
-            Command::Completion => {
-                if let Some((p, l, line, ch)) = self.lsp_position() {
-                    self.lsp.request_completion(&p, &l, line, ch);
-                }
-            }
+            Command::Hover => self.lsp_request(LspRequest::Hover),
+            Command::GotoDefinition => self.lsp_request(LspRequest::Definition),
+            Command::Completion => self.lsp_request(LspRequest::Completion),
             Command::RenameSymbol => self.open_rename(),
 
             // --- ui ---
@@ -1476,6 +1497,18 @@ impl App {
     fn with_doc<F: FnOnce(&mut Document)>(&mut self, f: F) {
         if let Some(d) = self.editor.active_document_mut() {
             f(d);
+        }
+    }
+
+    /// Issue an LSP request for the primary cursor position, if one resolves. The three
+    /// position-based requests (hover / definition / completion) share this lookup.
+    fn lsp_request(&mut self, req: LspRequest) {
+        if let Some((p, l, line, ch)) = self.lsp_position() {
+            match req {
+                LspRequest::Hover => self.lsp.request_hover(&p, &l, line, ch),
+                LspRequest::Definition => self.lsp.request_definition(&p, &l, line, ch),
+                LspRequest::Completion => self.lsp.request_completion(&p, &l, line, ch),
+            };
         }
     }
 

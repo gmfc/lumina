@@ -214,6 +214,39 @@ impl ExplorerPlugin {
             self.selected = pos;
         }
     }
+
+    /// Open or toggle the row under the cursor.
+    fn activate_selected(&mut self, host: &mut dyn Host) {
+        if let Some(row) = self.visible.get(self.selected) {
+            let path = row.path.clone();
+            self.toggle_or_open(&path, host);
+        }
+    }
+
+    /// Toggle the selected directory, but only when its current expanded state equals
+    /// `if_expanded` (so `expand` is a no-op on an open dir, and `collapse` on a shut one).
+    fn toggle_selected_dir(&mut self, host: &mut dyn Host, if_expanded: bool) {
+        if let Some(row) = self.visible.get(self.selected) {
+            if row.is_dir && row.expanded == if_expanded {
+                let path = row.path.clone();
+                self.toggle_or_open(&path, host);
+            }
+        }
+    }
+
+    /// Reveal the active document in the tree, if it has a path.
+    fn reveal_active_file(&mut self, host: &mut dyn Host) {
+        if let Some(id) = host.active_doc() {
+            if let Some(path) = host
+                .workspace()
+                .documents
+                .get(id)
+                .and_then(|d| d.path.clone())
+            {
+                self.reveal(&path);
+            }
+        }
+    }
 }
 
 impl Plugin for ExplorerPlugin {
@@ -243,40 +276,10 @@ impl Plugin for ExplorerPlugin {
         match command_id {
             "explorer.down" => self.move_selection(1),
             "explorer.up" => self.move_selection(-1),
-            "explorer.activate" => {
-                if let Some(row) = self.visible.get(self.selected) {
-                    let path = row.path.clone();
-                    self.toggle_or_open(&path, host);
-                }
-            }
-            "explorer.expand" => {
-                if let Some(row) = self.visible.get(self.selected) {
-                    if row.is_dir && !row.expanded {
-                        let path = row.path.clone();
-                        self.toggle_or_open(&path, host);
-                    }
-                }
-            }
-            "explorer.collapse" => {
-                if let Some(row) = self.visible.get(self.selected) {
-                    if row.is_dir && row.expanded {
-                        let path = row.path.clone();
-                        self.toggle_or_open(&path, host);
-                    }
-                }
-            }
-            "explorer.revealActiveFile" => {
-                if let Some(id) = host.active_doc() {
-                    if let Some(path) = host
-                        .workspace()
-                        .documents
-                        .get(id)
-                        .and_then(|d| d.path.clone())
-                    {
-                        self.reveal(&path);
-                    }
-                }
-            }
+            "explorer.activate" => self.activate_selected(host),
+            "explorer.expand" => self.toggle_selected_dir(host, /* if_expanded */ false),
+            "explorer.collapse" => self.toggle_selected_dir(host, /* if_expanded */ true),
+            "explorer.revealActiveFile" => self.reveal_active_file(host),
             _ => return false,
         }
         self.render(host);
