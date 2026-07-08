@@ -70,6 +70,8 @@ pub enum Command {
     PrevDiagnostic,
     FindReferences,
     DocumentSymbols,
+    NextHunk,
+    PrevHunk,
     // ui
     ToggleSidebar,
     FocusSidebar,

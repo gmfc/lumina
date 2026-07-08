@@ -44,7 +44,7 @@ cargo run -p editor-app -- <path>     # or: cargo run --bin lumina -- <path>
 `Alt+Click` add cursor · `Ctrl+G` go to line · `Ctrl+S` save · `Ctrl+K Ctrl+S` save as ·
 `Ctrl+N` new file · `F8`/`Shift+F8` next/prev diagnostic · `Ctrl+Space` completions ·
 `F12` go to definition · `Shift+F12` find references · `Ctrl+Shift+O` document symbols ·
-`Ctrl+Q` quit.
+`Alt+J`/`Alt+K` next/prev git change · `Ctrl+Q` quit.
 
 ## Configuration
 
