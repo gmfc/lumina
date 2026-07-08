@@ -930,6 +930,11 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
 
     if let Some(msg) = &app.editor.status_message {
         left = format!(" {msg}");
+    } else if let Some((sev, msg)) = app.diagnostic_at_caret() {
+        // The diagnostic under the caret, single-lined and truncated to fit (plan §2.2).
+        let avail = (area.width as usize).saturating_sub(display_len(&right) + 4);
+        let msg: String = msg.replace('\n', " ").chars().take(avail).collect();
+        left = format!(" {} {msg}", diag_marker(sev));
     }
 
     let bg = Style::default().bg(CLR_ACCENT).fg(Color::Black);
