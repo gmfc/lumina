@@ -1,8 +1,8 @@
 //! The `Document`: a rope plus everything that travels with an open buffer.
 //!
 //! All mutation goes through [`crate::transaction`] — never poke the rope directly from
-//! outside `core` (CLAUDE.md invariant #1). The raw `apply_raw_*` helpers here are the
-//! single internal chokepoint transactions use.
+//! outside `core` (CLAUDE.md invariant #1). The raw `apply_raw_*` helpers (see [`mutate`])
+//! are the single internal chokepoint transactions use.
 
 use std::path::PathBuf;
 
@@ -12,69 +12,10 @@ use crate::history::History;
 use crate::selection::{Selection, Selections};
 use crate::view::ViewState;
 
-/// Text encoding of the on-disk file. UTF-8 is the default; we preserve what we detect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Encoding {
-    #[default]
-    Utf8,
-    Utf8Bom,
-    Utf16Le,
-    Utf16Be,
-}
+mod mutate;
+mod types;
 
-/// Line terminator style. Preserved from the original file; never silently rewritten
-/// (CLAUDE.md / plan §7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LineEnding {
-    #[default]
-    Lf,
-    Crlf,
-}
-
-impl LineEnding {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LineEnding::Lf => "\n",
-            LineEnding::Crlf => "\r\n",
-        }
-    }
-
-    /// Guess the dominant line ending of `text`.
-    pub fn detect(text: &str) -> LineEnding {
-        let crlf = text.matches("\r\n").count();
-        let lf = text.matches('\n').count();
-        // If most newlines are CRLF, treat the file as CRLF.
-        if crlf > 0 && crlf * 2 >= lf {
-            LineEnding::Crlf
-        } else {
-            LineEnding::Lf
-        }
-    }
-}
-
-/// Content fingerprint used for external-sync reconciliation (plan §6).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DiskFingerprint {
-    pub hash: u64,
-    pub len: usize,
-}
-
-/// A byte/point-level edit record, in the exact shape tree-sitter's `InputEdit` needs, so the
-/// syntax layer can reparse **incrementally** instead of from scratch on every keystroke
-/// (plan §4 perf, §9 "incremental highlighting"). Points are `(row, column-in-bytes)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SyntaxEdit {
-    pub start_byte: usize,
-    pub old_end_byte: usize,
-    pub new_end_byte: usize,
-    pub start_point: (usize, usize),
-    pub old_end_point: (usize, usize),
-    pub new_end_point: (usize, usize),
-}
-
-/// Cap on buffered edits before we give up on incremental reparse and force a full one — a
-/// safety valve so a huge programmatic rewrite doesn't accumulate unbounded edit records.
-const SYNTAX_EDIT_CAP: usize = 4096;
+pub use types::{DiskFingerprint, Encoding, LineEnding, SyntaxEdit};
 
 /// An open buffer.
 pub struct Document {
@@ -135,29 +76,6 @@ impl Document {
         }
     }
 
-    /// The tree-sitter point `(row, column-in-bytes)` of a char offset.
-    fn point_of_char(&self, char_idx: usize) -> (usize, usize) {
-        let idx = char_idx.min(self.len_chars());
-        let line = self.text.char_to_line(idx);
-        let line_start_byte = self.text.line_to_byte(line);
-        let byte = self.text.char_to_byte(idx);
-        (line, byte - line_start_byte)
-    }
-
-    /// Buffer a syntax edit, dropping to "full reparse" mode if we blow the cap. Only tracked
-    /// for documents that carry a language (others never reach the highlighter).
-    fn record_syntax_edit(&mut self, edit: SyntaxEdit) {
-        if self.language.is_none() {
-            return;
-        }
-        if !self.syntax_edits_valid || self.syntax_edits.len() >= SYNTAX_EDIT_CAP {
-            self.syntax_edits.clear();
-            self.syntax_edits_valid = false;
-            return;
-        }
-        self.syntax_edits.push(edit);
-    }
-
     /// Total number of chars (the rope's natural index unit).
     pub fn len_chars(&self) -> usize {
         self.text.len_chars()
@@ -216,71 +134,6 @@ impl Document {
         char_idx.min(self.len_chars())
     }
 
-    // --- raw mutation chokepoint (used ONLY by transactions) -------------------
-
-    /// Remove chars in `[start, end)`. Internal; transactions call this.
-    pub(crate) fn apply_raw_remove(&mut self, start: usize, end: usize) {
-        let s = start.min(self.len_chars());
-        let e = end.min(self.len_chars());
-        if s < e {
-            // Record the edit (in pre-removal coordinates) before mutating.
-            let start_byte = self.text.char_to_byte(s);
-            let old_end_byte = self.text.char_to_byte(e);
-            let start_point = self.point_of_char(s);
-            let old_end_point = self.point_of_char(e);
-            self.record_syntax_edit(SyntaxEdit {
-                start_byte,
-                old_end_byte,
-                new_end_byte: start_byte,
-                start_point,
-                old_end_point,
-                new_end_point: start_point,
-            });
-            self.text.remove(s..e);
-            self.revision = self.revision.wrapping_add(1);
-        }
-    }
-
-    /// Insert `text` at char offset `at`. Internal; transactions call this.
-    pub(crate) fn apply_raw_insert(&mut self, at: usize, text: &str) {
-        let a = at.min(self.len_chars());
-        // Record the edit (start in pre-insert coordinates; new end derived from `text`).
-        let start_byte = self.text.char_to_byte(a);
-        let start_point = self.point_of_char(a);
-        let new_end_byte = start_byte + text.len();
-        let new_end_point = match text.rfind('\n') {
-            None => (start_point.0, start_point.1 + text.len()),
-            Some(last_nl) => (
-                start_point.0 + text.matches('\n').count(),
-                text.len() - (last_nl + 1),
-            ),
-        };
-        self.record_syntax_edit(SyntaxEdit {
-            start_byte,
-            old_end_byte: start_byte,
-            new_end_byte,
-            start_point,
-            old_end_point: start_point,
-            new_end_point,
-        });
-        self.text.insert(a, text);
-        self.revision = self.revision.wrapping_add(1);
-    }
-
-    /// Replace the whole buffer (external reload path). Invalidates incremental syntax state.
-    pub fn set_text(&mut self, rope: Rope) {
-        self.text = rope;
-        self.revision = self.revision.wrapping_add(1);
-        self.syntax_edits.clear();
-        self.syntax_edits_valid = false;
-    }
-
-    /// Replace the whole buffer from a string, normalizing CRLF to internal LF.
-    pub fn set_text_str(&mut self, s: &str) {
-        let normalized = s.replace("\r\n", "\n");
-        self.set_text(Rope::from_str(&normalized));
-    }
-
     /// Overwrite the current selection set.
     pub fn set_selections(&mut self, sel: Selections) {
         self.selections = sel;
@@ -300,27 +153,4 @@ impl std::fmt::Display for Document {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn from_str_round_trips() {
-        let d = Document::from_str("hello\nworld");
-        assert_eq!(d.to_string(), "hello\nworld");
-        assert_eq!(d.len_lines(), 2);
-    }
-
-    #[test]
-    fn crlf_detected_and_normalized() {
-        let d = Document::from_str("a\r\nb\r\n");
-        assert_eq!(d.line_ending, LineEnding::Crlf);
-        assert_eq!(d.to_string(), "a\nb\n"); // stored as LF internally
-    }
-
-    #[test]
-    fn line_len_excludes_newline() {
-        let d = Document::from_str("abc\nde");
-        assert_eq!(d.line_len_chars(0), 3);
-        assert_eq!(d.line_len_chars(1), 2);
-    }
-}
+mod tests;
