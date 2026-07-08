@@ -68,6 +68,8 @@ pub struct EditorState {
     /// Precomputed bracket-match highlight for the active doc: `(bracket, partner)` char
     /// offsets, refreshed after cursor moves so the pure renderer just reads it (plan §1.3).
     pub bracket_match: Option<(usize, usize)>,
+    /// Active caret-anchored completion popup, if any (plan §2.1).
+    pub completion: Option<crate::completion::CompletionState>,
 }
 
 impl EditorState {
@@ -89,6 +91,7 @@ impl EditorState {
             picker: None,
             diagnostics: HashMap::new(),
             bracket_match: None,
+            completion: None,
         }
     }
 

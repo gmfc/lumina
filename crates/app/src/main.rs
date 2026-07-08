@@ -5,6 +5,7 @@
 mod app;
 mod clipboard;
 mod commands;
+mod completion;
 mod config;
 mod editor;
 mod files;

@@ -307,10 +307,12 @@ pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
                 })
                 .unwrap_or_else(|| label.clone());
             let detail = it.get("detail").and_then(|d| d.as_str()).map(String::from);
+            let kind = it.get("kind").and_then(|k| k.as_u64()).map(|k| k as u8);
             Some(CompletionItem {
                 label,
                 detail,
                 insert_text,
+                kind,
             })
         })
         .collect()
