@@ -194,6 +194,12 @@ impl Document {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Replace the whole buffer from a string, normalizing CRLF to internal LF.
+    pub fn set_text_str(&mut self, s: &str) {
+        let normalized = s.replace("\r\n", "\n");
+        self.set_text(Rope::from_str(&normalized));
+    }
+
     /// Overwrite the current selection set.
     pub fn set_selections(&mut self, sel: Selections) {
         self.selections = sel;

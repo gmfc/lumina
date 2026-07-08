@@ -51,6 +51,21 @@ pub struct App {
     drag_anchor: Option<usize>,
     /// Last click for multi-click detection.
     last_click: Option<ClickState>,
+    // --- Phase 8: background workers + external sync ---
+    /// Sender handed to background workers (search, watcher).
+    worker_tx: std::sync::mpsc::Sender<crate::worker::WorkerMsg>,
+    /// Receiver drained each tick by the main loop.
+    worker_rx: std::sync::mpsc::Receiver<crate::worker::WorkerMsg>,
+    /// The filesystem debouncer; kept alive so the watch persists.
+    _watcher: Option<Box<dyn std::any::Any>>,
+    /// Content hashes of our own pending saves, to suppress save-echo (plan §6).
+    pending_self_writes: std::collections::HashMap<PathBuf, u64>,
+    /// Auto-scroll to the first externally-changed line on reload (follow mode).
+    follow_mode: bool,
+    /// Active project-search UI, if open.
+    search: Option<crate::search::SearchState>,
+    /// The last query we actually ran (to distinguish Enter=run vs Enter=open).
+    last_search_run: String,
 }
 
 impl App {
@@ -71,6 +86,21 @@ impl App {
                     editor.status_message = Some(format!("Could not open {}: {e}", file.display()));
                 }
             }
+        } else if let Some(session) = crate::session::load(&editor.workspace.root) {
+            // Restore the previous session for this project root (plan §6).
+            for entry in &session.files {
+                if let Ok(mut doc) = files::load(&entry.path) {
+                    let pos = doc.clamp(entry.cursor);
+                    doc.set_caret(pos);
+                    doc.view.scroll_line = entry.scroll;
+                    editor.workspace.open_document(doc);
+                }
+            }
+            editor.workspace.focus_tab(
+                session
+                    .active
+                    .min(editor.workspace.tabs.len().saturating_sub(1)),
+            );
         }
 
         let truecolor = crate::theme::truecolor_supported();
@@ -79,7 +109,17 @@ impl App {
 
         let config = crate::config::Config::load();
         editor.sidebar_width = config.sidebar_width;
+        let follow_mode = config.follow_mode;
         let keymap = build_keymap(&config);
+
+        // Background worker channel + directory watcher on the project root (plan §6).
+        let (worker_tx, worker_rx) = crate::worker::channel();
+        let watcher =
+            crate::worker::spawn_watcher(editor.workspace.root.clone(), worker_tx.clone());
+        if watcher.is_none() {
+            editor.status_message =
+                Some("File watching unavailable (edits won't auto-reload)".into());
+        }
 
         Ok(App {
             editor,
@@ -94,7 +134,19 @@ impl App {
             clipboard: String::new(),
             drag_anchor: None,
             last_click: None,
+            worker_tx,
+            worker_rx,
+            _watcher: watcher,
+            pending_self_writes: std::collections::HashMap::new(),
+            follow_mode,
+            search: None,
+            last_search_run: String::new(),
         })
+    }
+
+    /// The active project-search state (read by the renderer).
+    pub fn search(&self) -> Option<&crate::search::SearchState> {
+        self.search.as_ref()
     }
 
     /// Reload the config file and rebuild the keymap (the `config.reload` command).
@@ -123,7 +175,30 @@ impl App {
             self.drain_workers();
             self.ensure_cursor_visible();
         }
+        self.save_session();
         Ok(())
+    }
+
+    /// Persist the open files + cursor/scroll for this project root (plan §6).
+    fn save_session(&self) {
+        let ws = &self.editor.workspace;
+        let files: Vec<crate::session::SessionEntry> = ws
+            .tabs
+            .iter()
+            .filter_map(|&id| ws.documents.get(id))
+            .filter_map(|doc| {
+                doc.path.clone().map(|path| crate::session::SessionEntry {
+                    path,
+                    cursor: doc.selections.primary().head,
+                    scroll: doc.view.scroll_line,
+                })
+            })
+            .collect();
+        let session = crate::session::Session {
+            files,
+            active: ws.active_tab,
+        };
+        crate::session::save(&ws.root, &session);
     }
 
     /// Keep the primary cursor within the viewport by adjusting the active doc's scroll.
@@ -147,6 +222,10 @@ impl App {
         }
         if self.editor.picker.is_some() {
             self.picker_key(key);
+            return;
+        }
+        if self.search.is_some() {
+            self.search_key(key);
             return;
         }
         if self.editor.find.is_some() {
@@ -509,6 +588,85 @@ impl App {
         });
     }
 
+    // --- project search (Ctrl+Shift+F) -----------------------------------------
+
+    fn open_search(&mut self) {
+        let mut st = crate::search::SearchState::default();
+        if let Some(t) = self.selection_text() {
+            st.query = t;
+        }
+        self.search = Some(st);
+    }
+
+    /// Kick off a background project search for the current query.
+    fn run_project_search(&mut self) {
+        let (query, case) = match &self.search {
+            Some(s) if !s.query.is_empty() => (s.query.clone(), s.case_sensitive),
+            _ => return,
+        };
+        if let Some(s) = &mut self.search {
+            s.running = true;
+            s.results.clear();
+        }
+        self.last_search_run = query.clone();
+        crate::worker::spawn_search(
+            self.editor.workspace.root.clone(),
+            query,
+            case,
+            self.worker_tx.clone(),
+        );
+    }
+
+    fn search_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Esc => self.search = None,
+            KeyCode::Up => {
+                if let Some(s) = &mut self.search {
+                    s.move_selection(-1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(s) = &mut self.search {
+                    s.move_selection(1);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(s) = &mut self.search {
+                    s.query.pop();
+                }
+            }
+            KeyCode::Enter => {
+                let changed = self
+                    .search
+                    .as_ref()
+                    .map(|s| s.query != self.last_search_run)
+                    .unwrap_or(false);
+                if changed {
+                    self.run_project_search();
+                } else {
+                    self.open_search_hit();
+                }
+            }
+            KeyCode::Char(c) if !ctrl && !alt => {
+                if let Some(s) = &mut self.search {
+                    s.query.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn open_search_hit(&mut self) {
+        let hit = self.search.as_ref().and_then(|s| s.selected_hit()).cloned();
+        if let Some(hit) = hit {
+            self.open_path(&hit.path);
+            self.goto_line(hit.line.saturating_sub(1));
+        }
+    }
+
     // --- clipboard -------------------------------------------------------------
 
     fn selection_text(&self) -> Option<String> {
@@ -674,6 +832,95 @@ impl App {
         for ev in events {
             self.registry.broadcast(&ev, &mut self.editor);
         }
+
+        // Background worker messages (FS watch, project search).
+        while let Ok(msg) = self.worker_rx.try_recv() {
+            match msg {
+                crate::worker::WorkerMsg::DiskChanged { path } => self.on_disk_changed(&path),
+                crate::worker::WorkerMsg::SearchComplete { query, hits } => {
+                    if let Some(search) = &mut self.search {
+                        if search.query == query {
+                            search.results = hits;
+                            search.selected = 0;
+                            search.running = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reconcile an external on-disk change against the buffer (plan §6 decision matrix).
+    fn on_disk_changed(&mut self, path: &std::path::Path) {
+        // Not one of our open docs → refresh the tree and move on.
+        let Some(id) = self.editor.workspace.find_by_path(path) else {
+            self.editor
+                .pending_events
+                .push(editor_plugin::event::Event::DidChangeConfig);
+            // Also nudge the explorer to rescan on any tree change.
+            return;
+        };
+
+        let Ok(bytes) = std::fs::read(path) else {
+            // Deleted mid-race, or unreadable → flag deletion, keep the buffer.
+            if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
+                doc.deleted_on_disk = true;
+                doc.dirty = true; // a save re-creates it
+            }
+            return;
+        };
+        let fp = crate::files::fingerprint(&bytes);
+
+        // Our own save echoing back → drop it.
+        if self.pending_self_writes.get(path) == Some(&fp.hash) {
+            self.pending_self_writes.remove(path);
+            if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
+                doc.disk = fp;
+            }
+            return;
+        }
+
+        let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
+            return;
+        };
+        // No real change (hash matches last-loaded) → just refresh the fingerprint.
+        if doc.disk.hash == fp.hash {
+            doc.disk = fp;
+            return;
+        }
+
+        if doc.dirty {
+            // Never clobber unsaved work — flag a conflict for the user to resolve.
+            doc.external_conflict = Some(fp);
+            return;
+        }
+
+        // Clean buffer → reload, following the cursor/scroll through the diff.
+        let new_text = String::from_utf8_lossy(&bytes).into_owned();
+        let old_text = doc.to_string();
+        let heads: Vec<usize> = doc.selections.ranges().iter().map(|s| s.head).collect();
+        let mapped: Vec<usize> = heads
+            .iter()
+            .map(|&h| crate::sync::map_offset(&old_text, &new_text, h))
+            .collect();
+
+        doc.set_text_str(&new_text);
+        let clamped: Vec<editor_core::Selection> = mapped
+            .iter()
+            .map(|&m| editor_core::Selection::caret(doc.clamp(m)))
+            .collect();
+        doc.selections = editor_core::Selections::from_iter(clamped);
+        doc.disk = fp;
+        doc.dirty = false;
+        doc.externally_reloaded = true;
+
+        if self.follow_mode {
+            let line = crate::sync::first_changed_line(&old_text, &new_text);
+            doc.view.scroll_line = line.saturating_sub(2);
+        }
+        self.editor
+            .pending_events
+            .push(editor_plugin::event::Event::ExternalReload(id));
     }
 
     /// The single dispatcher — the only place editor state mutates (plan §5).
@@ -742,6 +989,7 @@ impl App {
             }
             Command::ReplaceCurrent => self.replace_current(),
             Command::ReplaceAll => self.replace_all(),
+            Command::ProjectSearch => self.open_search(),
 
             // --- clipboard ---
             Command::Copy => {
@@ -848,6 +1096,9 @@ impl App {
         match files::save(doc, &path) {
             Ok(fp) => {
                 doc.dirty = false;
+                doc.deleted_on_disk = false;
+                // Record the hash we just wrote so the watch echo is suppressed (plan §6).
+                self.pending_self_writes.insert(path.clone(), fp.hash);
                 doc.disk = fp;
                 doc.history.break_group();
                 self.editor.status_message = Some(format!("Saved {}", path.display()));
@@ -1285,6 +1536,84 @@ mod tests {
         let sel = app.editor.active_document().unwrap().selections.primary();
         assert_eq!((sel.from(), sel.to()), (0, 3));
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn external_clean_reload_follows_cursor() {
+        let path = temp_file("a\nb\nTARGET\nd");
+        let mut app = app_with(&path);
+        // Put the cursor on the TARGET line.
+        let off = "a\nb\n".chars().count();
+        app.editor.active_document_mut().unwrap().set_caret(off);
+        // Another process inserts two lines above.
+        std::fs::write(&path, "a\nX\nY\nb\nTARGET\nd").unwrap();
+        app.on_disk_changed(&path);
+        let doc = app.editor.active_document().unwrap();
+        assert_eq!(doc.to_string(), "a\nX\nY\nb\nTARGET\nd");
+        assert!(!doc.dirty);
+        assert!(doc.externally_reloaded);
+        let line = doc.char_to_line(doc.selections.primary().head);
+        assert_eq!(doc.line_text(line).trim_end(), "TARGET");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn external_change_on_dirty_flags_conflict() {
+        let path = temp_file("original");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.dispatch(Command::InsertChar('!')); // now dirty
+        std::fs::write(&path, "changed by someone else").unwrap();
+        app.on_disk_changed(&path);
+        let doc = app.editor.active_document().unwrap();
+        assert!(doc.external_conflict.is_some());
+        assert_eq!(doc.to_string(), "original!"); // NOT clobbered
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn own_save_echo_is_suppressed() {
+        let path = temp_file("hello");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.dispatch(Command::InsertText("!".into()));
+        app.save_active(); // records pending_self_write
+                           // The watcher echoes our own write back:
+        app.on_disk_changed(&path);
+        let doc = app.editor.active_document().unwrap();
+        assert!(
+            !doc.externally_reloaded,
+            "own save should not trigger a reload"
+        );
+        assert_eq!(doc.to_string(), "hello!");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn project_search_finds_and_opens() {
+        let dir = temp_dir_with_files();
+        std::fs::write(dir.join("a.txt"), "find_me on this line\nother").unwrap();
+        let mut app = app_with(&dir);
+        app.open_search();
+        for c in "find_me".chars() {
+            app.search_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.search_key(KeyEvent::from(KeyCode::Enter)); // run
+                                                        // Drain the worker channel until the search completes (bounded, with backoff).
+        for _ in 0..200 {
+            app.drain_workers();
+            if app.search().map(|s| !s.running).unwrap_or(true) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app
+            .search()
+            .unwrap()
+            .results
+            .iter()
+            .any(|h| h.text.contains("find_me")));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -11,8 +11,12 @@ mod find;
 mod input;
 mod keymap;
 mod picker;
+mod search;
+mod session;
+mod sync;
 mod theme;
 mod ui;
+mod worker;
 
 use std::io;
 

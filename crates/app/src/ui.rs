@@ -51,6 +51,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Overlays draw last, on top of the body (plan §4).
     render_find(f, app, editor_area);
+    render_search(f, app, body);
     render_picker(f, app, body);
     render_overlay(f, app, body);
 
@@ -188,6 +189,69 @@ fn render_find(f: &mut Frame, app: &App, editor_area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Project-search results: a bottom panel with the query line and grouped hits.
+fn render_search(f: &mut Frame, app: &App, body: Rect) {
+    use ratatui::widgets::Clear;
+
+    let Some(search) = app.search() else {
+        return;
+    };
+    let height = (body.height / 2).max(6).min(body.height);
+    let rect = Rect::new(body.x, body.y + body.height - height, body.width, height);
+    f.render_widget(Clear, rect);
+    let status = if search.running {
+        "searching…".to_string()
+    } else {
+        format!("{} result(s)", search.results.len())
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CLR_ACCENT))
+        .title(TSpan::styled(
+            format!(" Search: {}  [{status}] ", search.query),
+            Style::default().add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(Color::Rgb(28, 30, 36)));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let visible = inner.height as usize;
+    let start = search.selected.saturating_sub(visible.saturating_sub(1));
+    let mut lines = Vec::new();
+    let mut last_file: Option<&std::path::Path> = None;
+    for (i, hit) in search.results.iter().enumerate().skip(start).take(visible) {
+        // Group header when the file changes.
+        if last_file != Some(hit.path.as_path()) {
+            last_file = Some(hit.path.as_path());
+            let name = hit
+                .path
+                .strip_prefix(&app.editor.workspace.root)
+                .unwrap_or(&hit.path)
+                .to_string_lossy()
+                .into_owned();
+            lines.push(Line::from(TSpan::styled(
+                name,
+                Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
+            )));
+        }
+        let selected = i == search.selected;
+        let style = if selected {
+            Style::default().fg(Color::White).bg(CLR_SEL)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let text: String = hit.text.chars().take(120).collect();
+        lines.push(Line::from(vec![
+            TSpan::styled(
+                format!("  {:>4}: ", hit.line),
+                Style::default().fg(Color::DarkGray),
+            ),
+            TSpan::styled(text, style),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 /// The fuzzy picker overlay (command palette / quick open / goto line): a centered box
 /// with a query line and a ranked, scrollable result list.
 fn render_picker(f: &mut Frame, app: &App, body: Rect) {
@@ -296,7 +360,15 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "untitled".into());
-        let marker = if doc.dirty { "●" } else { "×" };
+        let marker = if doc.external_conflict.is_some() {
+            "⚠"
+        } else if doc.dirty {
+            "●"
+        } else if doc.externally_reloaded {
+            "↻"
+        } else {
+            "×"
+        };
         let active = i == ws.active_tab;
         let style = if active {
             Style::default()
