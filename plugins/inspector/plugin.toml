@@ -1,0 +1,15 @@
+# Example external plugin: a sidebar panel that reports document facts.
+# Note it requests NO edit capability — it can draw, but physically cannot modify the buffer.
+id = "inspector"
+name = "Document Inspector"
+entry = "main.rhai"
+capabilities = ["ui"]
+
+[[panels]]
+id = "inspector.panel"
+title = "Inspector"
+location = "sidebar"
+
+[[commands]]
+id = "inspector.refresh"
+title = "Inspector: Refresh"

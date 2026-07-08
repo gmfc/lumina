@@ -1,0 +1,9 @@
+# Example external plugin: inserts a TODO comment at the cursor.
+id = "todo"
+name = "Todo Inserter"
+entry = "main.rhai"
+capabilities = ["edit"]
+
+[[commands]]
+id = "todo.insert"
+title = "Insert TODO Comment"
