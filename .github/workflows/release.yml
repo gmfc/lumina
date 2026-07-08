@@ -1,0 +1,136 @@
+# Repo path: .github/workflows/release.yml
+#
+# Builds the `lmn` binary (the lumina editor) for macOS, Windows and Linux, packages
+# each as a versioned archive with a SHA-256 checksum, and — on a version tag — publishes
+# them to a GitHub Release so `install.sh` / `install.ps1` can fetch a prebuilt binary.
+#
+# Trigger it two ways:
+#   • push a tag like `v0.1.0`  → builds every target AND publishes a GitHub Release.
+#   • run it manually (Actions → Release → Run workflow) → builds every target and
+#     uploads the archives as run artifacts, without touching Releases (handy for a dry run).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # aarch64 Linux is cross-compiled from an x86_64 runner: install the GNU cross
+      # linker and point Cargo (and the `cc` crate that builds the tree-sitter grammars)
+      # at it. x11rb is pure Rust, so no target sysroot / X11 dev libs are needed.
+      - name: Install cross linker (Linux aarch64)
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=${{ matrix.linker }}" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --locked --bin lmn --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          stage="lmn-${version}-${{ matrix.target }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.target }}/release/lmn" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE* "$stage/" 2>/dev/null || true
+          archive="lmn-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" "$stage"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME
+          $stage   = "lmn-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/lmn.exe" $stage/
+          Copy-Item README.md $stage/ -ErrorAction SilentlyContinue
+          $archive = "lmn-${{ matrix.target }}.zip"
+          Compress-Archive -Path $stage -DestinationPath $archive -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii -NoNewline "$archive.sha256"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmn-${{ matrix.target }}
+          # The archive + its .sha256 (either .tar.gz* or .zip*, depending on the runner).
+          path: lmn-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish when a version tag was pushed; manual runs stop at build artifacts.
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

@@ -27,6 +27,48 @@ Six crates (headless core, thin view — the Helix/VS Code split):
 Everything is a command; a document holds a *set* of selections; features are plugins;
 render is a pure function of state; all buffer mutation goes through the transaction API.
 
+## Install
+
+Prebuilt `lmn` binaries are published for macOS, Windows and Linux on every tagged
+release. Once installed, open a directory just like vim:
+
+```sh
+lmn .              # open the current directory
+lmn src/main.rs    # open a single file
+```
+
+**macOS / Linux** (installs to `~/.local/bin`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gmfc/lumina/main/install.sh | sh
+```
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/gmfc/lumina/main/install.ps1 | iex
+```
+
+Override the destination with `LMN_INSTALL_DIR`, or pin a version with
+`LMN_VERSION=v0.1.0`. Supported targets: `x86_64`/`aarch64` Linux, Intel/Apple-silicon
+macOS, and `x86_64` Windows.
+
+**From source** (any platform with Rust ≥ 1.88):
+
+```sh
+cargo install --git https://github.com/gmfc/lumina editor-app   # installs `lmn`
+```
+
+**Updating** — pull the newest release in place (safe to run while the editor is open):
+
+```sh
+lmn update        # re-runs the installer for your OS, upgrading this binary
+lmn --version     # check what you're on
+```
+
+Re-running the install one-liner above does the same thing. The installers replace the
+binary atomically, so a running instance keeps working until you restart it.
+
 ## Build & run
 
 ```sh
@@ -34,7 +76,7 @@ cargo build --workspace
 cargo test  --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
-cargo run -p editor-app -- <path>     # or: cargo run --bin lumina -- <path>
+cargo run -p editor-app -- <path>     # or: cargo run --bin lmn -- <path>
 ```
 
 ## Keys (defaults, remappable in config)
