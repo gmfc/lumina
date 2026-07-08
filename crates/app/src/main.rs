@@ -24,8 +24,10 @@ use std::io;
 use anyhow::Result;
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
+use crossterm::terminal::supports_keyboard_enhancement;
 
 use app::App;
 
@@ -36,9 +38,25 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     // Best-effort enable of mouse capture + bracketed paste; ignore on unsupported terms.
     let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+    // The kitty keyboard protocol lets us disambiguate Ctrl+I/Tab, Ctrl+M/Enter, and detect
+    // key-release — richer chords for the VS Code-style keymap (plan §5). Only push it where
+    // the terminal advertises support, and remember whether we did so we can pop it cleanly.
+    let enhanced = supports_keyboard_enhancement().unwrap_or(false);
+    if enhanced {
+        let _ = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
+    }
 
     let result = App::new(arg).and_then(|mut app| app.run(&mut terminal));
 
+    if enhanced {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
     ratatui::restore();
 
