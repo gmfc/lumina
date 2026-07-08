@@ -1,0 +1,176 @@
+//! The built-in command table: `id → title` (for the palette) and `id → Command` (for the
+//! dispatcher). This is the seed unification from plan §6A — every built-in action has a
+//! stable id, so keys can be remapped to it and the palette can list it, exactly like a
+//! plugin-contributed command.
+
+use editor_core::Motion;
+
+use crate::input::Command;
+
+/// Resolve a command id to a concrete [`Command`], if it's a built-in.
+pub fn command_for_id(id: &str) -> Option<Command> {
+    use Motion::*;
+    let cmd = match id {
+        // motion
+        "cursor.left" => Command::Move(Left),
+        "cursor.right" => Command::Move(Right),
+        "cursor.up" => Command::Move(Up),
+        "cursor.down" => Command::Move(Down),
+        "cursor.wordLeft" => Command::Move(WordLeft),
+        "cursor.wordRight" => Command::Move(WordRight),
+        "cursor.lineStart" => Command::Move(LineStart),
+        "cursor.lineEnd" => Command::Move(LineEnd),
+        "cursor.docStart" => Command::Move(DocStart),
+        "cursor.docEnd" => Command::Move(DocEnd),
+        "cursor.pageUp" => Command::Move(PageUp),
+        "cursor.pageDown" => Command::Move(PageDown),
+        // selection extend
+        "select.left" => Command::Extend(Left),
+        "select.right" => Command::Extend(Right),
+        "select.up" => Command::Extend(Up),
+        "select.down" => Command::Extend(Down),
+        "select.lineStart" => Command::Extend(LineStart),
+        "select.lineEnd" => Command::Extend(LineEnd),
+        "select.wordLeft" => Command::Extend(WordLeft),
+        "select.wordRight" => Command::Extend(WordRight),
+        "edit.selectAll" => Command::SelectAll,
+        // editing
+        "edit.newline" => Command::InsertNewline,
+        "edit.deleteBackward" => Command::DeleteBackward,
+        "edit.deleteForward" => Command::DeleteForward,
+        "edit.indent" => Command::Indent,
+        "edit.outdent" => Command::Outdent,
+        "edit.undo" => Command::Undo,
+        "edit.redo" => Command::Redo,
+        "edit.copy" => Command::Copy,
+        "edit.cut" => Command::Cut,
+        "edit.paste" => Command::Paste(String::new()),
+        // multi-cursor
+        "cursor.addAbove" => Command::AddCursorAbove,
+        "cursor.addBelow" => Command::AddCursorBelow,
+        "cursor.addNextMatch" => Command::AddCursorAtNextMatch,
+        // files / tabs
+        "file.save" => Command::Save,
+        "tab.close" => Command::CloseTab,
+        "tab.next" => Command::NextTab,
+        "tab.prev" => Command::PrevTab,
+        "tab.goto1" => Command::GotoTab(0),
+        "tab.goto2" => Command::GotoTab(1),
+        "tab.goto3" => Command::GotoTab(2),
+        "tab.goto4" => Command::GotoTab(3),
+        "tab.goto5" => Command::GotoTab(4),
+        "tab.goto6" => Command::GotoTab(5),
+        "tab.goto7" => Command::GotoTab(6),
+        "tab.goto8" => Command::GotoTab(7),
+        "tab.goto9" => Command::GotoTab(8),
+        // search
+        "search.find" => Command::FindOpen,
+        "search.replace" => Command::ReplaceOpen,
+        "search.findNext" => Command::FindNext,
+        "search.findPrev" => Command::FindPrev,
+        "search.replaceAll" => Command::ReplaceAll,
+        "search.project" => Command::ProjectSearch,
+        // ui
+        "view.toggleSidebar" => Command::ToggleSidebar,
+        "view.focusSidebar" => Command::FocusSidebar,
+        "view.focusEditor" => Command::FocusEditor,
+        "view.commandPalette" => Command::Palette,
+        "view.quickOpen" => Command::QuickOpen,
+        "view.gotoLine" => Command::GotoLine,
+        "app.quit" => Command::Quit,
+        _ => return None,
+    };
+    Some(cmd)
+}
+
+/// User-facing built-in commands shown in the palette: `(id, title)`.
+pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("file.save", "File: Save"),
+        ("tab.close", "Tab: Close"),
+        ("tab.next", "Tab: Next"),
+        ("tab.prev", "Tab: Previous"),
+        ("edit.undo", "Edit: Undo"),
+        ("edit.redo", "Edit: Redo"),
+        ("edit.selectAll", "Edit: Select All"),
+        ("edit.copy", "Edit: Copy"),
+        ("edit.cut", "Edit: Cut"),
+        ("edit.paste", "Edit: Paste"),
+        ("cursor.addNextMatch", "Multi-cursor: Add Next Match"),
+        ("search.find", "Find"),
+        ("search.replace", "Replace"),
+        ("search.findNext", "Find: Next Match"),
+        ("search.findPrev", "Find: Previous Match"),
+        ("search.replaceAll", "Replace: All"),
+        ("search.project", "Search: Find in Files"),
+        ("view.toggleSidebar", "View: Toggle Sidebar"),
+        ("view.quickOpen", "Go to File…"),
+        ("view.gotoLine", "Go to Line…"),
+        ("config.reload", "Preferences: Reload Configuration"),
+        ("app.quit", "Quit"),
+    ]
+}
+
+/// Default key bindings: `(chord-sequence, command-id)`. Chords are space-separated
+/// (VS Code style: `"ctrl+k ctrl+s"`). Config can override or extend these.
+pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("ctrl+q", "app.quit"),
+        ("ctrl+s", "file.save"),
+        ("ctrl+w", "tab.close"),
+        ("ctrl+b", "view.toggleSidebar"),
+        ("ctrl+z", "edit.undo"),
+        ("ctrl+y", "edit.redo"),
+        ("ctrl+a", "edit.selectAll"),
+        ("ctrl+c", "edit.copy"),
+        ("ctrl+x", "edit.cut"),
+        ("ctrl+v", "edit.paste"),
+        ("ctrl+f", "search.find"),
+        ("ctrl+h", "search.replace"),
+        ("ctrl+shift+f", "search.project"),
+        ("ctrl+shift+p", "view.commandPalette"),
+        ("ctrl+p", "view.quickOpen"),
+        ("ctrl+g", "view.gotoLine"),
+        ("ctrl+d", "cursor.addNextMatch"),
+        ("ctrl+tab", "tab.next"),
+        ("ctrl+shift+tab", "tab.prev"),
+        ("ctrl+1", "tab.goto1"),
+        ("ctrl+2", "tab.goto2"),
+        ("ctrl+3", "tab.goto3"),
+        ("ctrl+4", "tab.goto4"),
+        ("ctrl+5", "tab.goto5"),
+        ("ctrl+6", "tab.goto6"),
+        ("ctrl+7", "tab.goto7"),
+        ("ctrl+8", "tab.goto8"),
+        ("ctrl+9", "tab.goto9"),
+        ("left", "cursor.left"),
+        ("right", "cursor.right"),
+        ("up", "cursor.up"),
+        ("down", "cursor.down"),
+        ("home", "cursor.lineStart"),
+        ("end", "cursor.lineEnd"),
+        ("pageup", "cursor.pageUp"),
+        ("pagedown", "cursor.pageDown"),
+        ("ctrl+left", "cursor.wordLeft"),
+        ("ctrl+right", "cursor.wordRight"),
+        ("ctrl+home", "cursor.docStart"),
+        ("ctrl+end", "cursor.docEnd"),
+        ("shift+left", "select.left"),
+        ("shift+right", "select.right"),
+        ("shift+up", "select.up"),
+        ("shift+down", "select.down"),
+        ("shift+home", "select.lineStart"),
+        ("shift+end", "select.lineEnd"),
+        ("ctrl+shift+left", "select.wordLeft"),
+        ("ctrl+shift+right", "select.wordRight"),
+        ("enter", "edit.newline"),
+        ("backspace", "edit.deleteBackward"),
+        ("delete", "edit.deleteForward"),
+        ("tab", "edit.indent"),
+        ("backtab", "edit.outdent"),
+        ("alt+up", "cursor.addAbove"),
+        ("alt+down", "cursor.addBelow"),
+        ("f3", "search.findNext"),
+        ("shift+f3", "search.findPrev"),
+    ]
+}

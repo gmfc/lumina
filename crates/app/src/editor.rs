@@ -49,6 +49,8 @@ pub struct EditorState {
     pub highlighters: HashMap<DocId, editor_syntax::DocHighlighter>,
     /// Active in-file find/replace widget, if open.
     pub find: Option<crate::find::FindState>,
+    /// Active fuzzy picker (command palette / quick open / goto line), if open.
+    pub picker: Option<crate::picker::Picker>,
 }
 
 impl EditorState {
@@ -67,6 +69,7 @@ impl EditorState {
             overlay: None,
             highlighters: HashMap::new(),
             find: None,
+            picker: None,
         }
     }
 

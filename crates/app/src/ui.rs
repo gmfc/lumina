@@ -51,6 +51,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Overlays draw last, on top of the body (plan §4).
     render_find(f, app, editor_area);
+    render_picker(f, app, body);
     render_overlay(f, app, body);
 
     // Record laid-out regions so the mouse router (which runs outside draw) can hit-test.
@@ -182,6 +183,74 @@ fn render_find(f: &mut Frame, app: &App, editor_area: Rect) {
         lines.push(Line::from(TSpan::styled(
             format!(" {err}"),
             Style::default().fg(Color::Red),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The fuzzy picker overlay (command palette / quick open / goto line): a centered box
+/// with a query line and a ranked, scrollable result list.
+fn render_picker(f: &mut Frame, app: &App, body: Rect) {
+    use crate::picker::PickerKind;
+    use ratatui::widgets::Clear;
+
+    let Some(picker) = &app.editor.picker else {
+        return;
+    };
+    let width = 72u16.min(body.width.saturating_sub(4)).max(20);
+    let max_rows = 12u16;
+    let list_rows = (picker.filtered.len() as u16).min(max_rows);
+    let height = (list_rows + 3).min(body.height);
+    let rect = Rect::new(
+        body.x + (body.width.saturating_sub(width)) / 2,
+        body.y + 1,
+        width,
+        height,
+    );
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CLR_ACCENT))
+        .title(TSpan::styled(
+            format!(" {} ", picker.prompt),
+            Style::default().add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    // Query line.
+    let cursor = if picker.kind == PickerKind::GotoLine {
+        ":"
+    } else {
+        "›"
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            TSpan::styled(format!("{cursor} "), Style::default().fg(CLR_ACCENT)),
+            TSpan::styled(
+                format!("{}▏", picker.query),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    // Scroll the result window to keep the selection visible.
+    let visible = inner.height.saturating_sub(2) as usize;
+    let start = picker.selected.saturating_sub(visible.saturating_sub(1));
+    for (row_idx, &item_idx) in picker.filtered.iter().enumerate().skip(start).take(visible) {
+        let item = &picker.items[item_idx];
+        let selected = row_idx == picker.selected;
+        let style = if selected {
+            Style::default().fg(Color::White).bg(CLR_SEL)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let prefix = if selected { "▸ " } else { "  " };
+        lines.push(Line::from(TSpan::styled(
+            format!("{prefix}{}", item.label),
+            style,
         )));
     }
     f.render_widget(Paragraph::new(lines), inner);

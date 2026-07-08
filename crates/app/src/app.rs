@@ -17,7 +17,9 @@ use ratatui::DefaultTerminal;
 use crate::editor::{EditorState, Focus};
 use crate::files;
 use crate::find::FindState;
-use crate::input::{key_to_command, Command, Focus as InputFocus};
+use crate::input::Command;
+use crate::keymap::{Chord, Keymap};
+use crate::picker::{Picker, PickerItem, PickerKind};
 use crate::ui::{self, Regions};
 
 /// Tracks click cadence for double/triple-click detection.
@@ -37,6 +39,14 @@ pub struct App {
     pub regions: Regions,
     /// The active color theme (syntax + chrome).
     pub theme: crate::theme::Theme,
+    /// The chord keymap (defaults + config overrides).
+    pub keymap: crate::keymap::Keymap,
+    /// Pending chord prefix (for multi-key chords like Ctrl+K Ctrl+S).
+    pub pending: Vec<crate::keymap::Chord>,
+    /// User configuration.
+    pub config: crate::config::Config,
+    /// Internal clipboard register (works even without a system clipboard).
+    clipboard: String,
     /// Char offset where the current drag began (selection anchor).
     drag_anchor: Option<usize>,
     /// Last click for multi-click detection.
@@ -66,6 +76,11 @@ impl App {
         let truecolor = crate::theme::truecolor_supported();
         let mut theme = crate::theme::Theme::default_dark(truecolor);
         theme.load_user_overrides();
+
+        let config = crate::config::Config::load();
+        editor.sidebar_width = config.sidebar_width;
+        let keymap = build_keymap(&config);
+
         Ok(App {
             editor,
             registry,
@@ -73,9 +88,21 @@ impl App {
             page_height: 20,
             regions: Regions::default(),
             theme,
+            keymap,
+            pending: Vec::new(),
+            config,
+            clipboard: String::new(),
             drag_anchor: None,
             last_click: None,
         })
+    }
+
+    /// Reload the config file and rebuild the keymap (the `config.reload` command).
+    fn reload_config(&mut self) {
+        self.config = crate::config::Config::load();
+        self.editor.sidebar_width = self.config.sidebar_width;
+        self.keymap = build_keymap(&self.config);
+        self.editor.status_message = Some("Configuration reloaded".into());
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -110,15 +137,18 @@ impl App {
     }
 
     fn on_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crate::keymap::{Chord, Resolve};
         use crossterm::event::KeyCode;
 
-        // A modal overlay captures all input while open.
+        // Modal captures, in priority order.
         if self.editor.overlay.is_some() {
             self.overlay_key(key);
             return;
         }
-
-        // The find/replace widget captures input while open.
+        if self.editor.picker.is_some() {
+            self.picker_key(key);
+            return;
+        }
         if self.editor.find.is_some() {
             self.find_key(key);
             return;
@@ -137,12 +167,52 @@ impl App {
             }
         }
 
-        let focus = match self.editor.focus {
-            Focus::Editor => InputFocus::Editor,
-            Focus::Sidebar => InputFocus::Sidebar,
-        };
-        if let Some(cmd) = key_to_command(key, focus) {
+        // Chord keymap resolution (defaults + config overrides).
+        self.pending.push(Chord::from_event(key));
+        match self.keymap.resolve(&self.pending) {
+            Resolve::Command(id) => {
+                self.pending.clear();
+                self.editor.status_message = None;
+                self.exec_id(&id);
+            }
+            Resolve::Pending => {
+                // Keep the prefix armed; show it in the status bar.
+                self.editor.status_message = Some(format!("{} …", chords_label(&self.pending)));
+            }
+            Resolve::None => {
+                let single = self.pending.len() == 1;
+                self.pending.clear();
+                // Fallback: printable text entry in the editor.
+                if single && self.editor.focus == Focus::Editor {
+                    if let KeyCode::Char(c) = key.code {
+                        let ctrl = key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL);
+                        let alt = key.modifiers.contains(crossterm::event::KeyModifiers::ALT);
+                        if !ctrl && !alt {
+                            self.dispatch(Command::InsertChar(c));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Execute a command id: built-in editor command, app-level action, or plugin command.
+    fn exec_id(&mut self, id: &str) {
+        if let Some(cmd) = crate::commands::command_for_id(id) {
             self.dispatch(cmd);
+            return;
+        }
+        match id {
+            "config.reload" => self.reload_config(),
+            other => {
+                if !self.registry.dispatch_command(other, &mut self.editor) {
+                    self.editor.status_message = Some(format!("Unknown command: {other}"));
+                } else {
+                    self.drain_workers();
+                }
+            }
         }
     }
 
@@ -334,6 +404,123 @@ impl App {
         self.editor.status_message = Some(format!("Replaced {n} occurrence(s)"));
     }
 
+    // --- picker (palette / quick open / goto line) -----------------------------
+
+    /// Open the command palette: built-in commands + plugin-contributed commands.
+    fn open_palette(&mut self) {
+        let mut items: Vec<PickerItem> = crate::commands::palette_entries()
+            .iter()
+            .map(|(id, title)| PickerItem {
+                id: id.to_string(),
+                label: title.to_string(),
+            })
+            .collect();
+        for spec in self.registry.commands() {
+            items.push(PickerItem {
+                id: spec.id.clone(),
+                label: spec.title.clone(),
+            });
+        }
+        self.editor.picker = Some(Picker::new(PickerKind::Command, "Command", items));
+    }
+
+    /// Open quick-open: fuzzy-filter files under the project root (ignore-walked).
+    fn open_quick_open(&mut self) {
+        let root = self.editor.workspace.root.clone();
+        let mut items = Vec::new();
+        let walker = ignore::WalkBuilder::new(&root)
+            .hidden(false)
+            .git_ignore(true)
+            .filter_entry(|e| e.file_name() != ".git")
+            .build();
+        for entry in walker.flatten().take(10_000) {
+            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                let path = entry.path();
+                let label = path
+                    .strip_prefix(&root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .into_owned();
+                items.push(PickerItem {
+                    id: path.to_string_lossy().into_owned(),
+                    label,
+                });
+            }
+        }
+        self.editor.picker = Some(Picker::new(PickerKind::File, "Go to File", items));
+    }
+
+    fn open_goto_line(&mut self) {
+        self.editor.picker = Some(Picker::new(PickerKind::GotoLine, "Go to Line", Vec::new()));
+    }
+
+    fn picker_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        let Some(picker) = &mut self.editor.picker else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.editor.picker = None,
+            KeyCode::Up => picker.move_selection(-1),
+            KeyCode::Down => picker.move_selection(1),
+            KeyCode::Backspace => picker.backspace(),
+            KeyCode::Enter => self.activate_picker(),
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .intersects(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                picker.input_char(c)
+            }
+            _ => {}
+        }
+    }
+
+    fn activate_picker(&mut self) {
+        let Some(picker) = self.editor.picker.take() else {
+            return;
+        };
+        match picker.kind {
+            PickerKind::Command => {
+                if let Some(item) = picker.selected_item() {
+                    let id = item.id.clone();
+                    self.exec_id(&id);
+                }
+            }
+            PickerKind::File => {
+                if let Some(item) = picker.selected_item() {
+                    let path = std::path::PathBuf::from(&item.id);
+                    self.open_path(&path);
+                }
+            }
+            PickerKind::GotoLine => {
+                if let Ok(line) = picker.query.trim().parse::<usize>() {
+                    self.goto_line(line.saturating_sub(1));
+                }
+            }
+        }
+    }
+
+    fn goto_line(&mut self, line: usize) {
+        self.with_doc(|d| {
+            let l = line.min(d.len_lines().saturating_sub(1));
+            let off = d.line_to_char(l);
+            d.set_caret(off);
+        });
+    }
+
+    // --- clipboard -------------------------------------------------------------
+
+    fn selection_text(&self) -> Option<String> {
+        let doc = self.editor.active_document()?;
+        let sel = doc.selections.primary();
+        if sel.is_empty() {
+            None
+        } else {
+            Some(doc.text.slice(sel.from()..sel.to()).to_string())
+        }
+    }
+
     fn on_mouse(&mut self, m: crossterm::event::MouseEvent) {
         let (col, row) = (m.column, m.row);
         match m.kind {
@@ -518,7 +705,12 @@ impl App {
             }
             Command::Outdent => {} // Phase 2 polish
             Command::Paste(s) => {
-                self.with_doc(|d| edit::insert_text(d, &s, editor_core::GroupBreak::Force))
+                let text = if s.is_empty() {
+                    self.clipboard.clone()
+                } else {
+                    s
+                };
+                self.with_doc(|d| edit::insert_text(d, &text, editor_core::GroupBreak::Force))
             }
 
             // --- history ---
@@ -551,10 +743,26 @@ impl App {
             Command::ReplaceCurrent => self.replace_current(),
             Command::ReplaceAll => self.replace_all(),
 
+            // --- clipboard ---
+            Command::Copy => {
+                if let Some(t) = self.selection_text() {
+                    self.clipboard = t;
+                }
+            }
+            Command::Cut => {
+                if let Some(t) = self.selection_text() {
+                    self.clipboard = t;
+                    self.with_doc(edit::delete_backward);
+                }
+            }
+
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
             Command::FocusSidebar => self.editor.focus = Focus::Sidebar,
             Command::FocusEditor => self.editor.focus = Focus::Editor,
+            Command::Palette => self.open_palette(),
+            Command::QuickOpen => self.open_quick_open(),
+            Command::GotoLine => self.open_goto_line(),
 
             // --- not yet implemented in this phase: surface as a hint + try registry ---
             Command::Run(id) => {
@@ -657,6 +865,41 @@ fn toggle_and<F: FnOnce(&mut FindState)>(find: &mut Option<FindState>, f: F) {
     if let Some(fs) = find {
         f(fs);
     }
+}
+
+/// Build the keymap from defaults, then layer config overrides on top.
+fn build_keymap(config: &crate::config::Config) -> Keymap {
+    let mut km = Keymap::from_pairs(crate::commands::default_bindings().iter().copied());
+    for (chord, id) in &config.keybindings {
+        km.bind(chord, id);
+    }
+    km
+}
+
+/// Human label for a pending chord prefix (shown in the status bar).
+fn chords_label(chords: &[Chord]) -> String {
+    use crossterm::event::KeyCode;
+    chords
+        .iter()
+        .map(|c| {
+            let mut s = String::new();
+            if c.ctrl {
+                s.push_str("Ctrl+");
+            }
+            if c.alt {
+                s.push_str("Alt+");
+            }
+            if c.shift {
+                s.push_str("Shift+");
+            }
+            match c.code {
+                KeyCode::Char(ch) => s.push(ch),
+                other => s.push_str(&format!("{other:?}")),
+            }
+            s
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// True if screen cell `(col, row)` falls within `rect`.
@@ -958,6 +1201,89 @@ mod tests {
             app.editor.active_document().unwrap().to_string(),
             "cat cat cat"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn palette_lists_builtin_and_plugin_commands() {
+        let dir = temp_dir_with_files();
+        let mut app = app_with(&dir);
+        app.open_palette();
+        let picker = app.editor.picker.as_ref().unwrap();
+        let labels: Vec<&str> = picker.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"File: Save"));
+        // Plugin-contributed command titles are present too (explorer).
+        assert!(labels.iter().any(|l| l.starts_with("Explorer:")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn goto_line_moves_cursor() {
+        let path = temp_file("l0\nl1\nl2\nl3");
+        let mut app = app_with(&path);
+        app.open_goto_line();
+        for c in "3".chars() {
+            app.picker_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.picker_key(KeyEvent::from(KeyCode::Enter));
+        let doc = app.editor.active_document().unwrap();
+        assert_eq!(doc.char_to_line(doc.selections.primary().head), 2); // line 3 (0-based 2)
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn keymap_ctrl_s_saves() {
+        use crossterm::event::KeyModifiers;
+        let path = temp_file("abc");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.dispatch(Command::InsertChar('!'));
+        assert!(app.editor.active_document().unwrap().dirty);
+        app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(!app.editor.active_document().unwrap().dirty);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "abc!");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn keymap_typed_char_inserts() {
+        let path = temp_file("");
+        let mut app = app_with(&path);
+        app.on_key(KeyEvent::from(KeyCode::Char('x')));
+        app.on_key(KeyEvent::from(KeyCode::Char('y')));
+        assert_eq!(app.editor.active_document().unwrap().to_string(), "xy");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn clipboard_copy_paste() {
+        let path = temp_file("hello");
+        let mut app = app_with(&path);
+        app.dispatch(Command::SelectAll);
+        app.dispatch(Command::Copy);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.dispatch(Command::Paste(String::new()));
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "hellohello"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn config_remaps_key() {
+        use crossterm::event::KeyModifiers;
+        let path = temp_file("");
+        let mut app = app_with(&path);
+        // Rebind ctrl+s to select-all, then press it.
+        app.config
+            .keybindings
+            .push(("ctrl+s".into(), "edit.selectAll".into()));
+        app.keymap = build_keymap(&app.config);
+        app.dispatch(Command::InsertText("abc".into()));
+        app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let sel = app.editor.active_document().unwrap().selections.primary();
+        assert_eq!((sel.from(), sel.to()), (0, 3));
         std::fs::remove_file(&path).ok();
     }
 

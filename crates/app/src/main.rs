@@ -3,10 +3,14 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod commands;
+mod config;
 mod editor;
 mod files;
 mod find;
 mod input;
+mod keymap;
+mod picker;
 mod theme;
 mod ui;
 
