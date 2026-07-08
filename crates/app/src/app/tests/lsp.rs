@@ -207,3 +207,22 @@ fn completion_esc_dismisses_without_editing() {
     assert_eq!(app.editor.active_document().unwrap().to_string(), "pr");
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn lsp_manager_is_inert_without_a_configured_server() {
+    // With no server configured, every request resolves to `false`, notifications are
+    // no-ops, and the event queue stays empty — the manager is dormant (plan §10).
+    use std::collections::HashMap;
+    let mut mgr = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), HashMap::new());
+    assert!(!mgr.is_enabled());
+    let p = std::path::Path::new("/tmp/x.rs");
+    assert!(!mgr.request_hover(p, "rust", 0, 0));
+    assert!(!mgr.request_definition(p, "rust", 0, 0));
+    assert!(!mgr.request_completion(p, "rust", 0, 0));
+    assert!(!mgr.request_references(p, "rust", 0, 0));
+    assert!(!mgr.request_rename(p, "rust", 0, 0, "new"));
+    assert!(!mgr.request_document_symbols(p, "rust"));
+    mgr.did_open(p, "rust", "text"); // no server → no-op
+    mgr.did_change(p, "rust", "text"); // no open doc → no-op
+    assert!(mgr.poll().is_empty());
+}

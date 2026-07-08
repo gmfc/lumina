@@ -13,6 +13,7 @@ mod mouse;
 mod palette_theme;
 mod plugins;
 mod render;
+mod render_overlays;
 mod sync;
 mod terminal;
 
