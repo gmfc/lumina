@@ -75,6 +75,15 @@ impl Theme {
         );
         set("attribute", plain(c(86, 182, 194, Color::Cyan)));
         set("tag", plain(c(224, 108, 117, Color::Red)));
+        // Bracket-match highlight (plan §1.3): emphatic ink + underline, overridable via
+        // `[theme] "bracket.match"`.
+        set(
+            "bracket.match",
+            CaptureStyle {
+                fg: c(255, 255, 255, Color::White),
+                modifier: Modifier::BOLD | Modifier::UNDERLINED,
+            },
+        );
 
         Theme {
             map,
@@ -120,6 +129,13 @@ impl Theme {
         set("operator", plain(c(36, 41, 46, Color::Black)));
         set("punctuation", plain(c(36, 41, 46, Color::Black)));
         set("attribute", plain(c(0, 134, 179, Color::Cyan)));
+        set(
+            "bracket.match",
+            CaptureStyle {
+                fg: c(0, 0, 0, Color::Black),
+                modifier: Modifier::BOLD | Modifier::UNDERLINED,
+            },
+        );
         Theme {
             map,
             selection_bg: c(200, 220, 250, Color::Blue),

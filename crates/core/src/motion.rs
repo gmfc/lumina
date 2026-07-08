@@ -261,7 +261,10 @@ pub fn line_at(doc: &Document, pos: usize) -> (usize, usize) {
     (start, end)
 }
 
-fn matching_bracket(doc: &Document, pos: usize) -> Option<usize> {
+/// The char offset of the bracket that balances the one at `pos`, or `None` when `pos` is not
+/// on a bracket or the bracket is unbalanced. Public so the app can precompute a bracket-match
+/// highlight into render state (plan §1.3) without duplicating the scan.
+pub fn matching_bracket(doc: &Document, pos: usize) -> Option<usize> {
     let chars: Vec<char> = doc.text.chars().collect();
     if pos >= chars.len() {
         return None;
