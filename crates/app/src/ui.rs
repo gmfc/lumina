@@ -18,6 +18,7 @@ use crate::theme::Theme;
 const CLR_BG: Color = Color::Reset;
 const CLR_SEL: Color = Color::Rgb(50, 60, 90);
 const CLR_ACCENT: Color = Color::Rgb(90, 130, 210);
+const CLR_MATCH: Color = Color::Rgb(90, 74, 30);
 
 /// Draw one full frame.
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -49,6 +50,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     render_status(f, app, status_area);
 
     // Overlays draw last, on top of the body (plan §4).
+    render_find(f, app, editor_area);
     render_overlay(f, app, body);
 
     // Record laid-out regions so the mouse router (which runs outside draw) can hit-test.
@@ -95,6 +97,94 @@ fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
             f.render_widget(Paragraph::new(text).block(block), rect);
         }
     }
+}
+
+/// The find/replace widget: a top-right overlay (VS Code-shaped) with toggles + counts.
+fn render_find(f: &mut Frame, app: &App, editor_area: Rect) {
+    use crate::find::Field;
+    use ratatui::widgets::Clear;
+
+    let Some(find) = &app.editor.find else {
+        return;
+    };
+    let height = if find.replace_mode { 4 } else { 3 };
+    let width = 46u16.min(editor_area.width);
+    let rect = Rect::new(
+        editor_area.x + editor_area.width.saturating_sub(width),
+        editor_area.y,
+        width,
+        height.min(editor_area.height),
+    );
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CLR_ACCENT))
+        .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let toggle = |on: bool, label: &str| {
+        let style = if on {
+            Style::default().fg(Color::Black).bg(CLR_ACCENT)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        TSpan::styled(format!(" {label} "), style)
+    };
+    let count = if find.error.is_some() {
+        " err ".to_string()
+    } else if find.matches.is_empty() {
+        " 0/0 ".to_string()
+    } else {
+        format!(" {}/{} ", find.current + 1, find.matches.len())
+    };
+
+    let query_focused = find.field == Field::Query;
+    let mut lines = vec![Line::from(vec![
+        TSpan::styled(
+            "Find ",
+            Style::default().fg(if query_focused {
+                Color::White
+            } else {
+                Color::Gray
+            }),
+        ),
+        TSpan::styled(
+            format!("{}▏", find.query),
+            Style::default().fg(Color::White),
+        ),
+    ])];
+    if find.replace_mode {
+        lines.push(Line::from(vec![
+            TSpan::styled(
+                "Repl ",
+                Style::default().fg(if !query_focused {
+                    Color::White
+                } else {
+                    Color::Gray
+                }),
+            ),
+            TSpan::styled(
+                format!("{}▏", find.replace),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        toggle(find.case_sensitive, "Aa"),
+        TSpan::raw(" "),
+        toggle(find.whole_word, "W"),
+        TSpan::raw(" "),
+        toggle(find.regex, ".*"),
+        TSpan::styled(count, Style::default().fg(Color::Gray)),
+    ]));
+    if let Some(err) = &find.error {
+        lines.push(Line::from(TSpan::styled(
+            format!(" {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 /// A rectangle of `w`×`h` centered within `area` (clamped to fit).
@@ -243,6 +333,14 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     let sel_bg = theme.selection_bg;
     let gutter_fg = theme.gutter_fg;
 
+    // Find matches to highlight (the current one is also the primary selection).
+    let find_matches: &[(usize, usize)] = app
+        .editor
+        .find
+        .as_ref()
+        .map(|f| f.matches.as_slice())
+        .unwrap_or(&[]);
+
     let buf = f.buffer_mut();
 
     // Precompute the selection spans for quick membership tests.
@@ -311,6 +409,12 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
                 .copied()
                 .flatten()
                 .unwrap_or_else(|| Style::default().bg(CLR_BG));
+            let in_match = find_matches
+                .iter()
+                .any(|&(s, e)| char_off >= s && char_off < e);
+            if in_match {
+                style = style.bg(CLR_MATCH);
+            }
             if in_sel {
                 style = style.bg(sel_bg);
             }

@@ -5,6 +5,7 @@
 mod app;
 mod editor;
 mod files;
+mod find;
 mod input;
 mod theme;
 mod ui;

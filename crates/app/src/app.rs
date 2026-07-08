@@ -10,12 +10,13 @@ use anyhow::Result;
 use crossterm::event::{self, Event as CtEvent, KeyEventKind, MouseButton, MouseEventKind};
 use editor_core::view::{screen_to_char, PaneGeometry};
 use editor_core::{edit, motion};
-use editor_core::{Document, Selection};
-use editor_plugin::Registry;
+use editor_core::{Change, Document, Selection, Transaction};
+use editor_plugin::{Host, Registry};
 use ratatui::DefaultTerminal;
 
 use crate::editor::{EditorState, Focus};
 use crate::files;
+use crate::find::FindState;
 use crate::input::{key_to_command, Command, Focus as InputFocus};
 use crate::ui::{self, Regions};
 
@@ -117,6 +118,12 @@ impl App {
             return;
         }
 
+        // The find/replace widget captures input while open.
+        if self.editor.find.is_some() {
+            self.find_key(key);
+            return;
+        }
+
         // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
         if self.editor.focus == Focus::Sidebar {
             if key.code == KeyCode::Esc {
@@ -163,6 +170,168 @@ impl App {
                 _ => {}
             },
         }
+    }
+
+    /// Handle a key while the find/replace widget is open.
+    fn find_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+        match key.code {
+            KeyCode::Esc => {
+                self.editor.find = None;
+            }
+            KeyCode::Enter if alt => self.replace_current(),
+            KeyCode::Char('a' | 'A') if alt => self.replace_all(),
+            KeyCode::Char('c' | 'C') if alt => {
+                toggle_and(&mut self.editor.find, |f| {
+                    f.case_sensitive = !f.case_sensitive
+                });
+                self.recompute_find();
+            }
+            KeyCode::Char('w' | 'W') if alt => {
+                toggle_and(&mut self.editor.find, |f| f.whole_word = !f.whole_word);
+                self.recompute_find();
+            }
+            KeyCode::Char('r' | 'R') if alt => {
+                toggle_and(&mut self.editor.find, |f| f.regex = !f.regex);
+                self.recompute_find();
+            }
+            KeyCode::Enter if shift => {
+                toggle_and(&mut self.editor.find, |f| f.select_prev());
+                self.focus_current_match();
+            }
+            KeyCode::Up => {
+                toggle_and(&mut self.editor.find, |f| f.select_prev());
+                self.focus_current_match();
+            }
+            KeyCode::Enter | KeyCode::Down => {
+                toggle_and(&mut self.editor.find, |f| f.select_next());
+                self.focus_current_match();
+            }
+            KeyCode::Tab => toggle_and(&mut self.editor.find, |f| f.toggle_field()),
+            KeyCode::Backspace => {
+                toggle_and(&mut self.editor.find, |f| f.backspace());
+                self.recompute_find();
+            }
+            KeyCode::Char(c) if !ctrl && !alt => {
+                toggle_and(&mut self.editor.find, |f| f.input_char(c));
+                self.recompute_find();
+            }
+            _ => {}
+        }
+    }
+
+    /// Open the find (or find+replace) widget, prefilling from the current selection.
+    fn open_find(&mut self, replace_mode: bool) {
+        let mut fs = FindState::new(replace_mode);
+        if let Some(doc) = self.editor.active_document() {
+            let sel = doc.selections.primary();
+            fs.origin = sel.from();
+            if !sel.is_empty() {
+                fs.query = doc.text.slice(sel.from()..sel.to()).to_string();
+            }
+        }
+        self.editor.find = Some(fs);
+        self.recompute_find();
+    }
+
+    /// Recompute matches against the active document and move to the current one.
+    fn recompute_find(&mut self) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let text = {
+            let Some(doc) = self.editor.workspace.documents.get(id) else {
+                return;
+            };
+            doc.text.to_string()
+        };
+        if let Some(find) = &mut self.editor.find {
+            let origin = find.origin;
+            find.recompute(&text, origin);
+        }
+        self.focus_current_match();
+    }
+
+    /// Select the current match in the editor so it scrolls into view + highlights.
+    fn focus_current_match(&mut self) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let m = self.editor.find.as_ref().and_then(|f| f.current_match());
+        if let (Some((s, e)), Some(doc)) = (m, self.editor.workspace.documents.get_mut(id)) {
+            doc.selections.set_single(Selection::new(s, e));
+        }
+    }
+
+    /// Replace the current match with the (capture-expanded) replacement.
+    fn replace_current(&mut self) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let Some((s, e)) = self.editor.find.as_ref().and_then(|f| f.current_match()) else {
+            return;
+        };
+        let matched = {
+            let Some(doc) = self.editor.workspace.documents.get(id) else {
+                return;
+            };
+            doc.text.slice(s..e).to_string()
+        };
+        let repl = self
+            .editor
+            .find
+            .as_ref()
+            .map(|f| f.replacement_for(&matched))
+            .unwrap_or_default();
+        let txn = {
+            let doc = &self.editor.workspace.documents[id];
+            Transaction::replace(doc, s..e, &repl)
+        };
+        self.editor.apply_transaction(id, txn);
+        self.recompute_find();
+    }
+
+    /// Replace every match in one undoable transaction (plan §6).
+    fn replace_all(&mut self) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let matches = self
+            .editor
+            .find
+            .as_ref()
+            .map(|f| f.matches.clone())
+            .unwrap_or_default();
+        if matches.is_empty() {
+            return;
+        }
+        let mut changes = Vec::with_capacity(matches.len());
+        {
+            let doc = &self.editor.workspace.documents[id];
+            for &(s, e) in &matches {
+                let matched = doc.text.slice(s..e).to_string();
+                let inserted = self
+                    .editor
+                    .find
+                    .as_ref()
+                    .map(|f| f.replacement_for(&matched))
+                    .unwrap_or_default();
+                changes.push(Change {
+                    at: s,
+                    removed: matched,
+                    inserted,
+                });
+            }
+        }
+        let n = changes.len();
+        self.editor
+            .apply_transaction(id, Transaction::from_changes(changes));
+        self.recompute_find();
+        self.editor.status_message = Some(format!("Replaced {n} occurrence(s)"));
     }
 
     fn on_mouse(&mut self, m: crossterm::event::MouseEvent) {
@@ -368,6 +537,20 @@ impl App {
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),
 
+            // --- search ---
+            Command::FindOpen => self.open_find(false),
+            Command::ReplaceOpen => self.open_find(true),
+            Command::FindNext => {
+                toggle_and(&mut self.editor.find, |f| f.select_next());
+                self.focus_current_match();
+            }
+            Command::FindPrev => {
+                toggle_and(&mut self.editor.find, |f| f.select_prev());
+                self.focus_current_match();
+            }
+            Command::ReplaceCurrent => self.replace_current(),
+            Command::ReplaceAll => self.replace_all(),
+
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
             Command::FocusSidebar => self.editor.focus = Focus::Sidebar,
@@ -466,6 +649,13 @@ impl App {
                 self.editor.status_message = Some(format!("Save failed: {e}"));
             }
         }
+    }
+}
+
+/// Run `f` on the find state if it's open.
+fn toggle_and<F: FnOnce(&mut FindState)>(find: &mut Option<FindState>, f: F) {
+    if let Some(fs) = find {
+        f(fs);
     }
 }
 
@@ -720,6 +910,53 @@ mod tests {
                 .iter()
                 .any(|s| s.capture.starts_with("keyword")),
             "expected a keyword span on the fn line"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn find_highlights_and_cycles() {
+        let path = temp_file("foo bar foo baz foo");
+        let mut app = app_with(&path);
+        app.dispatch(Command::FindOpen);
+        for c in "foo".chars() {
+            app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        let find = app.editor.find.as_ref().unwrap();
+        assert_eq!(find.matches.len(), 3);
+        // Cursor started at 0 -> current match is the first.
+        assert_eq!(find.current_match(), Some((0, 3)));
+        app.find_key(KeyEvent::from(KeyCode::Enter)); // next
+        assert_eq!(
+            app.editor.find.as_ref().unwrap().current_match(),
+            Some((8, 11))
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn replace_all_is_one_undo() {
+        let path = temp_file("cat cat cat");
+        let mut app = app_with(&path);
+        app.dispatch(Command::ReplaceOpen);
+        for c in "cat".chars() {
+            app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.find_key(KeyEvent::from(KeyCode::Tab)); // focus replace field
+        for c in "dog".chars() {
+            app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.replace_all();
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "dog dog dog"
+        );
+        // One undo reverts the whole replace-all.
+        app.editor.find = None;
+        app.dispatch(Command::Undo);
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "cat cat cat"
         );
         std::fs::remove_file(&path).ok();
     }

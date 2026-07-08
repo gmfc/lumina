@@ -52,6 +52,8 @@ pub enum Command {
     FindNext,
     FindPrev,
     ReplaceOpen,
+    ReplaceCurrent,
+    ReplaceAll,
     ProjectSearch,
     // ui
     ToggleSidebar,

@@ -47,6 +47,8 @@ pub struct EditorState {
     pub overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
     pub highlighters: HashMap<DocId, editor_syntax::DocHighlighter>,
+    /// Active in-file find/replace widget, if open.
+    pub find: Option<crate::find::FindState>,
 }
 
 impl EditorState {
@@ -64,6 +66,7 @@ impl EditorState {
             pending_opens: Vec::new(),
             overlay: None,
             highlighters: HashMap::new(),
+            find: None,
         }
     }
 
