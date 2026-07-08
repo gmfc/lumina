@@ -955,6 +955,58 @@ impl App {
         }
     }
 
+    /// Jump the caret to the next (`dir > 0`) or previous diagnostic in the active document,
+    /// wrapping around the ends (plan §2.2).
+    fn goto_diagnostic(&mut self, dir: isize) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let Some(doc) = self.editor.workspace.documents.get(id) else {
+            return;
+        };
+        let Some(diags) = self.editor.diagnostics.get(&id) else {
+            return;
+        };
+        if diags.is_empty() {
+            return;
+        }
+        let mut offs: Vec<usize> = diags
+            .iter()
+            .map(|d| lsp_pos_to_char(doc, d.line, d.start_char16))
+            .collect();
+        offs.sort_unstable();
+        offs.dedup();
+        let head = doc.selections.primary().head;
+        let target = if dir > 0 {
+            offs.iter().copied().find(|&o| o > head).unwrap_or(offs[0])
+        } else {
+            offs.iter()
+                .rev()
+                .copied()
+                .find(|&o| o < head)
+                .unwrap_or_else(|| *offs.last().unwrap())
+        };
+        if let Some(d) = self.editor.workspace.documents.get_mut(id) {
+            d.set_caret(target);
+        }
+        self.ensure_cursor_visible();
+        self.editor.update_bracket_match();
+    }
+
+    /// The diagnostic whose range covers the primary caret, for the status-line message
+    /// (plan §2.2). Borrows `self`, so the pure renderer can display it directly.
+    pub(crate) fn diagnostic_at_caret(&self) -> Option<(editor_lsp::Severity, &str)> {
+        let id = self.editor.workspace.active_doc()?;
+        let doc = self.editor.workspace.documents.get(id)?;
+        let diags = self.editor.diagnostics.get(&id)?;
+        let head = doc.selections.primary().head;
+        diags.iter().find_map(|d| {
+            let start = lsp_pos_to_char(doc, d.line, d.start_char16);
+            let end = lsp_pos_to_char(doc, d.end_line, d.end_char16).max(start);
+            (head >= start && head <= end).then_some((d.severity, d.message.as_str()))
+        })
+    }
+
     /// Insert a completion, replacing the identifier prefix already typed before the cursor.
     fn insert_completion(&mut self, insert: &str) {
         self.with_doc(|d| {
@@ -1602,6 +1654,8 @@ impl App {
             Command::GotoDefinition => self.lsp_request(LspRequest::Definition),
             Command::Completion => self.lsp_request(LspRequest::Completion),
             Command::RenameSymbol => self.open_rename(),
+            Command::NextDiagnostic => self.goto_diagnostic(1),
+            Command::PrevDiagnostic => self.goto_diagnostic(-1),
 
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
@@ -1796,7 +1850,7 @@ fn toggle_and<F: FnOnce(&mut FindState)>(find: &mut Option<FindState>, f: F) {
 }
 
 /// Convert an LSP `(line, utf16_char)` position to a char offset in `doc`.
-fn lsp_pos_to_char(doc: &Document, line: u32, char16: u32) -> usize {
+pub(crate) fn lsp_pos_to_char(doc: &Document, line: u32, char16: u32) -> usize {
     let line = (line as usize).min(doc.len_lines().saturating_sub(1));
     let text = doc.line_text(line);
     let text = text.trim_end_matches(['\n', '\r']);
@@ -2483,6 +2537,64 @@ mod tests {
         // A non-identifier char leaves the word and dismisses the popup.
         app.on_key(KeyEvent::from(KeyCode::Char(' ')));
         assert!(app.editor.completion.is_none());
+        std::fs::remove_file(&path).ok();
+    }
+
+    fn diag(line: u32, sc: u32, el: u32, ec: u32, msg: &str) -> editor_lsp::Diagnostic {
+        editor_lsp::Diagnostic {
+            line,
+            start_char16: sc,
+            end_line: el,
+            end_char16: ec,
+            severity: editor_lsp::Severity::Error,
+            message: msg.to_string(),
+        }
+    }
+
+    #[test]
+    fn diagnostic_nav_and_caret_message() {
+        let path = temp_file("aaa\nbbb\nccc\n");
+        let mut app = app_with(&path);
+        let id = app.editor.workspace.active_doc().unwrap();
+        app.editor.diagnostics.insert(
+            id,
+            vec![diag(0, 0, 0, 1, "first"), diag(2, 0, 2, 1, "third")],
+        );
+        // Caret at 0 covers the first diagnostic; its message renders at the caret.
+        assert_eq!(app.diagnostic_at_caret().map(|(_, m)| m), Some("first"));
+        // Next jumps to the line-3 diagnostic (offset 8).
+        app.dispatch(Command::NextDiagnostic);
+        assert_eq!(
+            app.editor
+                .active_document()
+                .unwrap()
+                .selections
+                .primary()
+                .head,
+            8
+        );
+        assert_eq!(app.diagnostic_at_caret().map(|(_, m)| m), Some("third"));
+        // Next past the last wraps to the first; Prev from there wraps to the last.
+        app.dispatch(Command::NextDiagnostic);
+        assert_eq!(
+            app.editor
+                .active_document()
+                .unwrap()
+                .selections
+                .primary()
+                .head,
+            0
+        );
+        app.dispatch(Command::PrevDiagnostic);
+        assert_eq!(
+            app.editor
+                .active_document()
+                .unwrap()
+                .selections
+                .primary()
+                .head,
+            8
+        );
         std::fs::remove_file(&path).ok();
     }
 

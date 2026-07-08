@@ -66,6 +66,8 @@ pub enum Command {
     GotoDefinition,
     Completion,
     RenameSymbol,
+    NextDiagnostic,
+    PrevDiagnostic,
     // ui
     ToggleSidebar,
     FocusSidebar,
