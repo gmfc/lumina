@@ -1093,6 +1093,8 @@ impl App {
                 let len = d.len_chars();
                 d.selections = editor_core::Selections::single(Selection::new(0, len));
             }),
+            Command::SelectWord => self.with_doc(edit::select_word),
+            Command::SelectLine => self.with_doc(edit::select_line),
 
             // --- editing ---
             Command::InsertChar(c) => self.with_doc(|d| edit::insert_char(d, c)),
@@ -1102,10 +1104,21 @@ impl App {
             }
             Command::DeleteBackward => self.with_doc(edit::delete_backward),
             Command::DeleteForward => self.with_doc(edit::delete_forward),
-            Command::Indent => {
-                self.with_doc(|d| edit::insert_text(d, "    ", editor_core::GroupBreak::Force))
+            Command::DeleteWordBackward => self.with_doc(edit::delete_word_backward),
+            Command::DuplicateLine => self.with_doc(edit::duplicate_line),
+            Command::MoveLineUp => self.with_doc(|d| edit::move_lines(d, -1)),
+            Command::MoveLineDown => self.with_doc(|d| edit::move_lines(d, 1)),
+            Command::ToggleComment => {
+                let token = self
+                    .editor
+                    .active_document()
+                    .and_then(|d| d.language.as_deref())
+                    .map(line_comment_token)
+                    .unwrap_or("//");
+                self.with_doc(|d| edit::toggle_comment(d, token));
             }
-            Command::Outdent => {} // Phase 2 polish
+            Command::Indent => self.with_doc(edit::indent),
+            Command::Outdent => self.with_doc(edit::outdent),
 
             // --- multi-cursor ---
             Command::AddCursorAtNextMatch => self.add_cursor_next_match(),
@@ -1272,6 +1285,14 @@ impl App {
 fn toggle_and<F: FnOnce(&mut FindState)>(find: &mut Option<FindState>, f: F) {
     if let Some(fs) = find {
         f(fs);
+    }
+}
+
+/// The line-comment token for a language id (used by `edit.toggleComment`).
+fn line_comment_token(lang: &str) -> &'static str {
+    match lang {
+        "python" | "toml" | "yaml" | "shell" | "ruby" => "#",
+        _ => "//",
     }
 }
 
