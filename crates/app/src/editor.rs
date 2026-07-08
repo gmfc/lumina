@@ -34,6 +34,8 @@ pub enum Overlay {
         character: u32,
         buffer: String,
     },
+    /// Save As prompt: type a path for the active document (plan §1.5).
+    SaveAsInput { buffer: String },
 }
 
 /// Everything rendered + mutated by plugins.

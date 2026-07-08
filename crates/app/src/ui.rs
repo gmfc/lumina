@@ -144,6 +144,27 @@ fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                 .style(Style::default().bg(Color::Rgb(30, 33, 39)));
             f.render_widget(Paragraph::new(text).block(block), rect);
         }
+        Overlay::SaveAsInput { buffer } => {
+            let text = vec![
+                Line::from(TSpan::styled(
+                    " Save As",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!(" › {buffer}▏")),
+                Line::from(TSpan::styled(
+                    " [Enter] Save   [Esc] Cancel ",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            let rect = centered(body, 60, 6);
+            f.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CLR_ACCENT))
+                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+            f.render_widget(Paragraph::new(text).block(block), rect);
+        }
     }
 }
 
