@@ -9,9 +9,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use editor_lsp::client::{parse_completion, parse_hover, parse_locations, parse_workspace_edit};
+use editor_lsp::client::{
+    parse_completion, parse_document_symbols, parse_hover, parse_locations, parse_workspace_edit,
+};
 use editor_lsp::{
-    CompletionItem, DiagnosticsUpdate, Incoming, Location, LspClient, LspHandle, WorkspaceEdit,
+    CompletionItem, DiagnosticsUpdate, DocumentSymbol, Incoming, Location, LspClient, LspHandle,
+    WorkspaceEdit,
 };
 
 /// What a pending request was, so its response can be interpreted when it arrives.
@@ -21,6 +24,8 @@ enum Pending {
     Definition,
     Completion,
     Rename,
+    References,
+    DocumentSymbols,
 }
 
 /// A high-level LSP result, handed to the app after correlating a response with its request.
@@ -30,6 +35,8 @@ pub enum LspEvent {
     Goto(Location),
     Completion(Vec<CompletionItem>),
     Rename(WorkspaceEdit),
+    References(Vec<Location>),
+    DocumentSymbols(Vec<DocumentSymbol>),
 }
 
 /// Owns the running servers and the merged incoming-message stream.
@@ -91,6 +98,12 @@ impl LspManager {
                         }
                         Pending::Rename => {
                             out.push(LspEvent::Rename(parse_workspace_edit(&result)));
+                        }
+                        Pending::References => {
+                            out.push(LspEvent::References(parse_locations(&result)));
+                        }
+                        Pending::DocumentSymbols => {
+                            out.push(LspEvent::DocumentSymbols(parse_document_symbols(&result)));
                         }
                     }
                 }
@@ -168,6 +181,26 @@ impl LspManager {
         let uri = uri_for(path);
         self.send_request(language, Pending::Rename, |c| {
             c.rename(&uri, line, character, new_name)
+        })
+    }
+
+    pub fn request_references(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, Pending::References, |c| {
+            c.references(&uri, line, character)
+        })
+    }
+
+    pub fn request_document_symbols(&mut self, path: &Path, language: &str) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, Pending::DocumentSymbols, |c| {
+            c.document_symbols(&uri)
         })
     }
 

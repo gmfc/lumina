@@ -34,6 +34,7 @@ enum LspRequest {
     Hover,
     Definition,
     Completion,
+    References,
 }
 
 pub struct App {
@@ -263,7 +264,69 @@ impl App {
             LspEvent::Goto(loc) => self.goto_location(loc),
             LspEvent::Completion(items) => self.open_completion(items),
             LspEvent::Rename(edit) => self.apply_workspace_edit(edit),
+            LspEvent::References(locs) => {
+                let entries = locs
+                    .into_iter()
+                    .map(|l| {
+                        let label = location_label(&l);
+                        (l, label)
+                    })
+                    .collect();
+                self.open_locations_picker(entries, "References");
+            }
+            LspEvent::DocumentSymbols(syms) => {
+                let uri = self
+                    .editor
+                    .active_document()
+                    .and_then(|d| d.path.as_ref())
+                    .map(|p| crate::lsp::uri_for(p));
+                let Some(uri) = uri else {
+                    return;
+                };
+                let entries = syms
+                    .into_iter()
+                    .map(|s| {
+                        let label = format!("{}{}", "  ".repeat(s.depth), s.name);
+                        let loc = editor_lsp::Location {
+                            uri: uri.clone(),
+                            line: s.line,
+                            character: s.character,
+                            end_line: s.line,
+                            end_character: s.character,
+                        };
+                        (loc, label)
+                    })
+                    .collect();
+                self.open_locations_picker(entries, "Symbols");
+            }
         }
+    }
+
+    /// Open a picker over LSP locations; selecting one jumps there (plan §2.3). The concrete
+    /// `Location`s are parked on `EditorState::nav_locations`, indexed by the picker item id.
+    fn open_locations_picker(&mut self, entries: Vec<(editor_lsp::Location, String)>, title: &str) {
+        if entries.is_empty() {
+            self.editor.status_message = Some(format!("No {title}"));
+            return;
+        }
+        let mut locs = Vec::with_capacity(entries.len());
+        let items: Vec<crate::picker::PickerItem> = entries
+            .into_iter()
+            .enumerate()
+            .map(|(i, (loc, label))| {
+                locs.push(loc);
+                crate::picker::PickerItem {
+                    id: i.to_string(),
+                    label,
+                }
+            })
+            .collect();
+        self.editor.nav_locations = locs;
+        self.editor.picker = Some(crate::picker::Picker::new(
+            crate::picker::PickerKind::Locations,
+            title,
+            items,
+        ));
     }
 
     /// Open a definition location and place the cursor on it.
@@ -855,6 +918,15 @@ impl App {
             PickerKind::GotoLine => {
                 if let Ok(line) = picker.query.trim().parse::<usize>() {
                     self.goto_line(line.saturating_sub(1));
+                }
+            }
+            PickerKind::Locations => {
+                if let Some(loc) = picker
+                    .selected_item()
+                    .and_then(|item| item.id.parse::<usize>().ok())
+                    .and_then(|i| self.editor.nav_locations.get(i).cloned())
+                {
+                    self.goto_location(loc);
                 }
             }
         }
@@ -1656,6 +1728,8 @@ impl App {
             Command::RenameSymbol => self.open_rename(),
             Command::NextDiagnostic => self.goto_diagnostic(1),
             Command::PrevDiagnostic => self.goto_diagnostic(-1),
+            Command::FindReferences => self.lsp_request(LspRequest::References),
+            Command::DocumentSymbols => self.request_document_symbols(),
 
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
@@ -1692,7 +1766,20 @@ impl App {
                 LspRequest::Hover => self.lsp.request_hover(&p, &l, line, ch),
                 LspRequest::Definition => self.lsp.request_definition(&p, &l, line, ch),
                 LspRequest::Completion => self.lsp.request_completion(&p, &l, line, ch),
+                LspRequest::References => self.lsp.request_references(&p, &l, line, ch),
             };
+        }
+    }
+
+    /// Request the symbols in the active document (no cursor position needed).
+    fn request_document_symbols(&mut self) {
+        let info = self.editor.active_document().and_then(|d| {
+            let path = d.path.clone()?;
+            let lang = d.language.clone()?;
+            Some((path, lang))
+        });
+        if let Some((path, lang)) = info {
+            self.lsp.request_document_symbols(&path, &lang);
         }
     }
 
@@ -1847,6 +1934,14 @@ fn toggle_and<F: FnOnce(&mut FindState)>(find: &mut Option<FindState>, f: F) {
     if let Some(fs) = find {
         f(fs);
     }
+}
+
+/// A `file:line:col` label for a location picker row (plan §2.3).
+fn location_label(loc: &editor_lsp::Location) -> String {
+    let file = crate::lsp::path_from_uri(&loc.uri)
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| loc.uri.clone());
+    format!("{file}:{}:{}", loc.line + 1, loc.character + 1)
 }
 
 /// Convert an LSP `(line, utf16_char)` position to a char offset in `doc`.
@@ -2549,6 +2644,31 @@ mod tests {
             severity: editor_lsp::Severity::Error,
             message: msg.to_string(),
         }
+    }
+
+    #[test]
+    fn references_open_picker_and_jump() {
+        let path = temp_file("aaa\nbbb\nccc\n");
+        let mut app = app_with(&path);
+        let uri = crate::lsp::uri_for(&path);
+        let loc = editor_lsp::Location {
+            uri,
+            line: 2,
+            character: 0,
+            end_line: 2,
+            end_character: 1,
+        };
+        app.handle_lsp_event(crate::lsp::LspEvent::References(vec![loc]));
+        assert!(matches!(
+            app.editor.picker.as_ref().map(|p| p.kind),
+            Some(crate::picker::PickerKind::Locations)
+        ));
+        assert_eq!(app.editor.nav_locations.len(), 1);
+        // Accepting the row jumps the caret to line 3 (offset 8).
+        app.picker_key(KeyEvent::from(KeyCode::Enter));
+        let doc = app.editor.active_document().unwrap();
+        assert_eq!(doc.char_to_line(doc.selections.primary().head), 2);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

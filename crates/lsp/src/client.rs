@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 
 use crate::transport;
 use crate::{
-    CompletionItem, Diagnostic, DiagnosticsUpdate, Incoming, Location, Severity, TextEdit,
-    WorkspaceEdit,
+    CompletionItem, Diagnostic, DiagnosticsUpdate, DocumentSymbol, Incoming, Location, Severity,
+    TextEdit, WorkspaceEdit,
 };
 
 /// A live connection to a language server. Dropping it kills the server.
@@ -133,6 +133,21 @@ impl LspHandle {
         let mut params = Self::position(uri, line, character);
         params["newName"] = json!(new_name);
         self.request("textDocument/rename", params)
+    }
+
+    /// Request all references to the symbol at a position (declaration included).
+    pub fn references(&self, uri: &str, line: u32, character: u32) -> io::Result<i64> {
+        let mut params = Self::position(uri, line, character);
+        params["context"] = json!({ "includeDeclaration": true });
+        self.request("textDocument/references", params)
+    }
+
+    /// Request the symbols declared in a document.
+    pub fn document_symbols(&self, uri: &str) -> io::Result<i64> {
+        self.request(
+            "textDocument/documentSymbol",
+            json!({ "textDocument": { "uri": uri } }),
+        )
     }
 
     /// Send `initialize` + `initialized`. (A strict client waits for the initialize result
@@ -278,6 +293,52 @@ pub fn parse_locations(result: &Value) -> Vec<Location> {
         Value::Array(arr) => arr.iter().filter_map(one).collect(),
         Value::Null => Vec::new(),
         v => one(v).into_iter().collect(),
+    }
+}
+
+/// Parse a `textDocument/documentSymbol` result. Accepts the hierarchical `DocumentSymbol[]`
+/// (with `range`/`selectionRange` + nested `children`, flattened with depth) and the flat
+/// `SymbolInformation[]` (with `location.range`). Position is the symbol's selection start.
+pub fn parse_document_symbols(result: &Value) -> Vec<DocumentSymbol> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for v in arr {
+        push_symbol(v, 0, &mut out);
+    }
+    out
+}
+
+fn push_symbol(v: &Value, depth: usize, out: &mut Vec<DocumentSymbol>) {
+    let name = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .to_string();
+    let kind = v.get("kind").and_then(|k| k.as_u64()).unwrap_or(0) as u8;
+    // DocumentSymbol: selectionRange/range at top level. SymbolInformation: location.range.
+    let range = v
+        .get("selectionRange")
+        .or_else(|| v.get("range"))
+        .or_else(|| v.get("location").and_then(|l| l.get("range")));
+    if let Some(start) = range.and_then(|r| r.get("start")) {
+        let line = start.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32;
+        let character = start.get("character").and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+        if !name.is_empty() {
+            out.push(DocumentSymbol {
+                name,
+                kind,
+                line,
+                character,
+                depth,
+            });
+        }
+    }
+    if let Some(children) = v.get("children").and_then(|c| c.as_array()) {
+        for child in children {
+            push_symbol(child, depth + 1, out);
+        }
     }
 }
 
@@ -478,6 +539,52 @@ mod tests {
         assert_eq!(items[0].insert_text, "println!");
         assert_eq!(items[1].insert_text, "push"); // falls back to label
         assert_eq!(items[1].detail.as_deref(), Some("fn push(&mut self)"));
+    }
+
+    #[test]
+    fn document_symbols_hierarchical_and_flat() {
+        // Hierarchical `DocumentSymbol[]`: nested children flatten with increasing depth,
+        // position taken from selectionRange.
+        let hier = serde_json::json!([
+            {
+                "name": "Foo", "kind": 5,
+                "range": {"start": {"line":1,"character":0}, "end": {"line":5,"character":0}},
+                "selectionRange": {"start": {"line":1,"character":6}, "end": {"line":1,"character":9}},
+                "children": [
+                    { "name": "bar", "kind": 6,
+                      "selectionRange": {"start": {"line":2,"character":4}, "end": {"line":2,"character":7}} }
+                ]
+            }
+        ]);
+        let syms = parse_document_symbols(&hier);
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[0].name, "Foo");
+        assert_eq!((syms[0].line, syms[0].character, syms[0].depth), (1, 6, 0));
+        assert_eq!(syms[1].name, "bar");
+        assert_eq!((syms[1].line, syms[1].character, syms[1].depth), (2, 4, 1));
+
+        // Flat `SymbolInformation[]`: position from location.range.
+        let flat = serde_json::json!([
+            { "name": "main", "kind": 12,
+              "location": { "uri": "file:///x",
+                            "range": {"start":{"line":0,"character":3},"end":{"line":0,"character":7}} } }
+        ]);
+        let syms = parse_document_symbols(&flat);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "main");
+        assert_eq!((syms[0].line, syms[0].character), (0, 3));
+    }
+
+    #[test]
+    fn references_parse_as_locations() {
+        let refs = serde_json::json!([
+            {"uri":"file:///a.rs","range":{"start":{"line":1,"character":2},"end":{"line":1,"character":5}}},
+            {"uri":"file:///b.rs","range":{"start":{"line":9,"character":0},"end":{"line":9,"character":4}}}
+        ]);
+        let locs = parse_locations(&refs);
+        assert_eq!(locs.len(), 2);
+        assert_eq!(locs[1].uri, "file:///b.rs");
+        assert_eq!((locs[1].line, locs[1].character), (9, 0));
     }
 
     #[test]
