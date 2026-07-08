@@ -24,17 +24,18 @@
 
 use std::path::Path;
 
-use serde_json::{json, Value};
-use wasmi::{Config, Engine, Linker, Module, Store};
+use serde_json::Value;
+use wasmi::{Config, Engine, Module};
 
 use crate::contribution::{Contributions, PanelLocation};
 use crate::host::{PanelContent, PanelLine, Span};
 use crate::registry::Plugin;
-use crate::runtime::{self, Manifest};
+use crate::runtime::Manifest;
 use crate::Host;
 
-/// Per-call fuel budget — generous for real work, finite so an infinite loop can't hang the UI.
-const FUEL: u64 = 50_000_000;
+mod engine;
+#[cfg(test)]
+mod tests;
 
 /// A loaded external plugin backed by a WebAssembly module.
 pub struct WasmPlugin {
@@ -99,121 +100,6 @@ pub fn load_one(dir: &Path) -> Option<Box<dyn Plugin>> {
     }))
 }
 
-impl WasmPlugin {
-    fn has_cap(&self, cap: &str) -> bool {
-        self.capabilities.iter().any(|c| c == cap)
-    }
-
-    /// Read-only context handed to the guest (same shape as the Rhai tier's).
-    fn build_ctx(host: &dyn Host) -> Value {
-        if let Some(doc) = host.workspace().active_document() {
-            let head = doc.selections.primary().head;
-            let (line, col) = doc.char_to_line_col(head);
-            let line_text = doc.line_text(line);
-            let line_text = line_text.trim_end_matches(['\n', '\r']).to_string();
-            let sel = doc.selections.primary();
-            let sel_text = if sel.is_empty() {
-                String::new()
-            } else {
-                doc.text.slice(sel.from()..sel.to()).to_string()
-            };
-            json!({
-                "cursor_line": line,
-                "cursor_col": col,
-                "line_text": line_text,
-                "selection_text": sel_text,
-                "doc_text": doc.to_string(),
-            })
-        } else {
-            json!({})
-        }
-    }
-
-    /// Instantiate fresh (isolated state + fuel), call `func`, and return the parsed JSON it
-    /// wrote to memory. Returns `None` on trap, out-of-fuel, or malformed output.
-    fn call(&self, func: &str, ctx: &Value) -> Option<Value> {
-        let mut store = Store::new(&self.engine, ());
-        store.set_fuel(FUEL).ok()?;
-        let instance = Linker::new(&self.engine)
-            .instantiate_and_start(&mut store, &self.module)
-            .ok()?;
-        let memory = instance.get_memory(&store, "memory")?;
-        let entry = instance
-            .get_typed_func::<(i32, i32), i64>(&store, func)
-            .ok()?;
-
-        // Hand the context to the guest only if it provides an allocator; else pass (0, 0).
-        let (ptr, len) = match instance.get_typed_func::<i32, i32>(&store, "alloc") {
-            Ok(alloc) => {
-                let bytes = serde_json::to_vec(ctx).ok()?;
-                let p = alloc.call(&mut store, bytes.len() as i32).ok()?;
-                memory.write(&mut store, p as usize, &bytes).ok()?;
-                (p, bytes.len() as i32)
-            }
-            Err(_) => (0, 0),
-        };
-
-        let packed = entry.call(&mut store, (ptr, len)).ok()?;
-        let out_ptr = (packed >> 32) as usize;
-        let out_len = (packed & 0xffff_ffff) as usize;
-        if out_len == 0 {
-            return None;
-        }
-        let data = memory.data(&store).get(out_ptr..out_ptr + out_len)?;
-        serde_json::from_slice(data).ok()
-    }
-
-    /// Apply the actions a guest returned, gated by granted capabilities (mirrors the Rhai
-    /// tier so both substrates enforce the same policy).
-    fn apply_actions(&self, actions: &Value, host: &mut dyn Host) {
-        let Some(arr) = actions.as_array() else {
-            return;
-        };
-        for action in arr {
-            self.apply_action(action, host);
-        }
-    }
-
-    /// Dispatch a single action object, gated by granted capabilities.
-    fn apply_action(&self, action: &Value, host: &mut dyn Host) {
-        let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("");
-        let field = |k: &str| action.get(k).and_then(|v| v.as_str());
-        match kind {
-            "insert" | "replace_selection" | "replace_line" if self.has_cap("edit") => {
-                if let Some(text) = field("text") {
-                    apply_edit(kind, host, text);
-                }
-            }
-            "notify" if self.has_cap("ui") => {
-                if let Some(msg) = field("message") {
-                    host.notify(msg.to_string());
-                }
-            }
-            "open" if self.has_cap("fs:read") => {
-                if let Some(path) = field("path") {
-                    host.open_path(Path::new(path));
-                }
-            }
-            "run" => {
-                if let Some(cmd) = field("command") {
-                    host.execute(cmd);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// The three `edit`-gated text mutations (mirrors the Rhai tier's `apply_edit`).
-fn apply_edit(kind: &str, host: &mut dyn Host, text: &str) {
-    match kind {
-        "insert" => runtime::insert_at_cursor(host, text),
-        "replace_selection" => runtime::replace_selection(host, text),
-        "replace_line" => runtime::replace_line(host, text),
-        _ => {}
-    }
-}
-
 impl Plugin for WasmPlugin {
     fn id(&self) -> &str {
         &self.id
@@ -248,161 +134,5 @@ impl Plugin for WasmPlugin {
                 .collect();
             host.set_panel(panel_id, PanelContent { lines, selected: 0 });
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
-    use editor_core::{DocId, Document, Selections, Transaction, Workspace};
-
-    use crate::host::DirEntry;
-
-    /// A minimal in-memory [`Host`] for exercising a plugin without the full app.
-    struct TestHost {
-        ws: Workspace,
-        panels: HashMap<String, PanelContent>,
-    }
-
-    impl TestHost {
-        fn with_doc(text: &str) -> (TestHost, DocId) {
-            let mut ws = Workspace::new(PathBuf::from("."));
-            let id = ws.open_document(Document::from_str(text));
-            ws.documents.get_mut(id).unwrap().set_caret(0);
-            (
-                TestHost {
-                    ws,
-                    panels: HashMap::new(),
-                },
-                id,
-            )
-        }
-        fn text(&self, id: DocId) -> String {
-            self.ws.documents.get(id).unwrap().to_string()
-        }
-    }
-
-    impl Host for TestHost {
-        fn workspace(&self) -> &Workspace {
-            &self.ws
-        }
-        fn apply_transaction(&mut self, doc: DocId, txn: Transaction) {
-            if let Some(d) = self.ws.documents.get_mut(doc) {
-                txn.apply(d);
-            }
-        }
-        fn set_selections(&mut self, doc: DocId, selections: Selections) {
-            if let Some(d) = self.ws.documents.get_mut(doc) {
-                d.selections = selections;
-            }
-        }
-        fn open_path(&mut self, _path: &Path) {}
-        fn read_dir(&self, _path: &Path) -> Vec<DirEntry> {
-            Vec::new()
-        }
-        fn set_panel(&mut self, panel_id: &str, content: PanelContent) {
-            self.panels.insert(panel_id.to_string(), content);
-        }
-        fn set_status(&mut self, _item_id: &str, _text: String) {}
-        fn notify(&mut self, _message: String) {}
-        fn execute(&mut self, _command_id: &str) {}
-    }
-
-    fn example_plugin_dir() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/wasm-hello")
-    }
-
-    fn empty_module() -> (Engine, Module) {
-        let mut config = Config::default();
-        config.consume_fuel(true);
-        let engine = Engine::new(&config);
-        let wasm = wat::parse_str("(module)").unwrap();
-        let module = Module::new(&engine, &wasm[..]).unwrap();
-        (engine, module)
-    }
-
-    #[test]
-    fn wasm_plugin_loads_and_contributes() {
-        let plugin = load_one(&example_plugin_dir()).expect("example wasm plugin loads");
-        let c = plugin.contributions();
-        assert!(c.commands.iter().any(|c| c.id == "wasm-hello.insert"));
-        assert!(c.panels.iter().any(|p| p.id == "wasm-hello.panel"));
-    }
-
-    #[test]
-    fn wasm_command_edits_buffer_through_granted_capability() {
-        let mut plugin = load_one(&example_plugin_dir()).unwrap();
-        let (mut host, id) = TestHost::with_doc("fn main() {}");
-        assert!(plugin.run_command("wasm-hello.insert", &mut host));
-        assert!(
-            host.text(id).starts_with("// hello from wasm\n"),
-            "guest edit not applied: {:?}",
-            host.text(id)
-        );
-    }
-
-    #[test]
-    fn wasm_panel_renders_lines() {
-        let mut plugin = load_one(&example_plugin_dir()).unwrap();
-        let (mut host, _id) = TestHost::with_doc("x");
-        plugin.render_panel("wasm-hello.panel", &mut host);
-        let panel = host.panels.get("wasm-hello.panel").expect("panel set");
-        assert_eq!(panel.lines.len(), 2);
-    }
-
-    #[test]
-    fn ungranted_capability_is_denied() {
-        // A plugin with no capabilities must not be able to edit, even if it emits the action.
-        let (engine, module) = empty_module();
-        let denied = WasmPlugin {
-            id: "denied".into(),
-            contributions: Contributions::default(),
-            capabilities: Vec::new(),
-            command_ids: Vec::new(),
-            panel_ids: Vec::new(),
-            engine,
-            module,
-        };
-        let (mut host, id) = TestHost::with_doc("unchanged");
-        denied.apply_actions(&json!([{ "action": "insert", "text": "X" }]), &mut host);
-        assert_eq!(host.text(id), "unchanged", "deny-by-default was bypassed");
-    }
-
-    #[test]
-    fn granted_capabilities_dispatch_every_action_kind() {
-        let (engine, module) = empty_module();
-        let plugin = WasmPlugin {
-            id: "multi".into(),
-            contributions: Contributions::default(),
-            capabilities: vec!["edit".into(), "ui".into(), "fs:read".into()],
-            command_ids: Vec::new(),
-            panel_ids: Vec::new(),
-            engine,
-            module,
-        };
-        let (mut host, id) = TestHost::with_doc("hello world");
-        // Every action kind reaches its handler: the edit group flows through apply_edit,
-        // and notify / open / run each hit their own arm.
-        plugin.apply_actions(
-            &json!([
-                { "action": "insert", "text": "I" },
-                { "action": "replace_selection", "text": "R" },
-                { "action": "replace_line", "text": "L" },
-                { "action": "notify", "message": "hi" },
-                { "action": "open", "path": "/tmp/ignored-by-test-host" },
-                { "action": "run", "command": "noop" },
-                { "action": "unknown-kind" }
-            ]),
-            &mut host,
-        );
-        // A non-array payload is ignored (early return in apply_actions).
-        plugin.apply_actions(&json!({ "not": "an array" }), &mut host);
-        // apply_edit's fallback arm (a kind outside the three) is a no-op.
-        apply_edit("bogus", &mut host, "Z");
-        // The edit actions ran, so the buffer changed from its initial contents.
-        assert_ne!(host.text(id), "hello world");
     }
 }
