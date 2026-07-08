@@ -60,7 +60,7 @@ impl Picker {
             .filter_map(|(i, item)| fuzzy_score(&self.query, &item.label).map(|s| (i, s)))
             .collect();
         // Higher score first; ties keep original order (stable sort).
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
         self.filtered = scored.into_iter().map(|(i, _)| i).collect();
         self.selected = 0;
     }
