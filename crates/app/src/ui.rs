@@ -643,6 +643,8 @@ struct EditorCtx<'a> {
     sels: &'a [editor_core::Selection],
     /// `(bracket, partner)` char offsets to highlight, precomputed in `EditorState`.
     bracket_match: Option<(usize, usize)>,
+    /// Git change map for the gutter change-bar (plan §4.1), when enabled.
+    git: Option<&'a crate::git::LineStatuses>,
 }
 
 /// The editor pane: gutter + line numbers + text + selections + cursor. Written directly
@@ -684,6 +686,11 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         // Selection spans, precomputed for quick membership tests.
         sels: doc.selections.ranges(),
         bracket_match: app.editor.bracket_match,
+        git: if app.config.git_gutter {
+            active_id.and_then(|id| app.editor.git_hunks.get(&id))
+        } else {
+            None
+        },
     };
 
     let buf = f.buffer_mut();
@@ -739,6 +746,28 @@ fn render_editor_row(
     // Diagnostics on this line → per-char severity + a gutter marker.
     let line_diags = diagnostics_on_line(ctx.diags, line_idx, line_text);
     draw_diag_marker(buf, ctx.area.x, y, &line_diags);
+
+    // Git change-bar in the gutter's separator column, just left of the text (plan §4.1).
+    if let Some(git) = ctx.git {
+        if let Some(&status) = git.get(&line_idx) {
+            let (glyph, key) = match status {
+                crate::git::LineStatus::Added => ('▍', "git.add"),
+                crate::git::LineStatus::Modified => ('▍', "git.modify"),
+                crate::git::LineStatus::Deleted => ('▁', "git.delete"),
+            };
+            let color = ctx
+                .theme
+                .style_for(key)
+                .and_then(|s| s.fg)
+                .unwrap_or(Color::Gray);
+            if ctx.gutter > 0 {
+                if let Some(cell) = cell_at(buf, ctx.area.x + ctx.gutter - 1, y) {
+                    cell.set_char(glyph);
+                    cell.set_style(Style::default().fg(color));
+                }
+            }
+        }
+    }
 
     // Resolve syntax colors per char (shortest span wins for overlaps).
     let char_styles = ctx

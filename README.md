@@ -60,6 +60,7 @@ auto_pairs = true           # auto-close brackets/quotes, type over closers, del
 auto_indent = true          # copy indent on newline (brace-aware); dedent on a closing bracket
 trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from every line
 insert_final_newline = false      # on save, ensure the file ends with a single newline
+git_gutter = true           # per-line add/modify/delete change bar in the gutter (vs HEAD)
 icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
 
 [keys]

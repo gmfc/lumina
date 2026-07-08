@@ -84,6 +84,10 @@ impl Theme {
                 modifier: Modifier::BOLD | Modifier::UNDERLINED,
             },
         );
+        // Git change-bar colors (plan §4.1), overridable via `[theme]`.
+        set("git.add", plain(c(87, 171, 90, Color::Green)));
+        set("git.modify", plain(c(97, 175, 239, Color::Blue)));
+        set("git.delete", plain(c(224, 108, 117, Color::Red)));
 
         Theme {
             map,
@@ -136,6 +140,9 @@ impl Theme {
                 modifier: Modifier::BOLD | Modifier::UNDERLINED,
             },
         );
+        set("git.add", plain(c(40, 140, 50, Color::Green)));
+        set("git.modify", plain(c(0, 92, 197, Color::Blue)));
+        set("git.delete", plain(c(200, 40, 50, Color::Red)));
         Theme {
             map,
             selection_bg: c(200, 220, 250, Color::Blue),

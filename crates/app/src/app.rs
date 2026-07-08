@@ -402,6 +402,8 @@ impl App {
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        // Prime the git gutter for any files restored at startup (plan §4.1).
+        self.refresh_git_all();
         while !self.quit {
             self.editor.update_highlights(self.page_height);
             self.editor.update_bracket_match();
@@ -1516,6 +1518,11 @@ impl App {
         while let Ok(msg) = self.worker_rx.try_recv() {
             match msg {
                 crate::worker::WorkerMsg::DiskChanged { path } => self.on_disk_changed(&path),
+                crate::worker::WorkerMsg::GitStatus { path, statuses } => {
+                    if let Some(id) = self.editor.workspace.find_by_path(&path) {
+                        self.editor.git_hunks.insert(id, statuses);
+                    }
+                }
                 crate::worker::WorkerMsg::SearchComplete { query, hits } => {
                     if let Some(search) = &mut self.search {
                         if search.query == query {
@@ -1606,6 +1613,8 @@ impl App {
         self.editor
             .pending_events
             .push(editor_plugin::event::Event::ExternalReload(id));
+        // The file changed under us (e.g. an agent wrote it) — refresh its git gutter.
+        self.request_git_status(id);
     }
 
     /// The single dispatcher — the only place editor state mutates (plan §5).
@@ -1824,10 +1833,36 @@ impl App {
                 doc.set_caret(0);
                 let id = self.editor.workspace.open_document(doc);
                 self.editor.emit(editor_plugin::event::Event::DidOpen(id));
+                self.request_git_status(id);
             }
             Err(e) => {
                 self.editor.status_message = Some(format!("Open failed: {e}"));
             }
+        }
+    }
+
+    /// Recompute a document's git change map off the main thread (plan §4.1). No-op when the
+    /// gutter is disabled or the doc has no path.
+    fn request_git_status(&self, id: editor_core::DocId) {
+        if !self.config.git_gutter {
+            return;
+        }
+        let root = self.editor.workspace.root.clone();
+        if let Some(path) = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .and_then(|d| d.path.clone())
+        {
+            crate::worker::spawn_git(root, path, self.worker_tx.clone());
+        }
+    }
+
+    /// Kick a git recompute for every open document (startup / config reload).
+    fn refresh_git_all(&self) {
+        for id in self.editor.workspace.tabs.clone() {
+            self.request_git_status(id);
         }
     }
 
@@ -1926,6 +1961,8 @@ impl App {
                 self.editor.status_message = Some(format!("Save failed: {e}"));
             }
         }
+        // Refresh the git gutter against the just-written file (plan §4.1).
+        self.request_git_status(id);
     }
 }
 
@@ -2644,6 +2681,27 @@ mod tests {
             severity: editor_lsp::Severity::Error,
             message: msg.to_string(),
         }
+    }
+
+    #[test]
+    fn git_status_message_stored_per_doc() {
+        let path = temp_file("a\nb\n");
+        let mut app = app_with(&path);
+        let id = app.editor.workspace.active_doc().unwrap();
+        let mut statuses = crate::git::LineStatuses::new();
+        statuses.insert(1, crate::git::LineStatus::Modified);
+        app.worker_tx
+            .send(crate::worker::WorkerMsg::GitStatus {
+                path: path.clone(),
+                statuses,
+            })
+            .unwrap();
+        app.drain_workers();
+        assert_eq!(
+            app.editor.git_hunks.get(&id).and_then(|m| m.get(&1)),
+            Some(&crate::git::LineStatus::Modified)
+        );
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

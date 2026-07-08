@@ -72,6 +72,8 @@ pub struct EditorState {
     pub completion: Option<crate::completion::CompletionState>,
     /// Locations backing the current `Locations` picker (references / symbols, plan §2.3).
     pub nav_locations: Vec<editor_lsp::Location>,
+    /// Per-document git change map for the gutter (plan §4.1), computed off-thread.
+    pub git_hunks: HashMap<DocId, crate::git::LineStatuses>,
 }
 
 impl EditorState {
@@ -95,6 +97,7 @@ impl EditorState {
             bracket_match: None,
             completion: None,
             nav_locations: Vec::new(),
+            git_hunks: HashMap::new(),
         }
     }
 
