@@ -10,6 +10,7 @@ mod config;
 mod editor;
 mod files;
 mod find;
+mod git;
 mod input;
 mod keymap;
 mod lsp;

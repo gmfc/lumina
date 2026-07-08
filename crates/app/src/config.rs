@@ -21,6 +21,8 @@ pub struct Config {
     pub trim_trailing_whitespace: bool,
     /// On save, ensure the file ends with a single newline (plan §1.4). Off by default.
     pub insert_final_newline: bool,
+    /// Show a per-line git change bar in the gutter (plan §4.1).
+    pub git_gutter: bool,
     /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
     pub icons: bool,
     /// `language → server command (split into program + args)`.
@@ -39,6 +41,7 @@ impl Default for Config {
             auto_indent: true,
             trim_trailing_whitespace: false,
             insert_final_newline: false,
+            git_gutter: true,
             icons: false,
             lsp_servers: std::collections::HashMap::new(),
         }
@@ -108,6 +111,9 @@ impl Config {
             .and_then(|v| v.as_bool())
         {
             self.insert_final_newline = b;
+        }
+        if let Some(b) = settings.get("git_gutter").and_then(|v| v.as_bool()) {
+            self.git_gutter = b;
         }
         if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
             self.icons = b;

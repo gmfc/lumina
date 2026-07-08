@@ -17,6 +17,11 @@ pub enum WorkerMsg {
     DiskChanged { path: PathBuf },
     /// A project search finished.
     SearchComplete { query: String, hits: Vec<SearchHit> },
+    /// A git diff computation finished for `path` (plan §4.1).
+    GitStatus {
+        path: PathBuf,
+        statuses: crate::git::LineStatuses,
+    },
 }
 
 /// Create the worker channel.
@@ -83,5 +88,14 @@ pub fn spawn_search(root: PathBuf, query: String, case_sensitive: bool, tx: Send
     std::thread::spawn(move || {
         let hits = crate::search::run_search(&root, &query, case_sensitive, 2000);
         let _ = tx.send(WorkerMsg::SearchComplete { query, hits });
+    });
+}
+
+/// Compute a file's git change map off the main thread; result arrives as `GitStatus`
+/// (plan §4.1 — git compute never blocks the event loop).
+pub fn spawn_git(root: PathBuf, path: PathBuf, tx: Sender<WorkerMsg>) {
+    std::thread::spawn(move || {
+        let statuses = crate::git::compute(&root, &path);
+        let _ = tx.send(WorkerMsg::GitStatus { path, statuses });
     });
 }
