@@ -1,0 +1,61 @@
+# SonarQube Cloud analysis for gmfc_lumina.
+#
+# Runs the native Sonar Rust analyzer with real signal: LCOV coverage from
+# cargo-llvm-cov and Clippy diagnostics, both generated here so the dashboard
+# shows actual coverage/lints instead of an empty scan.
+#
+# Prerequisites (one-time, in the repo / SonarQube Cloud project):
+#   - Add the SONAR_TOKEN repository secret (Settings → Secrets → Actions).
+#   - Turn OFF "Automatic Analysis" in the SonarQube Cloud project — CI-based
+#     analysis and automatic analysis are mutually exclusive.
+#
+# Fork pull requests are skipped: secrets are not exposed to them, so the scan
+# could only fail. The enforcement backbone (fmt/clippy/test/msrv) lives in ci.yml.
+name: SonarQube
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sonarqube:
+    name: SonarQube Cloud
+    runs-on: ubuntu-latest
+    # Secrets are unavailable to fork PRs — only run for pushes and same-repo PRs.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # Full history for accurate new-code detection and blame.
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      # Default features only: the `proptests` feature is gated OFF in CI (see
+      # ci.yml) to keep the workspace green — mirror that here.
+      - name: Generate coverage (LCOV)
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Generate Clippy report
+        run: cargo clippy --workspace --all-targets --message-format=json > clippy-report.json
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
