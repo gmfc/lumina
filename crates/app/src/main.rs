@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod cli;
 mod clipboard;
 mod commands;
 mod completion;
@@ -39,19 +40,17 @@ fn main() -> Result<()> {
     // Parse a single optional argument. Recognised subcommands/flags are handled before we
     // touch the terminal; anything else is treated as a path (a file or directory) to open.
     let arg = std::env::args().nth(1);
-    match arg.as_deref() {
-        Some("--version" | "-V") => {
-            println!("lmn {}", env!("CARGO_PKG_VERSION"));
+    match cli::parse_cli(arg.as_deref()) {
+        cli::Cli::Version => {
+            println!("{}", cli::version_line());
             return Ok(());
         }
-        Some("--help" | "-h") => {
-            print_usage();
+        cli::Cli::Help => {
+            println!("{}", cli::usage());
             return Ok(());
         }
-        Some("update" | "upgrade" | "--update") => {
-            return self_update();
-        }
-        _ => {}
+        cli::Cli::Update => return self_update(),
+        cli::Cli::Open(_) => {}
     }
 
     let mut terminal = ratatui::init();
@@ -82,69 +81,18 @@ fn main() -> Result<()> {
     result
 }
 
-/// Print CLI usage. Kept deliberately small — lumina is a TUI, not a flag-heavy CLI.
-fn print_usage() {
-    println!(
-        "lmn {} — the lumina terminal code editor\n\n\
-         USAGE:\n    \
-         lmn [PATH]       open PATH (a file or directory); omit for the start screen\n    \
-         lmn update       download and install the latest release, in place\n    \
-         lmn --version    print the version\n    \
-         lmn --help       print this help\n\n\
-         EXAMPLES:\n    \
-         lmn .            open the current directory\n    \
-         lmn src/main.rs  open a file",
-        env!("CARGO_PKG_VERSION")
-    );
-}
-
-/// Update in place by re-running the official installer for this platform, pointed at the
-/// directory the running binary lives in so it upgrades *this* install (not a default one).
-/// Delegating to the install script keeps a single source of truth and avoids baking an
-/// HTTP/TLS/archive stack into the editor. The installers replace the binary atomically, so
-/// this is safe to run while another lumina instance is open.
+/// Update in place by spawning the platform installer (built by [`cli::build_update_command`])
+/// pointed at this binary's own directory. This is I/O glue — the command's shape is unit-tested
+/// in `cli`; here we only run it and surface a clear error. The installers replace the binary
+/// atomically, so this is safe to run while another lumina instance is open.
 fn self_update() -> Result<()> {
-    use std::process::Command;
-
-    // The URL is the raw install script on the default branch — the same entry point the
-    // README documents for a fresh install.
     let install_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
 
     println!("lmn: fetching and installing the latest release…");
 
-    #[cfg(windows)]
-    let mut cmd = {
-        const URL: &str = "https://raw.githubusercontent.com/gmfc/lumina/main/install.ps1";
-        let mut c = Command::new("powershell");
-        c.args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            &format!("irm {URL} | iex"),
-        ]);
-        c
-    };
-
-    #[cfg(not(windows))]
-    let mut cmd = {
-        const URL: &str = "https://raw.githubusercontent.com/gmfc/lumina/main/install.sh";
-        let script = format!(
-            "if command -v curl >/dev/null 2>&1; then curl -fsSL {URL} | sh; \
-             else wget -qO- {URL} | sh; fi"
-        );
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(script);
-        c
-    };
-
-    if let Some(dir) = install_dir {
-        cmd.env("LMN_INSTALL_DIR", dir);
-    }
-
-    let status = cmd
+    let status = cli::build_update_command(install_dir)
         .status()
         .context("failed to launch the installer (is curl/wget or PowerShell available?)")?;
     if !status.success() {
