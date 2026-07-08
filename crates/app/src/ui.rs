@@ -3,7 +3,7 @@
 //!
 //! The frame is assembled by [`draw`]; the pieces live in focused submodules:
 //! - [`chrome`] — tab bar, status bar, welcome screen.
-//! - [`editor`] / [`editor_cell`] — the text pane and its per-cell decorations.
+//! - [`editor`] — the text pane, its per-line loop, and per-cell decorations.
 //! - [`sidebar`] — the explorer panel.
 //! - [`panel`] — the terminal dock.
 //! - [`overlays`] / [`pickers`] — modal boxes and floating lists.
@@ -18,7 +18,6 @@ use crate::app::App;
 
 mod chrome;
 mod editor;
-mod editor_cell;
 mod overlays;
 mod panel;
 mod pickers;
