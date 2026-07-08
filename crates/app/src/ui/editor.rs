@@ -1,44 +1,45 @@
 //! The editor pane: gutter, line numbers, text with tab expansion, selections, and cursor.
-//! Written directly into the cell buffer for precise control (plan §4). Per-cell styling and
-//! gutter markers live in [`super::editor_cell`].
+//! Written directly into the cell buffer for precise control (plan §4). The per-line render
+//! loop and the per-cell styling / gutter decorations live together here — they share the
+//! private [`EditorCtx`] and are only meaningful as a pair.
 
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::Frame;
 
 use editor_core::Document;
-use editor_lsp::Diagnostic;
+use editor_lsp::{Diagnostic, Severity};
 use editor_syntax::DocHighlighter;
 
 use crate::app::App;
 use crate::editor::Focus;
 use crate::theme::Theme;
 
-use super::editor_cell::{
-    cell_style, draw_char_cells, draw_diag_marker, draw_eof_tilde, draw_git_bar,
-};
 use super::gutter_width;
-use super::util::{char_cells, diagnostics_on_line, put_str, resolve_line_styles};
+use super::util::{
+    cell_at, char_cells, diag_marker, diagnostics_on_line, put_str, resolve_line_styles,
+    severity_color, severity_rank, CLR_BG, CLR_MATCH,
+};
 
 /// Read-only state threaded through the per-line / per-cell editor renderers, so the
 /// helpers take one context argument instead of a dozen positional ones.
-pub(super) struct EditorCtx<'a> {
-    pub(super) doc: &'a Document,
-    pub(super) area: Rect,
-    pub(super) text_x: u16,
-    pub(super) gutter: u16,
-    pub(super) first: usize,
-    pub(super) hl: Option<&'a DocHighlighter>,
-    pub(super) theme: &'a Theme,
-    pub(super) sel_bg: Color,
-    pub(super) gutter_fg: Color,
-    pub(super) find_matches: &'a [(usize, usize)],
-    pub(super) diags: &'a [Diagnostic],
-    pub(super) sels: &'a [editor_core::Selection],
+struct EditorCtx<'a> {
+    doc: &'a Document,
+    area: Rect,
+    text_x: u16,
+    gutter: u16,
+    first: usize,
+    hl: Option<&'a DocHighlighter>,
+    theme: &'a Theme,
+    sel_bg: Color,
+    gutter_fg: Color,
+    find_matches: &'a [(usize, usize)],
+    diags: &'a [Diagnostic],
+    sels: &'a [editor_core::Selection],
     /// `(bracket, partner)` char offsets to highlight, precomputed in `EditorState`.
-    pub(super) bracket_match: Option<(usize, usize)>,
+    bracket_match: Option<(usize, usize)>,
     /// Git change map for the gutter change-bar (plan §4.1), when enabled.
-    pub(super) git: Option<&'a crate::git::LineStatuses>,
+    git: Option<&'a crate::git::LineStatuses>,
 }
 
 /// The editor pane: gutter + line numbers + text + selections + cursor.
@@ -176,4 +177,133 @@ fn render_editor_row(
         primary_screen = Some((ctx.text_x + col, y));
     }
     primary_screen
+}
+
+/// Draw the git change-bar for `line_idx` in the gutter's separator column (plan §4.1).
+fn draw_git_bar(buf: &mut ratatui::buffer::Buffer, ctx: &EditorCtx, line_idx: usize, y: u16) {
+    let Some(git) = ctx.git else {
+        return;
+    };
+    let Some(&status) = git.get(&line_idx) else {
+        return;
+    };
+    if ctx.gutter == 0 {
+        return;
+    }
+    let (glyph, key) = match status {
+        crate::git::LineStatus::Added => ('▍', "git.add"),
+        crate::git::LineStatus::Modified => ('▍', "git.modify"),
+        crate::git::LineStatus::Deleted => ('▁', "git.delete"),
+    };
+    let color = ctx
+        .theme
+        .style_for(key)
+        .and_then(|s| s.fg)
+        .unwrap_or(Color::Gray);
+    if let Some(cell) = cell_at(buf, ctx.area.x + ctx.gutter - 1, y) {
+        cell.set_char(glyph);
+        cell.set_style(Style::default().fg(color));
+    }
+}
+
+/// Past EOF: draw a tilde like Vim.
+fn draw_eof_tilde(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16) {
+    if let Some(cell) = cell_at(buf, x, y) {
+        cell.set_char('~');
+        cell.set_style(Style::default().fg(Color::DarkGray));
+    }
+}
+
+/// Draw the gutter marker for the highest-severity diagnostic on the line, if any.
+fn draw_diag_marker(
+    buf: &mut ratatui::buffer::Buffer,
+    x: u16,
+    y: u16,
+    line_diags: &[(usize, usize, Severity)],
+) {
+    if let Some(sev) = line_diags.iter().map(|d| d.2).min_by_key(severity_rank) {
+        if let Some(cell) = cell_at(buf, x, y) {
+            cell.set_char(diag_marker(sev));
+            cell.set_style(Style::default().fg(severity_color(sev)));
+        }
+    }
+}
+
+/// Compose the style for one character cell: syntax base, then find-match, diagnostic
+/// underline, selection background, and secondary-cursor inversion, in that order.
+fn cell_style(
+    ctx: &EditorCtx,
+    line_diags: &[(usize, usize, Severity)],
+    char_styles: &[Option<Style>],
+    ci: usize,
+    char_off: usize,
+) -> Style {
+    // Base = syntax color; then selection bg; then secondary-cursor inversion.
+    let mut style = char_styles
+        .get(ci)
+        .copied()
+        .flatten()
+        .unwrap_or_else(|| Style::default().bg(CLR_BG));
+    let in_match = ctx
+        .find_matches
+        .iter()
+        .any(|&(s, e)| char_off >= s && char_off < e);
+    if in_match {
+        style = style.bg(CLR_MATCH);
+    }
+    // Underline diagnostic ranges in their severity color.
+    if let Some(&(_, _, sev)) = line_diags.iter().find(|&&(s, e, _)| ci >= s && ci < e) {
+        style = style
+            .fg(severity_color(sev))
+            .add_modifier(Modifier::UNDERLINED);
+    }
+    // Bracket-match emphasis (plan §1.3): the caret's bracket + its partner. Applied before
+    // the selection background so a selected bracket still shows the selection tint.
+    if let Some((a, b)) = ctx.bracket_match {
+        if char_off == a || char_off == b {
+            if let Some(bm) = ctx.theme.style_for("bracket.match") {
+                style = style.patch(bm);
+            }
+        }
+    }
+    let in_sel = ctx
+        .sels
+        .iter()
+        .any(|s| char_off >= s.from() && char_off < s.to());
+    if in_sel {
+        style = style.bg(ctx.sel_bg);
+    }
+    let is_secondary_cursor = ctx
+        .sels
+        .iter()
+        .enumerate()
+        .any(|(i, s)| s.head == char_off && i != ctx.doc.selections.primary_index());
+    if is_secondary_cursor {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    style
+}
+
+/// Write `ch` (tabs shown as blanks) at `sx`, filling the trailing cells of a wide glyph
+/// or tab with styled blanks.
+fn draw_char_cells(
+    buf: &mut ratatui::buffer::Buffer,
+    sx: u16,
+    y: u16,
+    ch: char,
+    style: Style,
+    cells: usize,
+) {
+    let display = if ch == '\t' { ' ' } else { ch };
+    if let Some(cell) = cell_at(buf, sx, y) {
+        cell.set_char(display);
+        cell.set_style(style);
+    }
+    // Fill remaining cells of a wide char / tab with styled blanks.
+    for k in 1..cells {
+        if let Some(cell) = cell_at(buf, sx + k as u16, y) {
+            cell.set_char(' ');
+            cell.set_style(style);
+        }
+    }
 }
