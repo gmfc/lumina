@@ -12,6 +12,8 @@ pub struct Config {
     pub sidebar_width: u16,
     pub follow_mode: bool,
     pub poll_watch: bool,
+    /// `language → server command (split into program + args)`.
+    pub lsp_servers: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Default for Config {
@@ -22,6 +24,7 @@ impl Default for Config {
             sidebar_width: 30,
             follow_mode: false,
             poll_watch: false,
+            lsp_servers: std::collections::HashMap::new(),
         }
     }
 }
@@ -68,6 +71,17 @@ impl Config {
             }
         }
 
+        if let Some(lsp) = value.get("lsp").and_then(|v| v.as_table()) {
+            for (lang, cmd) in lsp {
+                if let Some(cmd) = cmd.as_str() {
+                    let parts: Vec<String> = cmd.split_whitespace().map(String::from).collect();
+                    if !parts.is_empty() {
+                        cfg.lsp_servers.insert(lang.clone(), parts);
+                    }
+                }
+            }
+        }
+
         Ok(cfg)
     }
 }
@@ -75,6 +89,18 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_lsp_servers() {
+        let src = r#"
+            [lsp]
+            rust = "rust-analyzer"
+            python = "pylsp --stdio"
+        "#;
+        let cfg = Config::from_toml_str(src).unwrap();
+        assert_eq!(cfg.lsp_servers["rust"], vec!["rust-analyzer"]);
+        assert_eq!(cfg.lsp_servers["python"], vec!["pylsp", "--stdio"]);
+    }
 
     #[test]
     fn parses_settings_and_keys() {

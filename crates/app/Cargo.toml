@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 editor-core = { path = "../core" }
 editor-syntax = { path = "../syntax" }
+editor-lsp = { path = "../lsp" }
 editor-plugin = { path = "../plugin" }
 editor-builtins = { path = "../builtins" }
 crossterm.workspace = true

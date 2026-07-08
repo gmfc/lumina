@@ -66,6 +66,11 @@ pub struct App {
     search: Option<crate::search::SearchState>,
     /// The last query we actually ran (to distinguish Enter=run vs Enter=open).
     last_search_run: String,
+    // --- Phase 10: LSP ---
+    /// Language-server manager (inert unless a server is configured).
+    lsp: crate::lsp::LspManager,
+    /// Last document revision sent to the LSP, per DocId (change debounce).
+    lsp_sent_revision: std::collections::HashMap<editor_core::DocId, u64>,
 }
 
 impl App {
@@ -110,6 +115,7 @@ impl App {
         let config = crate::config::Config::load();
         editor.sidebar_width = config.sidebar_width;
         let follow_mode = config.follow_mode;
+        let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
         let keymap = build_keymap(&config);
 
         // Background worker channel + directory watcher on the project root (plan §6).
@@ -141,7 +147,39 @@ impl App {
             follow_mode,
             search: None,
             last_search_run: String::new(),
+            lsp,
+            lsp_sent_revision: std::collections::HashMap::new(),
         })
+    }
+
+    /// Notify the LSP of changes to the active document (debounced by revision), and open
+    /// documents the server hasn't seen. Inert unless a server is configured.
+    fn update_lsp(&mut self) {
+        if !self.lsp.is_enabled() {
+            return;
+        }
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let Some(doc) = self.editor.workspace.documents.get(id) else {
+            return;
+        };
+        let (Some(path), Some(lang)) = (doc.path.clone(), doc.language.clone()) else {
+            return;
+        };
+        let rev = doc.revision;
+        let text = doc.to_string();
+        match self.lsp_sent_revision.get(&id) {
+            None => {
+                self.lsp.did_open(&path, &lang, &text);
+                self.lsp_sent_revision.insert(id, rev);
+            }
+            Some(&sent) if sent != rev => {
+                self.lsp.did_change(&path, &lang, &text);
+                self.lsp_sent_revision.insert(id, rev);
+            }
+            _ => {}
+        }
     }
 
     /// The active project-search state (read by the renderer).
@@ -160,6 +198,7 @@ impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.quit {
             self.editor.update_highlights(self.page_height);
+            self.update_lsp();
             terminal.draw(|f| ui::draw(f, self))?;
 
             if event::poll(Duration::from_millis(16))? {
@@ -932,6 +971,15 @@ impl App {
         let events = std::mem::take(&mut self.editor.pending_events);
         for ev in events {
             self.registry.broadcast(&ev, &mut self.editor);
+        }
+
+        // LSP diagnostics: map each update's URI back to an open document.
+        for update in self.lsp.poll() {
+            if let Some(path) = crate::lsp::path_from_uri(&update.uri) {
+                if let Some(id) = self.editor.workspace.find_by_path(&path) {
+                    self.editor.diagnostics.insert(id, update.diagnostics);
+                }
+            }
         }
 
         // Background worker messages (FS watch, project search).

@@ -9,6 +9,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
 use editor_core::Document;
+use editor_lsp::{Diagnostic, Severity};
 use editor_syntax::HighlightSpan;
 
 use crate::app::App;
@@ -482,6 +483,12 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         .map(|f| f.matches.as_slice())
         .unwrap_or(&[]);
 
+    // LSP diagnostics for the active document.
+    let diags: &[editor_lsp::Diagnostic] = active_id
+        .and_then(|id| app.editor.diagnostics.get(&id))
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+
     let buf = f.buffer_mut();
 
     // Precompute the selection spans for quick membership tests.
@@ -516,6 +523,15 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         let line_start = doc.line_to_char(line_idx);
         let line_text = doc.line_text(line_idx);
         let line_text = line_text.trim_end_matches(['\n', '\r']);
+
+        // Diagnostics on this line → per-char severity + a gutter marker.
+        let line_diags = diagnostics_on_line(diags, line_idx, line_text);
+        if let Some(sev) = line_diags.iter().map(|d| d.2).min_by_key(severity_rank) {
+            if let Some(cell) = cell_at(buf, area.x, y) {
+                cell.set_char(diag_marker(sev));
+                cell.set_style(Style::default().fg(severity_color(sev)));
+            }
+        }
 
         // Resolve syntax colors per char (shortest span wins for overlaps).
         let char_styles = hl
@@ -555,6 +571,12 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
                 .any(|&(s, e)| char_off >= s && char_off < e);
             if in_match {
                 style = style.bg(CLR_MATCH);
+            }
+            // Underline diagnostic ranges in their severity color.
+            if let Some(&(_, _, sev)) = line_diags.iter().find(|&&(s, e, _)| ci >= s && ci < e) {
+                style = style
+                    .fg(severity_color(sev))
+                    .add_modifier(Modifier::UNDERLINED);
             }
             if in_sel {
                 style = style.bg(sel_bg);
@@ -681,6 +703,57 @@ fn resolve_line_styles(
     styles
 }
 
+/// Char-range diagnostics (start, end, severity) on `line_idx`, converting LSP UTF-16
+/// columns to char columns against the line's text.
+fn diagnostics_on_line(
+    diags: &[Diagnostic],
+    line_idx: usize,
+    line_text: &str,
+) -> Vec<(usize, usize, Severity)> {
+    use editor_lsp::position::utf16_to_char_col;
+    let line = line_idx as u32;
+    diags
+        .iter()
+        .filter(|d| d.line == line)
+        .map(|d| {
+            let start = utf16_to_char_col(line_text, d.start_char16);
+            let end = if d.end_line == d.line {
+                utf16_to_char_col(line_text, d.end_char16)
+            } else {
+                line_text.chars().count()
+            };
+            (start, end.max(start + 1), d.severity)
+        })
+        .collect()
+}
+
+fn severity_rank(sev: &Severity) -> u8 {
+    match sev {
+        Severity::Error => 0,
+        Severity::Warning => 1,
+        Severity::Info => 2,
+        Severity::Hint => 3,
+    }
+}
+
+fn severity_color(sev: Severity) -> Color {
+    match sev {
+        Severity::Error => Color::Red,
+        Severity::Warning => Color::Yellow,
+        Severity::Info => Color::Blue,
+        Severity::Hint => Color::DarkGray,
+    }
+}
+
+fn diag_marker(sev: Severity) -> char {
+    match sev {
+        Severity::Error => 'E',
+        Severity::Warning => 'W',
+        Severity::Info => 'i',
+        Severity::Hint => 'h',
+    }
+}
+
 fn char_cells(ch: char, col: usize, tab_width: usize) -> usize {
     if ch == '\t' {
         let tw = tab_width.max(1);
@@ -721,4 +794,42 @@ fn display_len(s: &str) -> usize {
     s.chars()
         .map(|c| UnicodeWidthChar::width(c).unwrap_or(1).max(1))
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diag(line: u32, s: u32, e: u32, sev: Severity) -> Diagnostic {
+        Diagnostic {
+            line,
+            start_char16: s,
+            end_line: line,
+            end_char16: e,
+            severity: sev,
+            message: String::new(),
+        }
+    }
+
+    #[test]
+    fn diagnostics_map_to_char_ranges_per_line() {
+        let diags = vec![
+            diag(0, 0, 3, Severity::Error),
+            diag(1, 2, 5, Severity::Warning),
+        ];
+        let l0 = diagnostics_on_line(&diags, 0, "let x");
+        assert_eq!(l0, vec![(0, 3, Severity::Error)]);
+        let l1 = diagnostics_on_line(&diags, 1, "  abc");
+        assert_eq!(l1, vec![(2, 5, Severity::Warning)]);
+        // No diagnostics on line 2.
+        assert!(diagnostics_on_line(&diags, 2, "").is_empty());
+    }
+
+    #[test]
+    fn error_outranks_warning_for_gutter() {
+        let sevs = [Severity::Warning, Severity::Error, Severity::Hint];
+        let min = sevs.iter().copied().min_by_key(severity_rank).unwrap();
+        assert_eq!(min, Severity::Error);
+        assert_eq!(diag_marker(Severity::Error), 'E');
+    }
 }

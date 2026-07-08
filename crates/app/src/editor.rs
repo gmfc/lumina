@@ -51,6 +51,8 @@ pub struct EditorState {
     pub find: Option<crate::find::FindState>,
     /// Active fuzzy picker (command palette / quick open / goto line), if open.
     pub picker: Option<crate::picker::Picker>,
+    /// LSP diagnostics per document (from the language server).
+    pub diagnostics: HashMap<DocId, Vec<editor_lsp::Diagnostic>>,
 }
 
 impl EditorState {
@@ -70,6 +72,7 @@ impl EditorState {
             highlighters: HashMap::new(),
             find: None,
             picker: None,
+            diagnostics: HashMap::new(),
         }
     }
 

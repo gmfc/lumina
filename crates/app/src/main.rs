@@ -10,6 +10,7 @@ mod files;
 mod find;
 mod input;
 mod keymap;
+mod lsp;
 mod picker;
 mod search;
 mod session;
