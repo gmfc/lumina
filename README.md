@@ -7,9 +7,9 @@ external plugin runtime.
 
 ## Screenshots
 
-![lumina editing its own source — syntax highlighting, tabbed editing, and a clickable file explorer](docs/lumina-editor.png)
+![lumina editing its own source — syntax highlighting, tabbed editing, and a clickable file explorer](docs/lumina-editor.webp)
 
-![lumina's start screen with quick key hints](docs/lumina-welcome.png)
+![lumina's start screen with quick key hints](docs/lumina-welcome.webp)
 
 ## Architecture
 
