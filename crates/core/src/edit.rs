@@ -247,50 +247,79 @@ pub fn insert_char_smart(
         doc,
         |d, sel| {
             if sel.is_empty() {
-                let head = sel.head;
-                if auto_pairs {
-                    match pairs::decide_insert(table, ch, char_before(d, head), char_at(d, head)) {
-                        InsertAction::OpenPair(close) => {
-                            return (head..head, format!("{ch}{close}"), (1, 1));
-                        }
-                        // No text change; the (1, 1) offset steps the caret past the closer.
-                        InsertAction::TypeOver => return (head..head, String::new(), (1, 1)),
-                        InsertAction::Literal => {}
-                    }
-                }
-                // A closing bracket typed on an all-whitespace prefix dedents the line to
-                // align with its opener (plan §1.2 acceptance). SPEC-NOTE: restricted to a
-                // single caret so two carets on one line can't produce overlapping ops (the
-                // dedent range reaches back to the line start).
-                if auto_indent && single_caret && table.is_close_bracket(ch) {
-                    let line_start = d.line_to_char(d.char_to_line(head));
-                    let prefix = d.text.slice(line_start..head).to_string();
-                    if !prefix.is_empty() && prefix.bytes().all(|b| b == b' ' || b == b'\t') {
-                        let s = format!("{}{ch}", dedent_one(&prefix, d.tab_width));
-                        let caret = s.chars().count();
-                        return (line_start..head, s, (caret, caret));
-                    }
-                }
-                (head..head, ch.to_string(), (1, 1))
-            } else if auto_pairs {
-                // Surround a non-empty selection with the pair, keeping the inner text
-                // selected; otherwise a plain replace.
-                if let Some(close) = table.close_for(ch) {
-                    let inner = d.text.slice(sel.span()).to_string();
-                    let inner_len = inner.chars().count();
-                    return (
-                        sel.span(),
-                        format!("{ch}{inner}{close}"),
-                        (1, 1 + inner_len),
-                    );
-                }
-                (sel.span(), ch.to_string(), (1, 1))
+                caret_insert_op(
+                    d,
+                    sel.head,
+                    ch,
+                    table,
+                    auto_pairs,
+                    auto_indent,
+                    single_caret,
+                )
             } else {
-                (sel.span(), ch.to_string(), (1, 1))
+                selection_insert_op(d, sel, ch, table, auto_pairs)
             }
         },
         GroupBreak::None,
     );
+}
+
+/// The op for a bare caret: an auto-pair, a type-over step, a closing-bracket dedent, or a
+/// plain char insert. Returned as `(range, replacement, (anchor_off, head_off))` for
+/// [`edit_selections_sel`].
+fn caret_insert_op(
+    d: &Document,
+    head: usize,
+    ch: char,
+    table: &PairTable,
+    auto_pairs: bool,
+    auto_indent: bool,
+    single_caret: bool,
+) -> (Range<usize>, String, (usize, usize)) {
+    if auto_pairs {
+        match pairs::decide_insert(table, ch, char_before(d, head), char_at(d, head)) {
+            InsertAction::OpenPair(close) => return (head..head, format!("{ch}{close}"), (1, 1)),
+            // No text change; the (1, 1) offset steps the caret past the closer.
+            InsertAction::TypeOver => return (head..head, String::new(), (1, 1)),
+            InsertAction::Literal => {}
+        }
+    }
+    // A closing bracket typed on an all-whitespace prefix dedents the line to align with its
+    // opener (plan §1.2 acceptance). SPEC-NOTE: restricted to a single caret so two carets on
+    // one line can't produce overlapping ops (the dedent range reaches back to the line start).
+    if auto_indent && single_caret && table.is_close_bracket(ch) {
+        let line_start = d.line_to_char(d.char_to_line(head));
+        let prefix = d.text.slice(line_start..head).to_string();
+        if !prefix.is_empty() && prefix.bytes().all(|b| b == b' ' || b == b'\t') {
+            let s = format!("{}{ch}", dedent_one(&prefix, d.tab_width));
+            let caret = s.chars().count();
+            return (line_start..head, s, (caret, caret));
+        }
+    }
+    (head..head, ch.to_string(), (1, 1))
+}
+
+/// The op for a non-empty selection: surround it with the pair (keeping the inner text
+/// selected) when `ch` opens one, otherwise a plain replace.
+fn selection_insert_op(
+    d: &Document,
+    sel: Selection,
+    ch: char,
+    table: &PairTable,
+    auto_pairs: bool,
+) -> (Range<usize>, String, (usize, usize)) {
+    if auto_pairs {
+        if let Some(close) = table.close_for(ch) {
+            let inner = d.text.slice(sel.span()).to_string();
+            let inner_len = inner.chars().count();
+            return (
+                sel.span(),
+                format!("{ch}{inner}{close}"),
+                (1, 1 + inner_len),
+            );
+        }
+    }
+    (sel.span(), ch.to_string(), (1, 1))
 }
 
 /// Insert a newline, copying the current line's indent and adjusting one level for brackets
