@@ -657,8 +657,14 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             editor_core::LineEnding::Lf => "LF",
             editor_core::LineEnding::Crlf => "CRLF",
         };
+        let enc = match doc.encoding {
+            editor_core::Encoding::Utf8 => "UTF-8",
+            editor_core::Encoding::Utf8Bom => "UTF-8-BOM",
+            editor_core::Encoding::Utf16Le => "UTF-16 LE",
+            editor_core::Encoding::Utf16Be => "UTF-16 BE",
+        };
         let lang = doc.language.clone().unwrap_or_else(|| "text".into());
-        right = format!("Ln {}, Col {}   UTF-8  {le}  {lang} ", line + 1, col + 1);
+        right = format!("Ln {}, Col {}   {enc}  {le}  {lang} ", line + 1, col + 1);
     } else {
         left = " No file open".into();
     }
