@@ -827,8 +827,7 @@ fn cell_at(
 }
 
 fn put_str(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, s: &str, style: Style, max_x: u16) {
-    let mut cx = x;
-    for ch in s.chars() {
+    for (cx, ch) in (x..).zip(s.chars()) {
         if cx >= max_x {
             break;
         }
@@ -836,7 +835,6 @@ fn put_str(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, s: &str, style: St
             cell.set_char(ch);
             cell.set_style(style);
         }
-        cx += 1;
     }
 }
 
