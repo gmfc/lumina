@@ -70,6 +70,8 @@ pub struct EditorState {
     pub bracket_match: Option<(usize, usize)>,
     /// Active caret-anchored completion popup, if any (plan §2.1).
     pub completion: Option<crate::completion::CompletionState>,
+    /// Locations backing the current `Locations` picker (references / symbols, plan §2.3).
+    pub nav_locations: Vec<editor_lsp::Location>,
 }
 
 impl EditorState {
@@ -92,6 +94,7 @@ impl EditorState {
             diagnostics: HashMap::new(),
             bracket_match: None,
             completion: None,
+            nav_locations: Vec::new(),
         }
     }
 

@@ -68,6 +68,8 @@ pub enum Command {
     RenameSymbol,
     NextDiagnostic,
     PrevDiagnostic,
+    FindReferences,
+    DocumentSymbols,
     // ui
     ToggleSidebar,
     FocusSidebar,

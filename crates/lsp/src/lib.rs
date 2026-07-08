@@ -33,6 +33,17 @@ pub struct Location {
     pub end_character: u32,
 }
 
+/// A document symbol flattened to a jump target: its name, `SymbolKind`, and start position
+/// in the current file (line, UTF-16 char). Hierarchy is flattened with a depth for display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentSymbol {
+    pub name: String,
+    pub kind: u8,
+    pub line: u32,
+    pub character: u32,
+    pub depth: usize,
+}
+
 /// A completion candidate: what the popup shows and what gets inserted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionItem {

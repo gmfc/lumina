@@ -11,6 +11,8 @@ pub enum PickerKind {
     File,
     /// A line-number prompt; `query` holds the digits.
     GotoLine,
+    /// LSP locations (references / symbols); `id` is the index into `EditorState::nav_locations`.
+    Locations,
 }
 
 /// One selectable row.
