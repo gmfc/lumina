@@ -9,12 +9,13 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
 use editor_core::Document;
+use editor_syntax::HighlightSpan;
 
 use crate::app::App;
 use crate::editor::Focus;
+use crate::theme::Theme;
 
 const CLR_BG: Color = Color::Reset;
-const CLR_GUTTER: Color = Color::DarkGray;
 const CLR_SEL: Color = Color::Rgb(50, 60, 90);
 const CLR_ACCENT: Color = Color::Rgb(90, 130, 210);
 
@@ -234,6 +235,14 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     let gutter = gutter_width(doc);
     let text_x = area.x + gutter;
     let first = doc.view.scroll_line;
+
+    // Syntax highlighting for the active document (cached, viewport-only).
+    let active_id = app.editor.workspace.active_doc();
+    let hl = active_id.and_then(|id| app.editor.highlighters.get(&id));
+    let theme = &app.theme;
+    let sel_bg = theme.selection_bg;
+    let gutter_fg = theme.gutter_fg;
+
     let buf = f.buffer_mut();
 
     // Precompute the selection spans for quick membership tests.
@@ -260,7 +269,7 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
             area.x,
             y,
             &num,
-            Style::default().fg(CLR_GUTTER),
+            Style::default().fg(gutter_fg),
             area.x + gutter,
         );
 
@@ -268,6 +277,11 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         let line_start = doc.line_to_char(line_idx);
         let line_text = doc.line_text(line_idx);
         let line_text = line_text.trim_end_matches(['\n', '\r']);
+
+        // Resolve syntax colors per char (shortest span wins for overlaps).
+        let char_styles = hl
+            .map(|h| resolve_line_styles(h.line_spans(line_idx), line_text.chars().count(), theme))
+            .unwrap_or_default();
 
         let mut col: u16 = 0;
         for (ci, ch) in line_text.chars().enumerate() {
@@ -291,9 +305,14 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
                 primary_screen = Some((sx, y));
             }
 
-            let mut style = Style::default().bg(CLR_BG);
+            // Base = syntax color; then selection bg; then secondary-cursor inversion.
+            let mut style = char_styles
+                .get(ci)
+                .copied()
+                .flatten()
+                .unwrap_or_else(|| Style::default().bg(CLR_BG));
             if in_sel {
-                style = style.bg(CLR_SEL);
+                style = style.bg(sel_bg);
             }
             if is_secondary_cursor {
                 style = style.add_modifier(Modifier::REVERSED);
@@ -392,6 +411,30 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // --- small buffer helpers ------------------------------------------------------
+
+/// Resolve syntax spans into a per-char style vector; for overlapping spans the **shortest**
+/// (most specific) wins, which sidesteps tree-sitter capture-precedence subtleties.
+fn resolve_line_styles(
+    spans: &[HighlightSpan],
+    line_len: usize,
+    theme: &Theme,
+) -> Vec<Option<Style>> {
+    let mut styles: Vec<Option<Style>> = vec![None; line_len];
+    let mut best_len: Vec<usize> = vec![usize::MAX; line_len];
+    for span in spans {
+        let Some(style) = theme.style_for(&span.capture) else {
+            continue;
+        };
+        let len = span.end.saturating_sub(span.start);
+        for i in span.start..span.end.min(line_len) {
+            if len < best_len[i] {
+                best_len[i] = len;
+                styles[i] = Some(style);
+            }
+        }
+    }
+    styles
+}
 
 fn char_cells(ch: char, col: usize, tab_width: usize) -> usize {
     if ch == '\t' {

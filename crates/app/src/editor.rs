@@ -45,6 +45,8 @@ pub struct EditorState {
     pub pending_opens: Vec<PathBuf>,
     /// Active modal overlay, if any.
     pub overlay: Option<Overlay>,
+    /// Per-document syntax highlighters (created lazily for supported languages).
+    pub highlighters: HashMap<DocId, editor_syntax::DocHighlighter>,
 }
 
 impl EditorState {
@@ -61,7 +63,35 @@ impl EditorState {
             pending_commands: Vec::new(),
             pending_opens: Vec::new(),
             overlay: None,
+            highlighters: HashMap::new(),
         }
+    }
+
+    /// Refresh the active document's syntax highlighting for the visible line range.
+    /// Cheap when nothing changed (the highlighter caches by revision + range).
+    pub fn update_highlights(&mut self, viewport_height: usize) {
+        let Some(id) = self.workspace.active_doc() else {
+            return;
+        };
+        let Some(doc) = self.workspace.documents.get(id) else {
+            return;
+        };
+        let Some(lang) = doc.language.clone() else {
+            return;
+        };
+        if !editor_syntax::is_supported(&lang) {
+            return;
+        }
+        let rev = doc.revision;
+        let first = doc.view.scroll_line;
+        let last = (first + viewport_height).min(doc.len_lines().saturating_sub(1));
+        let rope = doc.text.clone(); // O(1): ropey is copy-on-write
+
+        let entry = self.highlighters.entry(id);
+        let hl = entry.or_insert_with(|| {
+            editor_syntax::DocHighlighter::new(&lang).expect("language checked as supported")
+        });
+        hl.ensure(&rope, rev, first, last);
     }
 
     pub fn active_document(&self) -> Option<&Document> {

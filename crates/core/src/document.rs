@@ -71,6 +71,8 @@ pub struct Document {
     pub encoding: Encoding,
     pub line_ending: LineEnding,
     pub tab_width: usize,
+    /// Monotonic counter bumped on every text mutation (drives syntax re-parse caching).
+    pub revision: u64,
     /// Last-known on-disk fingerprint (for external-change reconciliation).
     pub disk: DiskFingerprint,
     /// Set when the disk copy changed under a dirty buffer — a conflict to resolve.
@@ -101,6 +103,7 @@ impl Document {
             encoding: Encoding::default(),
             line_ending,
             tab_width: 4,
+            revision: 0,
             disk: DiskFingerprint::default(),
             external_conflict: None,
             externally_reloaded: false,
@@ -174,6 +177,7 @@ impl Document {
         let e = end.min(self.len_chars());
         if s < e {
             self.text.remove(s..e);
+            self.revision = self.revision.wrapping_add(1);
         }
     }
 
@@ -181,11 +185,13 @@ impl Document {
     pub(crate) fn apply_raw_insert(&mut self, at: usize, text: &str) {
         let a = at.min(self.len_chars());
         self.text.insert(a, text);
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Replace the whole buffer (external reload path).
     pub fn set_text(&mut self, rope: Rope) {
         self.text = rope;
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Overwrite the current selection set.

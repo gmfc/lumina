@@ -10,3 +10,8 @@ name = "editor_syntax"
 
 [dependencies]
 editor-core = { path = "../core" }
+ropey.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-json.workspace = true
+streaming-iterator.workspace = true

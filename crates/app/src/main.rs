@@ -6,6 +6,7 @@ mod app;
 mod editor;
 mod files;
 mod input;
+mod theme;
 mod ui;
 
 use std::io;

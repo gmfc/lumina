@@ -34,6 +34,8 @@ pub struct App {
     pub page_height: usize,
     /// Screen regions from the last rendered frame (for mouse hit-testing).
     pub regions: Regions,
+    /// The active color theme (syntax + chrome).
+    pub theme: crate::theme::Theme,
     /// Char offset where the current drag began (selection anchor).
     drag_anchor: Option<usize>,
     /// Last click for multi-click detection.
@@ -60,12 +62,16 @@ impl App {
             }
         }
 
+        let truecolor = crate::theme::truecolor_supported();
+        let mut theme = crate::theme::Theme::default_dark(truecolor);
+        theme.load_user_overrides();
         Ok(App {
             editor,
             registry,
             quit: false,
             page_height: 20,
             regions: Regions::default(),
+            theme,
             drag_anchor: None,
             last_click: None,
         })
@@ -73,6 +79,7 @@ impl App {
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.quit {
+            self.editor.update_highlights(self.page_height);
             terminal.draw(|f| ui::draw(f, self))?;
 
             if event::poll(Duration::from_millis(16))? {
@@ -694,6 +701,26 @@ mod tests {
         app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 8, 0));
         let sel = app.editor.active_document().unwrap().selections.primary();
         assert_eq!((sel.from(), sel.to()), (4, 7)); // "bar"
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn rust_file_gets_syntax_highlighting() {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut path = std::env::temp_dir();
+        path.push(format!("lumina_hl_{}_{}.rs", std::process::id(), n));
+        std::fs::write(&path, "fn main() {\n    let x = 42;\n}\n").unwrap();
+        let mut app = app_with(&path);
+        app.page_height = 24;
+        app.editor.update_highlights(app.page_height);
+        let id = app.editor.workspace.active_doc().unwrap();
+        let hl = app.editor.highlighters.get(&id).expect("no highlighter");
+        assert!(
+            hl.line_spans(0)
+                .iter()
+                .any(|s| s.capture.starts_with("keyword")),
+            "expected a keyword span on the fn line"
+        );
         std::fs::remove_file(&path).ok();
     }
 
