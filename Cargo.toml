@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/syntax",
+    "crates/plugin",
+    "crates/builtins",
+    "crates/app",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# core
+ropey = "1.6"
+unicode-width = "0.2"
+unicode-segmentation = "1.11"
+slotmap = "1.0"
+# terminal / ui
+crossterm = "0.28"
+ratatui = "0.29"
+# search / fs
+regex = "1.10"
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+notify = "6.1"
+notify-debouncer-full = "0.3"
+# syntax
+tree-sitter = "0.24"
+tree-sitter-highlight = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-json = "0.24"
+# util
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+directories = "5.0"
+anyhow = "1.0"
+seahash = "4.1"
+imara-diff = "0.1"
+# internal
+editor-core = { path = "crates/core" }
+editor-syntax = { path = "crates/syntax" }
+editor-plugin = { path = "crates/plugin" }
+editor-builtins = { path = "crates/builtins" }
+# dev
+proptest = "1.5"

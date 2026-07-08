@@ -1,0 +1,84 @@
+# Repo path: .github/workflows/ci.yml
+#
+# The enforcement backbone. The fmt / clippy / test / msrv jobs are green from commit 1
+# (property tests are gated OFF by default, so they don't block the empty workspace).
+# The `proptests` job is a scaffold: uncomment each line at the phase where its subject
+# type exists — see the header of each test file under crates/*/tests/.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy (-D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Default features → property-test bodies are cfg'd out → compiles clean.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  msrv:
+    name: minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Raise this to whatever your dependency floor requires (wasmtime, ratatui, etc.).
+      # 1.85.0 is the edition-2024 baseline.
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace
+
+  proptests:
+    name: property tests (activated per phase)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Each property suite is gated behind its crate's `proptests` feature so the
+      # workspace stays green from commit 1. Uncomment the matching line when you reach
+      # that phase (the type it tests will exist and the suite will start enforcing):
+      #
+      # - run: cargo test -p editor-core --features proptests --test transaction_roundtrip --test selection_invariants   # Phase 2
+      # - run: cargo test -p editor-core --features proptests --test coordinate_mapping                                  # Phase 3
+      # - run: cargo test -p editor-builtins --features proptests --test self_hosting                                    # Phase 7
+      - run: echo "No property suites activated yet — uncomment the lines above per phase (see each test's header)."
