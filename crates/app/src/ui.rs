@@ -662,20 +662,32 @@ fn header_seg_style(hit: crate::terminal::HeaderHit, active: usize, focused: boo
 fn render_terminal_content(f: &mut Frame, app: &App, area: Rect) {
     let focused = app.editor.focus == Focus::Panel;
     let Some(term) = app.panel.active_terminal() else {
-        let buf = f.buffer_mut();
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                if let Some(cell) = cell_at(buf, x, y) {
-                    cell.set_char(' ');
-                    cell.set_style(Style::default());
-                }
-            }
-        }
+        fill_blank(f.buffer_mut(), area);
         return;
     };
     let screen = term.screen();
+    // Only show the cursor at the live view: `cursor_position()` is the live cursor, which does
+    // not correspond to the grid the user sees while scrolled into history.
+    let show_cursor = focused && term.at_live();
+    draw_terminal_grid(f.buffer_mut(), screen, area);
+    place_terminal_cursor(f, screen, area, show_cursor);
+}
+
+/// Fill `area` with blank cells (the panel is open but has no active shell).
+fn fill_blank(buf: &mut ratatui::buffer::Buffer, area: Rect) {
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if let Some(cell) = cell_at(buf, x, y) {
+                cell.set_char(' ');
+                cell.set_style(Style::default());
+            }
+        }
+    }
+}
+
+/// Draw a `vt100` screen grid into `area`, one buffer cell per grid cell.
+fn draw_terminal_grid(buf: &mut ratatui::buffer::Buffer, screen: &vt100::Screen, area: Rect) {
     let (grid_rows, grid_cols) = screen.size();
-    let buf = f.buffer_mut();
     for row in 0..area.height.min(grid_rows) {
         for col in 0..area.width.min(grid_cols) {
             let Some(src) = screen.cell(row, col) else {
@@ -684,22 +696,20 @@ fn render_terminal_content(f: &mut Frame, app: &App, area: Rect) {
             let Some(dst) = cell_at(buf, area.x + col, area.y + row) else {
                 continue;
             };
-            let text = src.contents();
-            dst.set_char(if text.is_empty() {
-                ' '
-            } else {
-                text.chars().next().unwrap_or(' ')
-            });
+            dst.set_char(src.contents().chars().next().unwrap_or(' '));
             dst.set_style(terminal_cell_style(src));
         }
     }
-    // Only show the cursor at the live view: `cursor_position()` is the live cursor, which does
-    // not correspond to the grid the user sees while scrolled into history.
-    if focused && term.at_live() && !screen.hide_cursor() {
-        let (crow, ccol) = screen.cursor_position();
-        if crow < area.height && ccol < area.width {
-            f.set_cursor_position(Position::new(area.x + ccol, area.y + crow));
-        }
+}
+
+/// Place the hardware cursor at the shell's cursor position when `show` (focused, live view).
+fn place_terminal_cursor(f: &mut Frame, screen: &vt100::Screen, area: Rect, show: bool) {
+    if !show || screen.hide_cursor() {
+        return;
+    }
+    let (crow, ccol) = screen.cursor_position();
+    if crow < area.height && ccol < area.width {
+        f.set_cursor_position(Position::new(area.x + ccol, area.y + crow));
     }
 }
 
