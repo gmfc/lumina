@@ -79,6 +79,13 @@ pub enum Command {
     Palette,
     QuickOpen,
     GotoLine,
+    // terminal panel
+    ToggleTerminal,
+    NewTerminal,
+    CloseTerminal,
+    MinimizeTerminal,
+    NextTerminal,
+    PrevTerminal,
     // registry command by id (plugin-contributed)
     Run(String),
     Quit,

@@ -17,6 +17,8 @@ editor-plugin = { path = "../plugin" }
 editor-builtins = { path = "../builtins" }
 crossterm.workspace = true
 ratatui.workspace = true
+portable-pty.workspace = true
+vt100.workspace = true
 anyhow.workspace = true
 unicode-width.workspace = true
 toml.workspace = true

@@ -23,6 +23,10 @@ slotmap = "1.0"
 # terminal / ui
 crossterm = "0.28"
 ratatui = "0.29"
+portable-pty = "0.9"
+# vt100 0.15.x depends on unicode-width 0.1, which coexists with ratatui 0.29's pinned
+# unicode-width 0.2 (0.16.x would force a 0.2.1+ bump that ratatui's `=0.2.0` forbids).
+vt100 = "0.15"
 # search / fs
 regex = "1.10"
 ignore = "0.4"
