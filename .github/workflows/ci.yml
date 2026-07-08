@@ -61,9 +61,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Raise this to whatever your dependency floor requires (wasmtime, ratatui, etc.).
-      # 1.85.0 is the edition-2024 baseline.
-      - uses: dtolnay/rust-toolchain@1.85.0
+      # The dependency floor (darling, via serde/rhai derive macros) requires 1.88.
+      - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace
 
