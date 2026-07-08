@@ -47,6 +47,8 @@ pub enum Command {
     // files / tabs
     OpenFile(PathBuf),
     Save,
+    SaveAs,
+    NewFile,
     CloseTab,
     NextTab,
     PrevTab,

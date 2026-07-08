@@ -35,7 +35,8 @@ cargo run -p editor-app -- <path>     # or: cargo run --bin lumina -- <path>
 
 `Ctrl+P` quick-open · `Ctrl+Shift+P` command palette · `Ctrl+F`/`Ctrl+H` find/replace ·
 `Ctrl+Shift+F` project search · `Ctrl+B` toggle sidebar · `Ctrl+D` add cursor at next match ·
-`Alt+Click` add cursor · `Ctrl+G` go to line · `Ctrl+S` save · `Ctrl+Q` quit.
+`Alt+Click` add cursor · `Ctrl+G` go to line · `Ctrl+S` save · `Ctrl+K Ctrl+S` save as ·
+`Ctrl+N` new file · `Ctrl+Q` quit.
 
 ## Configuration
 

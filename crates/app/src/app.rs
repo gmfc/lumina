@@ -580,6 +580,26 @@ impl App {
                 }
                 _ => {}
             },
+            crate::editor::Overlay::SaveAsInput { mut buffer } => match key.code {
+                KeyCode::Esc => self.editor.overlay = None,
+                KeyCode::Enter => {
+                    self.editor.overlay = None;
+                    self.save_as_to(&buffer);
+                }
+                KeyCode::Backspace => {
+                    buffer.pop();
+                    self.editor.overlay = Some(crate::editor::Overlay::SaveAsInput { buffer });
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    buffer.push(c);
+                    self.editor.overlay = Some(crate::editor::Overlay::SaveAsInput { buffer });
+                }
+                _ => {}
+            },
         }
     }
 
@@ -1453,7 +1473,9 @@ impl App {
             }),
 
             // --- files / tabs ---
-            Command::Save => self.save_active(),
+            Command::Save => self.save_or_save_as(),
+            Command::SaveAs => self.open_save_as(),
+            Command::NewFile => self.new_file(),
             Command::OpenFile(p) => self.open_path(&p),
             Command::CloseTab => self.request_close(self.editor.workspace.active_tab),
             Command::NextTab => self.cycle_tab(1),
@@ -1579,6 +1601,66 @@ impl App {
                 self.editor.status_message = Some(format!("Open failed: {e}"));
             }
         }
+    }
+
+    /// Save the active document, falling back to the Save As prompt when it has no path yet
+    /// (plan §1.5 — resolves the old "Save As not yet wired" gap).
+    fn save_or_save_as(&mut self) {
+        let has_path = self
+            .editor
+            .active_document()
+            .map(|d| d.path.is_some())
+            .unwrap_or(false);
+        if has_path {
+            self.save_active();
+        } else {
+            self.open_save_as();
+        }
+    }
+
+    /// Open the Save As overlay, seeded with the current path (if any).
+    fn open_save_as(&mut self) {
+        if self.editor.active_document().is_none() {
+            return;
+        }
+        let initial = self
+            .editor
+            .active_document()
+            .and_then(|d| d.path.as_ref())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.editor.overlay = Some(crate::editor::Overlay::SaveAsInput { buffer: initial });
+    }
+
+    /// Point the active document at `raw` (resolved against the project root when relative),
+    /// refresh its language, and write it (plan §1.5).
+    fn save_as_to(&mut self, raw: &str) {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return;
+        }
+        let mut path = PathBuf::from(raw);
+        if path.is_relative() {
+            path = self.editor.workspace.root.join(path);
+        }
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
+            doc.path = Some(path.clone());
+            doc.language = files::language_for(&path);
+        }
+        // Drop any stale highlighter so it re-creates for the (possibly new) language.
+        self.editor.highlighters.remove(&id);
+        self.save_active();
+    }
+
+    /// Open a fresh, empty, untitled buffer (plan §1.5).
+    fn new_file(&mut self) {
+        let mut doc = Document::from_str("");
+        doc.set_caret(0);
+        self.editor.workspace.open_document(doc);
+        self.editor.focus = Focus::Editor;
     }
 
     fn save_active(&mut self) {
@@ -1841,6 +1923,72 @@ mod tests {
             app.editor.active_document().unwrap().to_string(),
             "fn f() {\n}"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn new_file_opens_clean_untitled_buffer() {
+        let path = temp_file("hello\n");
+        let mut app = app_with(&path);
+        let before = app.editor.workspace.tabs.len();
+        app.dispatch(Command::NewFile);
+        assert_eq!(app.editor.workspace.tabs.len(), before + 1);
+        let doc = app.editor.active_document().unwrap();
+        assert_eq!(doc.to_string(), "");
+        assert!(!doc.dirty, "a fresh buffer is not dirty");
+        assert!(doc.path.is_none(), "untitled has no path");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn save_as_writes_new_path_and_updates_document() {
+        let src = temp_file("x\n");
+        let mut app = app_with(&src);
+        let target = std::env::temp_dir().join(format!("lumina_saveas_{}.rs", std::process::id()));
+        std::fs::remove_file(&target).ok();
+        // New untitled buffer with content, then Save As to the target path.
+        app.dispatch(Command::NewFile);
+        app.dispatch(Command::InsertText("fn main() {}".into()));
+        app.save_as_to(&target.to_string_lossy());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "fn main() {}");
+        let doc = app.editor.active_document().unwrap();
+        assert_eq!(doc.path.as_deref(), Some(target.as_path()));
+        assert_eq!(doc.language.as_deref(), Some("rust")); // .rs → language picked up
+        assert!(!doc.dirty, "clean after save");
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&target).ok();
+    }
+
+    #[test]
+    fn new_file_and_save_as_key_bindings_resolve() {
+        use crossterm::event::KeyModifiers;
+        let path = temp_file("hello\n");
+        let mut app = app_with(&path);
+        let before = app.editor.workspace.tabs.len();
+        // ctrl+n → new untitled buffer.
+        app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(app.editor.workspace.tabs.len(), before + 1);
+        assert!(app.editor.active_document().unwrap().path.is_none());
+        // ctrl+k ctrl+s (multi-chord) → Save As overlay, and does NOT clobber plain ctrl+s.
+        app.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(matches!(
+            app.editor.overlay,
+            Some(crate::editor::Overlay::SaveAsInput { .. })
+        ));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn save_untitled_falls_back_to_save_as_prompt() {
+        let path = temp_file("hello\n");
+        let mut app = app_with(&path);
+        app.dispatch(Command::NewFile); // untitled, no path
+        app.dispatch(Command::Save); // should open the Save As overlay, not error
+        assert!(matches!(
+            app.editor.overlay,
+            Some(crate::editor::Overlay::SaveAsInput { .. })
+        ));
         std::fs::remove_file(&path).ok();
     }
 

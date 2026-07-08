@@ -58,6 +58,8 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "cursor.addNextMatch" => Command::AddCursorAtNextMatch,
         // files / tabs
         "file.save" => Command::Save,
+        "file.saveAs" => Command::SaveAs,
+        "file.new" => Command::NewFile,
         "tab.close" => Command::CloseTab,
         "tab.next" => Command::NextTab,
         "tab.prev" => Command::PrevTab,
@@ -99,6 +101,8 @@ pub fn command_for_id(id: &str) -> Option<Command> {
 pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
     &[
         ("file.save", "File: Save"),
+        ("file.saveAs", "File: Save As…"),
+        ("file.new", "File: New File"),
         ("tab.close", "Tab: Close"),
         ("tab.next", "Tab: Next"),
         ("tab.prev", "Tab: Previous"),
@@ -143,6 +147,11 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
     &[
         ("ctrl+q", "app.quit"),
         ("ctrl+s", "file.save"),
+        // SPEC-NOTE: the spec suggests `ctrl+shift+s`, but this keymap folds shift into the
+        // char for letter keys (keymap.rs), so `ctrl+shift+s` is indistinguishable from
+        // `ctrl+s` and would clobber Save. Use a non-colliding multi-chord instead.
+        ("ctrl+k ctrl+s", "file.saveAs"),
+        ("ctrl+n", "file.new"),
         ("ctrl+w", "tab.close"),
         ("ctrl+b", "view.toggleSidebar"),
         ("ctrl+z", "edit.undo"),
