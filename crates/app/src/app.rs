@@ -45,8 +45,8 @@ pub struct App {
     pub pending: Vec<crate::keymap::Chord>,
     /// User configuration.
     pub config: crate::config::Config,
-    /// Internal clipboard register (works even without a system clipboard).
-    clipboard: String,
+    /// System clipboard (with OSC 52 + internal-register fallbacks).
+    clipboard: crate::clipboard::Clipboard,
     /// Char offset where the current drag began (selection anchor).
     drag_anchor: Option<usize>,
     /// Last click for multi-click detection.
@@ -143,7 +143,7 @@ impl App {
             keymap,
             pending: Vec::new(),
             config,
-            clipboard: String::new(),
+            clipboard: crate::clipboard::Clipboard::new(),
             drag_anchor: None,
             last_click: None,
             worker_tx,
@@ -1126,7 +1126,7 @@ impl App {
             Command::AddCursorBelow => self.add_cursor_vertical(1),
             Command::Paste(s) => {
                 let text = if s.is_empty() {
-                    self.clipboard.clone()
+                    self.clipboard.get()
                 } else {
                     s
                 };
@@ -1167,12 +1167,12 @@ impl App {
             // --- clipboard ---
             Command::Copy => {
                 if let Some(t) = self.selection_text() {
-                    self.clipboard = t;
+                    self.clipboard.set(t);
                 }
             }
             Command::Cut => {
                 if let Some(t) = self.selection_text() {
-                    self.clipboard = t;
+                    self.clipboard.set(t);
                     self.with_doc(edit::delete_backward);
                 }
             }
