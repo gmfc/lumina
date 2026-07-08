@@ -2361,4 +2361,249 @@ mod tests {
         assert_eq!(app.editor.active_document().unwrap().view.scroll_line, 0);
         std::fs::remove_file(&path).ok();
     }
+
+    // ---- rendering -----------------------------------------------------------
+
+    fn render_to_string(app: &mut App, w: u16, h: u16) -> String {
+        use ratatui::{backend::TestBackend, Terminal};
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn renders_editor_with_all_decorations() {
+        // A .rs file (so syntax highlighting runs) with a tab, a wide char, and a
+        // repeated word to exercise selection, multi-cursor, find and diagnostics paths.
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut path = std::env::temp_dir();
+        path.push(format!("lumina_render_{}_{}.rs", std::process::id(), n));
+        std::fs::write(&path, "fn foo() {\n\tlet w = foo; // 世界\n    foo();\n}\n").unwrap();
+        let mut app = app_with(&path);
+        app.page_height = 12;
+        app.editor.update_highlights(app.page_height);
+
+        // Non-empty selection + a secondary caret (exercises selection-bg + secondary-cursor).
+        app.editor.active_document_mut().unwrap().set_caret(0);
+        app.dispatch(Command::AddCursorBelow);
+        app.dispatch(Command::SelectWord);
+
+        // Active find with matches (exercises the match-highlight path).
+        app.dispatch(Command::FindOpen);
+        for c in "foo".chars() {
+            app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+
+        // A diagnostic on line 0 (exercises the gutter marker + underline).
+        let id = app.editor.workspace.active_doc().unwrap();
+        app.editor.diagnostics.insert(
+            id,
+            vec![editor_lsp::Diagnostic {
+                line: 0,
+                start_char16: 3,
+                end_line: 0,
+                end_char16: 6,
+                severity: editor_lsp::Severity::Error,
+                message: String::new(),
+            }],
+        );
+
+        // Viewport taller than the 4-line doc → past-EOF tildes render too.
+        let text = render_to_string(&mut app, 48, 12);
+        assert!(text.contains('~'), "expected past-EOF tildes below the doc");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn renders_welcome_when_no_document_is_open() {
+        let path = temp_file("x");
+        let mut app = app_with(&path);
+        app.dispatch(Command::CloseTab); // close the only (clean) tab
+        assert!(app.editor.active_document().is_none());
+        let text = render_to_string(&mut app, 40, 10);
+        assert!(text.contains("lumina"), "welcome screen shows the app name");
+        std::fs::remove_file(&path).ok();
+    }
+
+    // ---- mouse routing -------------------------------------------------------
+
+    #[test]
+    fn middle_click_closes_a_tab() {
+        let p1 = temp_file("one");
+        let p2 = temp_file("two");
+        let mut app = app_with(&p1);
+        app.open_path(&p2);
+        assert_eq!(app.editor.workspace.tabs.len(), 2);
+        app.regions.tabs = Rect::new(0, 0, 80, 1);
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Middle), 2, 0));
+        assert_eq!(app.editor.workspace.tabs.len(), 1);
+        std::fs::remove_file(&p1).ok();
+        std::fs::remove_file(&p2).ok();
+    }
+
+    #[test]
+    fn left_drag_extends_selection() {
+        let path = temp_file("hello world");
+        let mut app = app_with(&path);
+        app.regions.editor = Rect::new(0, 0, 80, 24);
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 4, 0)); // set drag anchor
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 12, 0)); // extend
+        let sel = app.editor.active_document().unwrap().selections.primary();
+        assert_ne!(
+            sel.from(),
+            sel.to(),
+            "drag should build a non-empty selection"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn tab_click_then_drag_reorders() {
+        let p1 = temp_file("one");
+        let p2 = temp_file("two");
+        let mut app = app_with(&p1);
+        app.open_path(&p2);
+        app.regions.tabs = Rect::new(0, 0, 80, 1);
+        // Press a tab (arms the drag), then drag along the bar (reorders if over a new tab).
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 1, 0));
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 40, 0));
+        assert_eq!(app.editor.workspace.tabs.len(), 2); // reorder never drops a tab
+        std::fs::remove_file(&p1).ok();
+        std::fs::remove_file(&p2).ok();
+    }
+
+    #[test]
+    fn mouse_up_clears_drag_state() {
+        let path = temp_file("hello");
+        let mut app = app_with(&path);
+        app.regions.editor = Rect::new(0, 0, 80, 24);
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 4, 0));
+        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 0));
+        assert!(app.drag_anchor.is_none());
+        assert!(app.tab_drag.is_none());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn sidebar_click_focuses_sidebar() {
+        let dir = temp_dir_with_files();
+        let mut app = app_with(&dir);
+        app.regions.sidebar = Some(Rect::new(0, 0, 20, 24));
+        app.regions.editor = Rect::new(20, 0, 60, 24);
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
+        assert_eq!(app.editor.focus, Focus::Sidebar);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- key routing ---------------------------------------------------------
+
+    #[test]
+    fn modal_keys_route_to_active_modal() {
+        let path = temp_file("hello world");
+        let mut app = app_with(&path);
+        // find
+        app.dispatch(Command::FindOpen);
+        assert!(app.editor.find.is_some());
+        app.on_key(KeyEvent::from(KeyCode::Char('h')));
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        // picker
+        app.open_palette();
+        assert!(app.editor.picker.is_some());
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        // search
+        app.open_search();
+        assert!(app.search.is_some());
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        // overlay (confirm-close prompt on a dirty tab)
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.dispatch(Command::InsertChar('!'));
+        app.dispatch(Command::CloseTab);
+        assert!(app.editor.overlay.is_some());
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn sidebar_keys_drive_explorer_then_escape() {
+        let dir = temp_dir_with_files();
+        let mut app = app_with(&dir);
+        app.editor.focus = Focus::Sidebar;
+        // Arrow/enter keys map to explorer commands via the sidebar keymap.
+        app.on_key(KeyEvent::from(KeyCode::Down)); // explorer.down
+        app.on_key(KeyEvent::from(KeyCode::Up)); // explorer.up
+        app.on_key(KeyEvent::from(KeyCode::Right)); // explorer.expand
+        app.on_key(KeyEvent::from(KeyCode::Left)); // explorer.collapse
+        app.on_key(KeyEvent::from(KeyCode::Enter)); // explorer.activate
+                                                    // revealActiveFile has no arrow binding; drive it directly through the registry.
+        app.registry
+            .dispatch_command("explorer.revealActiveFile", &mut app.editor);
+        // Esc returns focus to the editor.
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.editor.focus, Focus::Editor);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_commands_request_at_cursor() {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut path = std::env::temp_dir();
+        path.push(format!("lumina_lsp_{}_{}.rs", std::process::id(), n));
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let mut app = app_with(&path);
+        // A .rs doc resolves lsp_position, so each command reaches its request arm.
+        app.dispatch(Command::Hover);
+        app.dispatch(Command::GotoDefinition);
+        app.dispatch(Command::Completion);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn plugin_actions_dispatch_all_kinds() {
+        // A Rhai plugin that returns one of every action kind, with the capabilities to
+        // exercise each arm of the runtime's action dispatcher.
+        let manifest = "id = \"multi\"\ncapabilities = [\"edit\", \"ui\", \"fs:read\"]\n\
+                        [[commands]]\nid = \"multi.go\"\ntitle = \"Multi\"\n";
+        let script = "fn on_command(id, ctx) { [ \
+                      #{ action: \"insert\", text: \"I\" }, \
+                      #{ action: \"replace_selection\", text: \"R\" }, \
+                      #{ action: \"replace_line\", text: \"L\" }, \
+                      #{ action: \"notify\", message: \"hi\" }, \
+                      #{ action: \"run\", command: \"view.toggleTheme\" }, \
+                      #{ action: \"set_panel\", panel: \"multi.panel\", lines: [\"x\", \"y\"] } \
+                      ] }";
+        let (dir, file) = temp_project_with_plugin("multi", manifest, script, "hello world");
+        let mut app = app_with(&file);
+        assert!(app.registry.command_ids().any(|c| c == "multi.go"));
+        app.exec_id("multi.go");
+        // The set_panel action ran (its panel is now populated); the others ran without error.
+        assert!(app.editor.panels.contains_key("multi.panel"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn explorer_commands_navigate_toggle_and_reveal() {
+        let dir = temp_dir_with_files();
+        let mut app = app_with(&dir);
+        // Open a file so the active document has a path for reveal-active-file to resolve.
+        app.open_path(&dir.join("a.txt"));
+        // Drive every explorer command through the registry (its run_command dispatcher).
+        for id in [
+            "explorer.down",
+            "explorer.up",
+            "explorer.expand",
+            "explorer.collapse",
+            "explorer.activate",
+            "explorer.revealActiveFile",
+        ] {
+            app.registry.dispatch_command(id, &mut app.editor);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

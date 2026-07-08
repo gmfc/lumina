@@ -370,4 +370,39 @@ mod tests {
         denied.apply_actions(&json!([{ "action": "insert", "text": "X" }]), &mut host);
         assert_eq!(host.text(id), "unchanged", "deny-by-default was bypassed");
     }
+
+    #[test]
+    fn granted_capabilities_dispatch_every_action_kind() {
+        let (engine, module) = empty_module();
+        let plugin = WasmPlugin {
+            id: "multi".into(),
+            contributions: Contributions::default(),
+            capabilities: vec!["edit".into(), "ui".into(), "fs:read".into()],
+            command_ids: Vec::new(),
+            panel_ids: Vec::new(),
+            engine,
+            module,
+        };
+        let (mut host, id) = TestHost::with_doc("hello world");
+        // Every action kind reaches its handler: the edit group flows through apply_edit,
+        // and notify / open / run each hit their own arm.
+        plugin.apply_actions(
+            &json!([
+                { "action": "insert", "text": "I" },
+                { "action": "replace_selection", "text": "R" },
+                { "action": "replace_line", "text": "L" },
+                { "action": "notify", "message": "hi" },
+                { "action": "open", "path": "/tmp/ignored-by-test-host" },
+                { "action": "run", "command": "noop" },
+                { "action": "unknown-kind" }
+            ]),
+            &mut host,
+        );
+        // A non-array payload is ignored (early return in apply_actions).
+        plugin.apply_actions(&json!({ "not": "an array" }), &mut host);
+        // apply_edit's fallback arm (a kind outside the three) is a no-op.
+        apply_edit("bogus", &mut host, "Z");
+        // The edit actions ran, so the buffer changed from its initial contents.
+        assert_ne!(host.text(id), "hello world");
+    }
 }
