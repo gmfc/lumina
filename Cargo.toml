@@ -45,6 +45,7 @@ directories = "5.0"
 anyhow = "1.0"
 seahash = "4.1"
 imara-diff = "0.1"
+rhai = "1.19"
 # internal
 editor-core = { path = "crates/core" }
 editor-syntax = { path = "crates/syntax" }

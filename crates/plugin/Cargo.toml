@@ -13,3 +13,6 @@ proptests = []
 
 [dependencies]
 editor-core = { path = "../core" }
+rhai = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }

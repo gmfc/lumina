@@ -78,7 +78,13 @@ impl App {
         let (root, open_file) = resolve_arg(arg);
         let mut editor = EditorState::new(root);
 
-        let mut registry = Registry::with_plugins(editor_builtins::all_builtins());
+        // Built-in plugins + any external (script) plugins from the plugins dirs. Both
+        // register through the same Registry — the external tier has no special path.
+        let mut plugins = editor_builtins::all_builtins();
+        for dir in external_plugin_dirs(&editor.workspace.root) {
+            plugins.extend(editor_plugin::runtime::load_dir(&dir));
+        }
+        let mut registry = Registry::with_plugins(plugins);
         registry.activate_all(&mut editor);
 
         if let Some(file) = open_file {
@@ -1304,6 +1310,17 @@ fn chords_label(chords: &[Chord]) -> String {
         .join(" ")
 }
 
+/// Directories to scan for external plugins: the user config dir and the project-local
+/// `.lumina/plugins` folder.
+fn external_plugin_dirs(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(pd) = directories::ProjectDirs::from("", "", "lumina") {
+        dirs.push(pd.config_dir().join("plugins"));
+    }
+    dirs.push(root.join(".lumina").join("plugins"));
+    dirs
+}
+
 /// Find the next occurrence of `needle` in `chars` at/after `from`, wrapping to the start.
 fn find_next_occurrence(chars: &[char], needle: &[char], from: usize) -> Option<(usize, usize)> {
     let n = chars.len();
@@ -1856,6 +1873,81 @@ mod tests {
         app.exec_id("view.toggleTheme");
         assert_ne!(app.theme.is_dark(), was_dark);
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Create a project dir containing a `.lumina/plugins/<id>` plugin and a file to open.
+    fn temp_project_with_plugin(
+        id: &str,
+        manifest: &str,
+        script: &str,
+        file_contents: &str,
+    ) -> (PathBuf, PathBuf) {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("lumina_plugin_{}_{}", std::process::id(), n));
+        let pdir = dir.join(".lumina").join("plugins").join(id);
+        std::fs::create_dir_all(&pdir).unwrap();
+        std::fs::write(pdir.join("plugin.toml"), manifest).unwrap();
+        std::fs::write(pdir.join("main.rhai"), script).unwrap();
+        let file = dir.join("doc.txt");
+        std::fs::write(&file, file_contents).unwrap();
+        (dir, file)
+    }
+
+    #[test]
+    fn external_plugin_registers_and_edits_through_host() {
+        let manifest = "id = \"shout\"\ncapabilities = [\"edit\"]\n\
+                        [[commands]]\nid = \"shout.line\"\ntitle = \"Shout\"\n";
+        let script = "fn on_command(id, ctx) { \
+                      [ #{ action: \"replace_line\", text: ctx.line_text.to_upper() } ] }";
+        let (dir, file) = temp_project_with_plugin("shout", manifest, script, "hello world");
+        let mut app = app_with(&file);
+        // The plugin registered its command through the same registry as built-ins.
+        assert!(app.registry.command_ids().any(|c| c == "shout.line"));
+        // Running it edits the buffer via a transaction (undoable).
+        app.exec_id("shout.line");
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "HELLO WORLD"
+        );
+        app.dispatch(Command::Undo);
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "hello world"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn capability_gating_blocks_ungranted_edit() {
+        // Same plugin, but WITHOUT the "edit" capability → the edit action is dropped.
+        let manifest = "id = \"shout\"\ncapabilities = []\n\
+                        [[commands]]\nid = \"shout.line\"\ntitle = \"Shout\"\n";
+        let script = "fn on_command(id, ctx) { \
+                      [ #{ action: \"replace_line\", text: ctx.line_text.to_upper() } ] }";
+        let (dir, file) = temp_project_with_plugin("shout", manifest, script, "hello world");
+        let mut app = app_with(&file);
+        app.exec_id("shout.line");
+        assert_eq!(
+            app.editor.active_document().unwrap().to_string(),
+            "hello world",
+            "plugin without the edit capability must not modify the buffer"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn external_plugin_draws_a_panel() {
+        let manifest = "id = \"insp\"\ncapabilities = [\"ui\"]\n\
+                        [[panels]]\nid = \"insp.panel\"\ntitle = \"Inspector\"\nlocation = \"sidebar\"\n";
+        let script = "fn render_panel(id, ctx) { [ \"cursor line: \" + ctx.cursor_line ] }";
+        let (dir, file) = temp_project_with_plugin("insp", manifest, script, "a\nb\nc");
+        let mut app = app_with(&file);
+        assert!(app.registry.panel_ids().any(|p| p == "insp.panel"));
+        app.registry.render_panel("insp.panel", &mut app.editor);
+        let panel = app.editor.panels.get("insp.panel").expect("panel not set");
+        assert!(panel.lines[0].spans[0].text.contains("cursor line:"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

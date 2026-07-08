@@ -1,0 +1,15 @@
+# Example external plugin: uppercases the current line.
+# Copy this folder into <config>/lumina/plugins/ or <project>/.lumina/plugins/ to load it.
+id = "shout"
+name = "Shout"
+entry = "main.rhai"
+# Deny-by-default: this plugin is granted only buffer editing.
+capabilities = ["edit", "ui"]
+
+[[commands]]
+id = "shout.line"
+title = "Shout: Uppercase Current Line"
+
+[[keybindings]]
+chord = "ctrl+k ctrl+u"
+command = "shout.line"

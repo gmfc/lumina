@@ -13,6 +13,7 @@ pub mod contribution;
 pub mod event;
 pub mod host;
 pub mod registry;
+pub mod runtime;
 
 pub use contribution::CommandSpec;
 pub use contribution::{
