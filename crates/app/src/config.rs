@@ -52,43 +52,56 @@ impl Config {
         let mut cfg = Config::default();
 
         if let Some(settings) = value.get("settings").and_then(|v| v.as_table()) {
-            if let Some(n) = settings.get("tab_width").and_then(|v| v.as_integer()) {
-                cfg.tab_width = n.clamp(1, 16) as usize;
-            }
-            if let Some(n) = settings.get("sidebar_width").and_then(|v| v.as_integer()) {
-                cfg.sidebar_width = n.clamp(10, 120) as u16;
-            }
-            if let Some(b) = settings.get("follow_mode").and_then(|v| v.as_bool()) {
-                cfg.follow_mode = b;
-            }
-            if let Some(b) = settings.get("poll_watch").and_then(|v| v.as_bool()) {
-                cfg.poll_watch = b;
-            }
-            if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
-                cfg.icons = b;
-            }
+            cfg.apply_settings(settings);
         }
-
         if let Some(keys) = value.get("keys").and_then(|v| v.as_table()) {
-            for (chord, id) in keys {
-                if let Some(id) = id.as_str() {
-                    cfg.keybindings.push((chord.clone(), id.to_string()));
-                }
-            }
+            cfg.apply_keys(keys);
         }
-
         if let Some(lsp) = value.get("lsp").and_then(|v| v.as_table()) {
-            for (lang, cmd) in lsp {
-                if let Some(cmd) = cmd.as_str() {
-                    let parts: Vec<String> = cmd.split_whitespace().map(String::from).collect();
-                    if !parts.is_empty() {
-                        cfg.lsp_servers.insert(lang.clone(), parts);
-                    }
-                }
-            }
+            cfg.apply_lsp(lsp);
         }
 
         Ok(cfg)
+    }
+
+    /// Merge the `[settings]` table, clamping numeric fields to sane ranges.
+    fn apply_settings(&mut self, settings: &toml::Table) {
+        if let Some(n) = settings.get("tab_width").and_then(|v| v.as_integer()) {
+            self.tab_width = n.clamp(1, 16) as usize;
+        }
+        if let Some(n) = settings.get("sidebar_width").and_then(|v| v.as_integer()) {
+            self.sidebar_width = n.clamp(10, 120) as u16;
+        }
+        if let Some(b) = settings.get("follow_mode").and_then(|v| v.as_bool()) {
+            self.follow_mode = b;
+        }
+        if let Some(b) = settings.get("poll_watch").and_then(|v| v.as_bool()) {
+            self.poll_watch = b;
+        }
+        if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
+            self.icons = b;
+        }
+    }
+
+    /// Merge the `[keys]` table of `chord -> command-id` overrides.
+    fn apply_keys(&mut self, keys: &toml::Table) {
+        for (chord, id) in keys {
+            if let Some(id) = id.as_str() {
+                self.keybindings.push((chord.clone(), id.to_string()));
+            }
+        }
+    }
+
+    /// Merge the `[lsp]` table of `language -> server command line`.
+    fn apply_lsp(&mut self, lsp: &toml::Table) {
+        for (lang, cmd) in lsp {
+            if let Some(cmd) = cmd.as_str() {
+                let parts: Vec<String> = cmd.split_whitespace().map(String::from).collect();
+                if !parts.is_empty() {
+                    self.lsp_servers.insert(lang.clone(), parts);
+                }
+            }
+        }
     }
 }
 
