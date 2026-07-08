@@ -8,10 +8,12 @@
 
 use editor_plugin::Plugin;
 
+pub mod explorer;
+
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
 /// config can filter the list to disable any of them (the litmus test for self-hosting).
 pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
     // Plugins are added phase by phase: explorer (Phase 4), find/replace (Phase 6),
     // palette + quick-open (Phase 7), search + sync (Phase 8), lsp (Phase 10).
-    Vec::new()
+    vec![Box::new(explorer::ExplorerPlugin::default())]
 }

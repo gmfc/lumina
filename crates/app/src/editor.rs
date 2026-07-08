@@ -18,6 +18,14 @@ pub enum Focus {
     Sidebar,
 }
 
+/// A modal overlay drawn on top of the body, capturing input while active. The same
+/// machinery backs the find widget (Phase 6) and command palette (Phase 7).
+#[derive(Debug, Clone)]
+pub enum Overlay {
+    /// Closing a dirty tab: save / discard / cancel.
+    ConfirmClose { tab: usize },
+}
+
 /// Everything rendered + mutated by plugins.
 pub struct EditorState {
     pub workspace: Workspace,
@@ -35,6 +43,8 @@ pub struct EditorState {
     pub pending_commands: Vec<String>,
     /// Paths requested via `Host::open_path`, opened by `App` (it owns file IO policy).
     pub pending_opens: Vec<PathBuf>,
+    /// Active modal overlay, if any.
+    pub overlay: Option<Overlay>,
 }
 
 impl EditorState {
@@ -50,6 +60,7 @@ impl EditorState {
             pending_events: Vec::new(),
             pending_commands: Vec::new(),
             pending_opens: Vec::new(),
+            overlay: None,
         }
     }
 

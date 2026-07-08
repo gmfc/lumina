@@ -102,12 +102,59 @@ impl App {
     }
 
     fn on_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        // A modal overlay captures all input while open.
+        if self.editor.overlay.is_some() {
+            self.overlay_key(key);
+            return;
+        }
+
+        // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
+        if self.editor.focus == Focus::Sidebar {
+            if key.code == KeyCode::Esc {
+                self.editor.focus = Focus::Editor;
+                return;
+            }
+            if let Some(id) = sidebar_command(key) {
+                self.registry.dispatch_command(id, &mut self.editor);
+                self.drain_workers();
+                return;
+            }
+        }
+
         let focus = match self.editor.focus {
             Focus::Editor => InputFocus::Editor,
             Focus::Sidebar => InputFocus::Sidebar,
         };
         if let Some(cmd) = key_to_command(key, focus) {
             self.dispatch(cmd);
+        }
+    }
+
+    /// Handle a key while the confirm-close overlay is open.
+    fn overlay_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        let Some(overlay) = self.editor.overlay.clone() else {
+            return;
+        };
+        match overlay {
+            crate::editor::Overlay::ConfirmClose { tab } => match key.code {
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    self.editor.workspace.focus_tab(tab);
+                    self.save_active();
+                    self.editor.workspace.close_tab(tab);
+                    self.editor.overlay = None;
+                }
+                KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('y') => {
+                    self.editor.workspace.close_tab(tab);
+                    self.editor.overlay = None;
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('c') => {
+                    self.editor.overlay = None;
+                }
+                _ => {}
+            },
         }
     }
 
@@ -309,10 +356,7 @@ impl App {
             // --- files / tabs ---
             Command::Save => self.save_active(),
             Command::OpenFile(p) => self.open_path(&p),
-            Command::CloseTab => {
-                let idx = self.editor.workspace.active_tab;
-                self.editor.workspace.close_tab(idx);
-            }
+            Command::CloseTab => self.request_close(self.editor.workspace.active_tab),
             Command::NextTab => self.cycle_tab(1),
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),
@@ -341,6 +385,23 @@ impl App {
     fn with_doc<F: FnOnce(&mut Document)>(&mut self, f: F) {
         if let Some(d) = self.editor.active_document_mut() {
             f(d);
+        }
+    }
+
+    /// Close a tab, prompting first if it has unsaved changes (plan §6).
+    fn request_close(&mut self, tab: usize) {
+        let dirty = self
+            .editor
+            .workspace
+            .tabs
+            .get(tab)
+            .and_then(|&id| self.editor.workspace.documents.get(id))
+            .map(|d| d.dirty)
+            .unwrap_or(false);
+        if dirty {
+            self.editor.overlay = Some(crate::editor::Overlay::ConfirmClose { tab });
+        } else {
+            self.editor.workspace.close_tab(tab);
         }
     }
 
@@ -404,6 +465,25 @@ impl App {
 /// True if screen cell `(col, row)` falls within `rect`.
 fn in_rect(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
+
+/// Map a key to an explorer command id when the sidebar is focused (keyboard parity).
+fn sidebar_command(key: crossterm::event::KeyEvent) -> Option<&'static str> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    match key.code {
+        KeyCode::Up => Some("explorer.up"),
+        KeyCode::Down => Some("explorer.down"),
+        KeyCode::Right => Some("explorer.expand"),
+        KeyCode::Left => Some("explorer.collapse"),
+        KeyCode::Enter => Some("explorer.activate"),
+        _ => None,
+    }
 }
 
 /// Resolve the CLI arg into (project root, optional file to open).
@@ -514,8 +594,67 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    use crossterm::event::{KeyModifiers, MouseEvent};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
     use ratatui::layout::Rect;
+
+    fn temp_dir_with_files() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("lumina_dir_{}_{}", std::process::id(), n));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "alpha").unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), "beta").unwrap();
+        dir
+    }
+
+    #[test]
+    fn explorer_is_registered_and_lists_files() {
+        let dir = temp_dir_with_files();
+        let app = app_with(&dir);
+        // The explorer plugin populated its sidebar panel at activation.
+        let panel = app.editor.panels.get("explorer.tree").expect("no panel");
+        let names: Vec<String> = panel
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.clone()))
+            .collect();
+        assert!(names.iter().any(|t| t.contains("a.txt")));
+        assert!(names.iter().any(|t| t.contains("sub")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn explorer_opens_a_file_on_activate() {
+        let dir = temp_dir_with_files();
+        let mut app = app_with(&dir);
+        let payload = dir.join("a.txt").to_string_lossy().into_owned();
+        app.registry
+            .activate_panel_row("explorer.tree", &payload, &mut app.editor);
+        app.drain_workers();
+        assert_eq!(app.editor.workspace.tabs.len(), 1);
+        assert_eq!(app.editor.active_document().unwrap().to_string(), "alpha");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dirty_close_prompts_then_discards() {
+        let path = temp_file("data");
+        let mut app = app_with(&path);
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.dispatch(Command::InsertChar('!'));
+        assert!(app.editor.active_document().unwrap().dirty);
+        app.dispatch(Command::CloseTab);
+        // A dirty tab prompts instead of closing.
+        assert!(app.editor.overlay.is_some());
+        assert_eq!(app.editor.workspace.tabs.len(), 1);
+        // Discard closes it without saving.
+        app.overlay_key(KeyEvent::from(KeyCode::Char('d')));
+        assert!(app.editor.overlay.is_none());
+        assert_eq!(app.editor.workspace.tabs.len(), 0);
+        // The file on disk was not modified.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "data");
+        std::fs::remove_file(&path).ok();
+    }
 
     fn mouse(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
         MouseEvent {

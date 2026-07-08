@@ -47,12 +47,62 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     render_editor(f, app, editor_area);
     render_status(f, app, status_area);
 
+    // Overlays draw last, on top of the body (plan §4).
+    render_overlay(f, app, body);
+
     // Record laid-out regions so the mouse router (which runs outside draw) can hit-test.
     app.regions = Regions {
         tabs: tabs_area,
         sidebar: sidebar_area,
         editor: editor_area,
     };
+}
+
+fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
+    use crate::editor::Overlay;
+    use ratatui::widgets::Clear;
+
+    let Some(overlay) = &app.editor.overlay else {
+        return;
+    };
+    match overlay {
+        Overlay::ConfirmClose { tab } => {
+            let name = app
+                .editor
+                .workspace
+                .tabs
+                .get(*tab)
+                .and_then(|&id| app.editor.workspace.documents.get(id))
+                .and_then(|d| d.path.as_ref())
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "untitled".into());
+            let text = vec![
+                Line::from(TSpan::styled(
+                    format!(" {name} has unsaved changes"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(" [S] Save & close   [D] Discard   [Esc] Cancel "),
+            ];
+            let rect = centered(body, 44, 5);
+            f.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CLR_ACCENT))
+                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+            f.render_widget(Paragraph::new(text).block(block), rect);
+        }
+    }
+}
+
+/// A rectangle of `w`×`h` centered within `area` (clamped to fit).
+fn centered(area: Rect, w: u16, h: u16) -> Rect {
+    let w = w.min(area.width);
+    let h = h.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect::new(x, y, w, h)
 }
 
 /// Screen regions from the last frame, for mouse hit-testing.
