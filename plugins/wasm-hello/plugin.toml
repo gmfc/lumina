@@ -1,0 +1,17 @@
+# Example external plugin running on the WebAssembly substrate (plan §6A, §11).
+# Deny-by-default: the host applies "insert" only because `edit` is granted, and sets the
+# panel only because `ui` is granted.
+id = "wasm-hello"
+name = "Wasm Hello"
+runtime = "wasm"
+entry = "main.wasm"
+capabilities = ["edit", "ui"]
+
+[[commands]]
+id = "wasm-hello.insert"
+title = "Wasm: Insert Hello Banner"
+
+[[panels]]
+id = "wasm-hello.panel"
+title = "Wasm"
+location = "sidebar"

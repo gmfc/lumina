@@ -63,7 +63,13 @@ keyword = "#c678dd"
 
 The editor is built on its own plugin system: built-ins register through the same API as
 third-party plugins. External plugins live in `~/.config/lumina/plugins/` or
-`<project>/.lumina/plugins/`, each a folder with a `plugin.toml` manifest and a Rhai script.
-They are **deny-by-default**: a plugin declares `capabilities` (`edit`, `ui`, `fs:read`) and
-can only take the actions it was granted. See `plugins/` for worked examples (shout, todo,
-inspector).
+`<project>/.lumina/plugins/`, each a folder with a `plugin.toml` manifest and a guest module.
+Two substrates run through the *same* contribution API:
+
+- **Rhai script** (default) — a `main.rhai` returning a list of host actions.
+- **WebAssembly** (`runtime = "wasm"`) — a sandboxed `.wasm`/`.wat` guest with **no host
+  imports**, fuel-metered against runaway loops, run on the `wasmi` engine.
+
+Both are **deny-by-default**: a plugin declares `capabilities` (`edit`, `ui`, `fs:read`) and
+can only take the actions it was granted. See `plugins/` for worked examples — `shout`, `todo`,
+`inspector` (Rhai) and `wasm-hello` (WebAssembly).

@@ -28,40 +28,43 @@ use crate::registry::Plugin;
 use crate::Host;
 
 #[derive(Debug, Deserialize)]
-struct RawCommand {
-    id: String,
-    title: String,
+pub(crate) struct RawCommand {
+    pub id: String,
+    pub title: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct RawPanel {
-    id: String,
-    title: String,
+pub(crate) struct RawPanel {
+    pub id: String,
+    pub title: String,
     #[serde(default)]
-    location: String,
+    pub location: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct RawKey {
-    chord: String,
-    command: String,
+pub(crate) struct RawKey {
+    pub chord: String,
+    pub command: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct Manifest {
-    id: String,
+pub(crate) struct Manifest {
+    pub id: String,
     #[serde(default)]
-    name: String,
+    pub name: String,
     #[serde(default)]
-    entry: Option<String>,
+    pub entry: Option<String>,
+    /// Execution substrate: `"wasm"` for the WebAssembly tier, else the Rhai script tier.
     #[serde(default)]
-    capabilities: Vec<String>,
+    pub runtime: Option<String>,
     #[serde(default)]
-    commands: Vec<RawCommand>,
+    pub capabilities: Vec<String>,
     #[serde(default)]
-    panels: Vec<RawPanel>,
+    pub commands: Vec<RawCommand>,
     #[serde(default)]
-    keybindings: Vec<RawKey>,
+    pub panels: Vec<RawPanel>,
+    #[serde(default)]
+    pub keybindings: Vec<RawKey>,
 }
 
 /// A loaded external plugin backed by a Rhai script.
@@ -84,18 +87,37 @@ pub fn load_dir(dir: &Path) -> Vec<Box<dyn Plugin>> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            if let Some(plugin) = load_one(&path) {
-                plugins.push(Box::new(plugin));
+        if !path.is_dir() {
+            continue;
+        }
+        // Dispatch by substrate: WebAssembly plugins load through the wasm tier, everything
+        // else through the Rhai script tier. Both register through the same Registry.
+        if is_wasm_plugin(&path) {
+            if let Some(plugin) = crate::wasm::load_one(&path) {
+                plugins.push(plugin);
             }
+        } else if let Some(plugin) = load_one(&path) {
+            plugins.push(Box::new(plugin));
         }
     }
     plugins
 }
 
+/// Peek a plugin dir's manifest to see whether it targets the WebAssembly substrate.
+pub(crate) fn is_wasm_plugin(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join("plugin.toml"))
+        .ok()
+        .and_then(|src| toml::from_str::<Manifest>(&src).ok())
+        .map(|m| m.runtime.as_deref() == Some("wasm"))
+        .unwrap_or(false)
+}
+
 fn load_one(dir: &Path) -> Option<ScriptPlugin> {
     let manifest_src = std::fs::read_to_string(dir.join("plugin.toml")).ok()?;
     let manifest: Manifest = toml::from_str(&manifest_src).ok()?;
+    if manifest.runtime.as_deref() == Some("wasm") {
+        return None; // handled by the wasm tier
+    }
     let entry = manifest.entry.clone().unwrap_or_else(|| "main.rhai".into());
     let script = std::fs::read_to_string(dir.join(&entry)).ok()?;
 
@@ -300,7 +322,7 @@ fn str_field(map: &Map, key: &str) -> Option<String> {
     map.get(key).and_then(|d| d.clone().into_string().ok())
 }
 
-fn insert_at_cursor(host: &mut dyn Host, text: &str) {
+pub(crate) fn insert_at_cursor(host: &mut dyn Host, text: &str) {
     let Some(id) = host.active_doc() else {
         return;
     };
@@ -314,7 +336,7 @@ fn insert_at_cursor(host: &mut dyn Host, text: &str) {
     host.apply_transaction(id, txn);
 }
 
-fn replace_selection(host: &mut dyn Host, text: &str) {
+pub(crate) fn replace_selection(host: &mut dyn Host, text: &str) {
     let Some(id) = host.active_doc() else {
         return;
     };
@@ -328,7 +350,7 @@ fn replace_selection(host: &mut dyn Host, text: &str) {
     host.apply_transaction(id, txn);
 }
 
-fn replace_line(host: &mut dyn Host, text: &str) {
+pub(crate) fn replace_line(host: &mut dyn Host, text: &str) {
     let Some(id) = host.active_doc() else {
         return;
     };
