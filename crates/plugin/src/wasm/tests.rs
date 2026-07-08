@@ -1,4 +1,4 @@
-use super::engine::apply_edit;
+use super::apply_edit;
 use super::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
