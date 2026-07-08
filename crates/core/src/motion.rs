@@ -366,4 +366,25 @@ mod tests {
         assert_eq!(resolve(&doc, 1, Motion::MatchingBracket, 10), 7);
         assert_eq!(resolve(&doc, 7, Motion::MatchingBracket, 10), 1);
     }
+
+    #[test]
+    fn matching_bracket_all_kinds_and_edges() {
+        let doc = Document::from_str("(a[b]c)");
+        // Forward from each opener.
+        assert_eq!(matching_bracket(&doc, 0), Some(6)); // ( -> )
+        assert_eq!(matching_bracket(&doc, 2), Some(4)); // [ -> ]
+                                                        // Backward from each closer.
+        assert_eq!(matching_bracket(&doc, 6), Some(0)); // ) -> (
+        assert_eq!(matching_bracket(&doc, 4), Some(2)); // ] -> [
+                                                        // Non-bracket and out-of-range positions.
+        assert_eq!(matching_bracket(&doc, 1), None);
+        assert_eq!(matching_bracket(&doc, 99), None);
+        // Braces, including nesting.
+        let braces = Document::from_str("{{}}");
+        assert_eq!(matching_bracket(&braces, 0), Some(3));
+        assert_eq!(matching_bracket(&braces, 3), Some(0));
+        // Unbalanced openers/closers return None.
+        assert_eq!(matching_bracket(&Document::from_str("("), 0), None);
+        assert_eq!(matching_bracket(&Document::from_str(")"), 0), None);
+    }
 }
