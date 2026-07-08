@@ -59,6 +59,23 @@ pub struct DiskFingerprint {
     pub len: usize,
 }
 
+/// A byte/point-level edit record, in the exact shape tree-sitter's `InputEdit` needs, so the
+/// syntax layer can reparse **incrementally** instead of from scratch on every keystroke
+/// (plan §4 perf, §9 "incremental highlighting"). Points are `(row, column-in-bytes)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxEdit {
+    pub start_byte: usize,
+    pub old_end_byte: usize,
+    pub new_end_byte: usize,
+    pub start_point: (usize, usize),
+    pub old_end_point: (usize, usize),
+    pub new_end_point: (usize, usize),
+}
+
+/// Cap on buffered edits before we give up on incremental reparse and force a full one — a
+/// safety valve so a huge programmatic rewrite doesn't accumulate unbounded edit records.
+const SYNTAX_EDIT_CAP: usize = 4096;
+
 /// An open buffer.
 pub struct Document {
     pub text: Rope,
@@ -81,6 +98,11 @@ pub struct Document {
     pub externally_reloaded: bool,
     /// Set when the file was deleted on disk while still open.
     pub deleted_on_disk: bool,
+    /// Edits accumulated since the syntax layer last reparsed (drained by the highlighter).
+    pub syntax_edits: Vec<SyntaxEdit>,
+    /// False when `syntax_edits` no longer faithfully describes the change stream (overflow or
+    /// a whole-buffer replace) — the highlighter must then do a full reparse.
+    pub syntax_edits_valid: bool,
 }
 
 impl Document {
@@ -108,7 +130,32 @@ impl Document {
             external_conflict: None,
             externally_reloaded: false,
             deleted_on_disk: false,
+            syntax_edits: Vec::new(),
+            syntax_edits_valid: true,
         }
+    }
+
+    /// The tree-sitter point `(row, column-in-bytes)` of a char offset.
+    fn point_of_char(&self, char_idx: usize) -> (usize, usize) {
+        let idx = char_idx.min(self.len_chars());
+        let line = self.text.char_to_line(idx);
+        let line_start_byte = self.text.line_to_byte(line);
+        let byte = self.text.char_to_byte(idx);
+        (line, byte - line_start_byte)
+    }
+
+    /// Buffer a syntax edit, dropping to "full reparse" mode if we blow the cap. Only tracked
+    /// for documents that carry a language (others never reach the highlighter).
+    fn record_syntax_edit(&mut self, edit: SyntaxEdit) {
+        if self.language.is_none() {
+            return;
+        }
+        if !self.syntax_edits_valid || self.syntax_edits.len() >= SYNTAX_EDIT_CAP {
+            self.syntax_edits.clear();
+            self.syntax_edits_valid = false;
+            return;
+        }
+        self.syntax_edits.push(edit);
     }
 
     /// Total number of chars (the rope's natural index unit).
@@ -176,6 +223,19 @@ impl Document {
         let s = start.min(self.len_chars());
         let e = end.min(self.len_chars());
         if s < e {
+            // Record the edit (in pre-removal coordinates) before mutating.
+            let start_byte = self.text.char_to_byte(s);
+            let old_end_byte = self.text.char_to_byte(e);
+            let start_point = self.point_of_char(s);
+            let old_end_point = self.point_of_char(e);
+            self.record_syntax_edit(SyntaxEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte: start_byte,
+                start_point,
+                old_end_point,
+                new_end_point: start_point,
+            });
             self.text.remove(s..e);
             self.revision = self.revision.wrapping_add(1);
         }
@@ -184,14 +244,35 @@ impl Document {
     /// Insert `text` at char offset `at`. Internal; transactions call this.
     pub(crate) fn apply_raw_insert(&mut self, at: usize, text: &str) {
         let a = at.min(self.len_chars());
+        // Record the edit (start in pre-insert coordinates; new end derived from `text`).
+        let start_byte = self.text.char_to_byte(a);
+        let start_point = self.point_of_char(a);
+        let new_end_byte = start_byte + text.len();
+        let new_end_point = match text.rfind('\n') {
+            None => (start_point.0, start_point.1 + text.len()),
+            Some(last_nl) => (
+                start_point.0 + text.matches('\n').count(),
+                text.len() - (last_nl + 1),
+            ),
+        };
+        self.record_syntax_edit(SyntaxEdit {
+            start_byte,
+            old_end_byte: start_byte,
+            new_end_byte,
+            start_point,
+            old_end_point: start_point,
+            new_end_point,
+        });
         self.text.insert(a, text);
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Replace the whole buffer (external reload path).
+    /// Replace the whole buffer (external reload path). Invalidates incremental syntax state.
     pub fn set_text(&mut self, rope: Rope) {
         self.text = rope;
         self.revision = self.revision.wrapping_add(1);
+        self.syntax_edits.clear();
+        self.syntax_edits_valid = false;
     }
 
     /// Replace the whole buffer from a string, normalizing CRLF to internal LF.

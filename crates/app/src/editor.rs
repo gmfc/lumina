@@ -82,25 +82,36 @@ impl EditorState {
         let Some(id) = self.workspace.active_doc() else {
             return;
         };
-        let Some(doc) = self.workspace.documents.get(id) else {
+        // Take the parse inputs (and drain the buffered edits) while we hold the doc, so the
+        // highlighter borrow below doesn't alias the workspace.
+        let Some((lang, rev, first, last, rope, edits, edits_valid)) =
+            self.workspace.documents.get_mut(id).and_then(|doc| {
+                let lang = doc.language.clone()?;
+                if !editor_syntax::is_supported(&lang) {
+                    return None;
+                }
+                let first = doc.view.scroll_line;
+                let last = (first + viewport_height).min(doc.len_lines().saturating_sub(1));
+                let edits = std::mem::take(&mut doc.syntax_edits);
+                let edits_valid = std::mem::replace(&mut doc.syntax_edits_valid, true);
+                Some((
+                    lang,
+                    doc.revision,
+                    first,
+                    last,
+                    doc.text.clone(),
+                    edits,
+                    edits_valid,
+                ))
+            })
+        else {
             return;
         };
-        let Some(lang) = doc.language.clone() else {
-            return;
-        };
-        if !editor_syntax::is_supported(&lang) {
-            return;
-        }
-        let rev = doc.revision;
-        let first = doc.view.scroll_line;
-        let last = (first + viewport_height).min(doc.len_lines().saturating_sub(1));
-        let rope = doc.text.clone(); // O(1): ropey is copy-on-write
 
-        let entry = self.highlighters.entry(id);
-        let hl = entry.or_insert_with(|| {
+        let hl = self.highlighters.entry(id).or_insert_with(|| {
             editor_syntax::DocHighlighter::new(&lang).expect("language checked as supported")
         });
-        hl.ensure(&rope, rev, first, last);
+        hl.ensure(&rope, rev, &edits, edits_valid, first, last);
     }
 
     pub fn active_document(&self) -> Option<&Document> {

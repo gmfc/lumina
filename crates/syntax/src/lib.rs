@@ -8,9 +8,12 @@
 
 use std::collections::HashMap;
 
+use editor_core::SyntaxEdit;
 use ropey::Rope;
 use streaming_iterator::StreamingIterator;
-use tree_sitter::{Language, Node, Parser, Query, QueryCursor, TextProvider, Tree};
+use tree_sitter::{
+    InputEdit, Language, Node, Parser, Point, Query, QueryCursor, TextProvider, Tree,
+};
 
 /// A highlighted span within a single line: `[start, end)` char offsets **within the line**,
 /// carrying the tree-sitter capture name (e.g. `"keyword"`, `"function"`, `"string.special"`).
@@ -22,14 +25,17 @@ pub struct HighlightSpan {
 }
 
 /// Language id → grammar + highlights query. Returns `None` for unsupported languages.
+///
+/// Grammar crates are decoupled from the tree-sitter runtime version (they only provide a
+/// `LanguageFn` + query text), so new languages are a table entry, not a version bump.
 fn lang_config(id: &str) -> Option<(Language, String)> {
-    match id {
-        "rust" => Some((
+    let (lang, query): (Language, String) = match id {
+        "rust" => (
             tree_sitter_rust::LANGUAGE.into(),
             tree_sitter_rust::HIGHLIGHTS_QUERY.to_string(),
-        )),
+        ),
         // A compact, version-independent JSON highlights query.
-        "json" => Some((
+        "json" => (
             tree_sitter_json::LANGUAGE.into(),
             r#"
             (pair key: (string) @property)
@@ -42,9 +48,44 @@ fn lang_config(id: &str) -> Option<(Language, String)> {
             ["{" "}" "[" "]"] @punctuation.bracket
             "#
             .to_string(),
-        )),
-        _ => None,
-    }
+        ),
+        "python" => (
+            tree_sitter_python::LANGUAGE.into(),
+            tree_sitter_python::HIGHLIGHTS_QUERY.to_string(),
+        ),
+        "javascript" => (
+            tree_sitter_javascript::LANGUAGE.into(),
+            tree_sitter_javascript::HIGHLIGHT_QUERY.to_string(),
+        ),
+        // TypeScript's grammar is a JS superset; its highlights build on the JS query.
+        "typescript" => (
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            format!(
+                "{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY
+            ),
+        ),
+        "c" => (
+            tree_sitter_c::LANGUAGE.into(),
+            tree_sitter_c::HIGHLIGHT_QUERY.to_string(),
+        ),
+        "go" => (
+            tree_sitter_go::LANGUAGE.into(),
+            tree_sitter_go::HIGHLIGHTS_QUERY.to_string(),
+        ),
+        "toml" => (
+            tree_sitter_toml_ng::LANGUAGE.into(),
+            tree_sitter_toml_ng::HIGHLIGHTS_QUERY.to_string(),
+        ),
+        // Markdown's grammar is split block/inline; we highlight the block layer.
+        "markdown" => (
+            tree_sitter_md::LANGUAGE.into(),
+            tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.to_string(),
+        ),
+        _ => return None,
+    };
+    Some((lang, query))
 }
 
 /// True if a language id has a grammar wired in.
@@ -88,9 +129,29 @@ impl DocHighlighter {
     }
 
     /// Ensure spans for lines `[first, last]` are cached for document `revision`. Reparses
-    /// only when the revision changed; recomputes spans only when the range or revision moved.
-    pub fn ensure(&mut self, rope: &Rope, revision: u64, first: usize, last: usize) {
+    /// only when the revision changed — **incrementally** when `edits` faithfully describe the
+    /// change since the last parse (`edits_valid`), otherwise from scratch. Recomputes spans
+    /// only when the range or revision moved.
+    pub fn ensure(
+        &mut self,
+        rope: &Rope,
+        revision: u64,
+        edits: &[SyntaxEdit],
+        edits_valid: bool,
+        first: usize,
+        last: usize,
+    ) {
         if self.tree_revision != revision || !self.primed {
+            if edits_valid && self.primed {
+                // Age the old tree forward through each edit so tree-sitter can reuse subtrees.
+                if let Some(tree) = &mut self.tree {
+                    for e in edits {
+                        tree.edit(&to_input_edit(e));
+                    }
+                }
+            } else {
+                self.tree = None; // force a full reparse
+            }
             self.reparse(rope);
             self.tree_revision = revision;
         }
@@ -115,8 +176,10 @@ impl DocHighlighter {
     }
 
     fn reparse(&mut self, rope: &Rope) {
-        // Full reparse (correct; incremental InputEdit tracking is a later optimization).
-        let tree = self.parser.parse_with(
+        // Reuse the previous (edit-aged) tree when present so tree-sitter reparses only the
+        // changed subtrees; a `None` old tree yields a full parse.
+        let old = self.tree.take();
+        let tree = self.parser.parse_with_options(
             &mut |byte, _| {
                 if byte >= rope.len_bytes() {
                     return &[][..];
@@ -124,6 +187,7 @@ impl DocHighlighter {
                 let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte);
                 &chunk.as_bytes()[byte - chunk_start..]
             },
+            old.as_ref(),
             None,
         );
         self.tree = tree;
@@ -156,6 +220,18 @@ impl DocHighlighter {
                 push_span(&mut self.cache, rope, cap.node, name, first, last);
             }
         }
+    }
+}
+
+/// Convert a core [`SyntaxEdit`] into tree-sitter's `InputEdit`.
+fn to_input_edit(e: &SyntaxEdit) -> InputEdit {
+    InputEdit {
+        start_byte: e.start_byte,
+        old_end_byte: e.old_end_byte,
+        new_end_byte: e.new_end_byte,
+        start_position: Point::new(e.start_point.0, e.start_point.1),
+        old_end_position: Point::new(e.old_end_point.0, e.old_end_point.1),
+        new_end_position: Point::new(e.new_end_point.0, e.new_end_point.1),
     }
 }
 
@@ -234,7 +310,7 @@ mod tests {
         let src = "fn main() {\n    let s = \"hi\";\n}\n";
         let rope = Rope::from_str(src);
         let mut h = DocHighlighter::new("rust").expect("rust supported");
-        h.ensure(&rope, 1, 0, rope.len_lines() - 1);
+        h.ensure(&rope, 1, &[], true, 0, rope.len_lines() - 1);
         // Line 0 contains the `fn` keyword.
         let l0 = h.line_spans(0);
         assert!(
@@ -256,12 +332,80 @@ mod tests {
         assert!(!is_supported("cobol"));
     }
 
+    /// Every wired grammar must actually load (ABI-compatible with the tree-sitter runtime)
+    /// and its highlights query must compile — otherwise `DocHighlighter::new` returns None.
+    #[test]
+    fn all_wired_grammars_load_and_highlight() {
+        let cases = [
+            (
+                "python",
+                "def f():\n    x = \"hi\"\n",
+                "line 0 has a keyword",
+            ),
+            ("javascript", "const x = \"hi\";\n", "line 0 has a keyword"),
+            (
+                "typescript",
+                "const x: number = 1;\n",
+                "line 0 has a keyword",
+            ),
+            ("c", "int main() { return 0; }\n", "line 0 has a keyword"),
+            ("go", "package main\n", "line 0 has a keyword"),
+            ("toml", "[table]\nkey = 42\n", "line 1 has a number"),
+            ("markdown", "# Title\n", "loads"),
+        ];
+        for (lang, src, _why) in cases {
+            let mut h = DocHighlighter::new(lang)
+                .unwrap_or_else(|| panic!("grammar `{lang}` failed to load / compile query"));
+            let rope = Rope::from_str(src);
+            h.ensure(&rope, 1, &[], true, 0, rope.len_lines() - 1);
+            // At least one span somewhere proves the query ran against a real parse tree.
+            let any = (0..rope.len_lines()).any(|l| !h.line_spans(l).is_empty());
+            assert!(
+                any,
+                "grammar `{lang}` produced no highlight spans for: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_matches_full_reparse() {
+        // Parse once, then apply an incremental edit and confirm the spans match a highlighter
+        // that parsed the edited text from scratch.
+        let before = "fn main() {\n    let x = 1;\n}\n";
+        let after = "fn main() {\n    let yy = 1;\n}\n";
+
+        let mut inc = DocHighlighter::new("rust").unwrap();
+        inc.ensure(&Rope::from_str(before), 1, &[], true, 0, 2);
+
+        // Edit: replace "x" (line 1, col bytes 8..9) with "yy".
+        let edit = SyntaxEdit {
+            start_byte: 20,
+            old_end_byte: 21,
+            new_end_byte: 22,
+            start_point: (1, 8),
+            old_end_point: (1, 9),
+            new_end_point: (1, 10),
+        };
+        inc.ensure(&Rope::from_str(after), 2, &[edit], true, 0, 2);
+
+        let mut full = DocHighlighter::new("rust").unwrap();
+        full.ensure(&Rope::from_str(after), 1, &[], true, 0, 2);
+
+        for line in 0..3 {
+            assert_eq!(
+                inc.line_spans(line),
+                full.line_spans(line),
+                "line {line} spans diverged after incremental edit"
+            );
+        }
+    }
+
     #[test]
     fn json_highlights_keys_and_numbers() {
         let src = "{\n  \"n\": 42\n}\n";
         let rope = Rope::from_str(src);
         let mut h = DocHighlighter::new("json").unwrap();
-        h.ensure(&rope, 1, 0, rope.len_lines() - 1);
+        h.ensure(&rope, 1, &[], true, 0, rope.len_lines() - 1);
         let l1 = h.line_spans(1);
         assert!(l1.iter().any(|s| s.capture.starts_with("property")));
         assert!(l1.iter().any(|s| s.capture.starts_with("number")));

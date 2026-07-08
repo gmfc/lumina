@@ -15,7 +15,7 @@ pub mod transaction;
 pub mod view;
 pub mod workspace;
 
-pub use document::{Document, Encoding, LineEnding};
+pub use document::{Document, Encoding, LineEnding, SyntaxEdit};
 pub use history::{GroupBreak, History};
 pub use motion::Motion;
 pub use selection::{Selection, Selections};
