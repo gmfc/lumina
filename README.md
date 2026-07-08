@@ -5,6 +5,12 @@ system. Tabs, a clickable directory explorer, full mouse support, syntax highlig
 find/replace, project search, live file-sync, multi-cursor, an LSP client, and a sandboxed
 external plugin runtime.
 
+## Screenshots
+
+![lumina editing its own source — syntax highlighting, tabbed editing, and a clickable file explorer](docs/lumina-editor.png)
+
+![lumina's start screen with quick key hints](docs/lumina-welcome.png)
+
 ## Architecture
 
 Six crates (headless core, thin view — the Helix/VS Code split):
