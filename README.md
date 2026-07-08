@@ -46,6 +46,7 @@ cargo run -p editor-app -- <path>     # or: cargo run --bin lumina -- <path>
 tab_width = 4
 sidebar_width = 30
 follow_mode = true          # auto-scroll to external edits as an agent writes files
+poll_watch = false          # set true on devcontainer/NFS mounts where inotify is unreliable
 
 [keys]
 "ctrl+k ctrl+u" = "shout.line"

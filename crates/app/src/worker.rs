@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
-use notify::{RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult};
+use notify::{PollWatcher, RecursiveMode, Watcher};
+use notify_debouncer_full::{new_debouncer, new_debouncer_opt, DebounceEventResult, FileIdMap};
 
 use crate::search::SearchHit;
 
@@ -24,29 +24,58 @@ pub fn channel() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>) {
     std::sync::mpsc::channel()
 }
 
-/// Watch `root` recursively with an ~80ms debounce, sending a `DiskChanged` per changed
-/// path. Returns the debouncer boxed as `Any` — the caller must keep it alive (dropping it
-/// stops the watch). Returns `None` if the watcher can't be created (surfaced to the user).
-pub fn spawn_watcher(root: PathBuf, tx: Sender<WorkerMsg>) -> Option<Box<dyn std::any::Any>> {
-    let mut debouncer = new_debouncer(
-        Duration::from_millis(80),
-        None,
-        move |res: DebounceEventResult| {
-            if let Ok(events) = res {
-                for event in events {
-                    for path in event.paths.iter() {
-                        let _ = tx.send(WorkerMsg::DiskChanged { path: path.clone() });
-                    }
+/// Build a debounced-event handler that forwards each changed path to the main loop.
+fn make_handler(tx: Sender<WorkerMsg>) -> impl FnMut(DebounceEventResult) + Send + 'static {
+    move |res: DebounceEventResult| {
+        if let Ok(events) = res {
+            for event in events {
+                for path in event.paths.iter() {
+                    let _ = tx.send(WorkerMsg::DiskChanged { path: path.clone() });
                 }
             }
-        },
-    )
-    .ok()?;
-    debouncer
-        .watcher()
-        .watch(&root, RecursiveMode::Recursive)
+        }
+    }
+}
+
+/// Watch `root` recursively (plus an optional `extra` dir, non-recursively, for the config
+/// file) with an ~80ms debounce, sending a `DiskChanged` per changed path. When `poll` is set,
+/// use notify's stat-polling `PollWatcher` — the reliable fallback for devcontainer bind
+/// mounts / network filesystems where inotify/FSEvents don't fire (plan §6 caveat).
+///
+/// Returns the debouncer boxed as `Any` — the caller must keep it alive (dropping it stops the
+/// watch). Returns `None` if the watcher can't be created (surfaced to the user).
+pub fn spawn_watcher(
+    root: PathBuf,
+    extra: Option<PathBuf>,
+    poll: bool,
+    tx: Sender<WorkerMsg>,
+) -> Option<Box<dyn std::any::Any>> {
+    if poll {
+        let cfg = notify::Config::default().with_poll_interval(Duration::from_millis(250));
+        let mut debouncer = new_debouncer_opt::<_, PollWatcher, FileIdMap>(
+            Duration::from_millis(200),
+            None,
+            make_handler(tx),
+            FileIdMap::new(),
+            cfg,
+        )
         .ok()?;
-    Some(Box::new(debouncer))
+        let w = debouncer.watcher();
+        w.watch(&root, RecursiveMode::Recursive).ok()?;
+        if let Some(dir) = &extra {
+            let _ = w.watch(dir, RecursiveMode::NonRecursive);
+        }
+        Some(Box::new(debouncer))
+    } else {
+        let mut debouncer =
+            new_debouncer(Duration::from_millis(80), None, make_handler(tx)).ok()?;
+        let w = debouncer.watcher();
+        w.watch(&root, RecursiveMode::Recursive).ok()?;
+        if let Some(dir) = &extra {
+            let _ = w.watch(dir, RecursiveMode::NonRecursive);
+        }
+        Some(Box::new(debouncer))
+    }
 }
 
 /// Run a project search on a worker thread; the result arrives as `SearchComplete`.
