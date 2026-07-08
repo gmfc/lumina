@@ -12,6 +12,10 @@ pub struct Config {
     pub sidebar_width: u16,
     pub follow_mode: bool,
     pub poll_watch: bool,
+    /// Auto-close typed brackets/quotes and type over / delete-both (plan §1.1).
+    pub auto_pairs: bool,
+    /// Copy indent (and adjust for brackets) on newline; dedent on closing bracket (plan §1.2).
+    pub auto_indent: bool,
     /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
     pub icons: bool,
     /// `language → server command (split into program + args)`.
@@ -26,6 +30,8 @@ impl Default for Config {
             sidebar_width: 30,
             follow_mode: false,
             poll_watch: false,
+            auto_pairs: true,
+            auto_indent: true,
             icons: false,
             lsp_servers: std::collections::HashMap::new(),
         }
@@ -77,6 +83,12 @@ impl Config {
         }
         if let Some(b) = settings.get("poll_watch").and_then(|v| v.as_bool()) {
             self.poll_watch = b;
+        }
+        if let Some(b) = settings.get("auto_pairs").and_then(|v| v.as_bool()) {
+            self.auto_pairs = b;
+        }
+        if let Some(b) = settings.get("auto_indent").and_then(|v| v.as_bool()) {
+            self.auto_indent = b;
         }
         if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
             self.icons = b;
