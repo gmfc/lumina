@@ -18,6 +18,7 @@ mod picker;
 mod search;
 mod session;
 mod sync;
+mod terminal;
 mod theme;
 mod ui;
 mod worker;

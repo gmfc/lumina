@@ -2,8 +2,8 @@
 
 A mouse-first, VS Code-like **terminal** code editor in Rust, built on its own plugin
 system. Tabs, a clickable directory explorer, full mouse support, syntax highlighting,
-find/replace, project search, live file-sync, multi-cursor, an LSP client, and a sandboxed
-external plugin runtime.
+find/replace, project search, live file-sync, multi-cursor, an LSP client, an integrated
+terminal panel, and a sandboxed external plugin runtime.
 
 ## Screenshots
 
@@ -44,7 +44,19 @@ cargo run -p editor-app -- <path>     # or: cargo run --bin lumina -- <path>
 `Alt+Click` add cursor · `Ctrl+G` go to line · `Ctrl+S` save · `Ctrl+K Ctrl+S` save as ·
 `Ctrl+N` new file · `F8`/`Shift+F8` next/prev diagnostic · `Ctrl+Space` completions ·
 `F12` go to definition · `Shift+F12` find references · `Ctrl+Shift+O` document symbols ·
-`Alt+J`/`Alt+K` next/prev git change · `Ctrl+Q` quit.
+`Alt+J`/`Alt+K` next/prev git change · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
+`Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+Q` quit.
+
+## Integrated terminal
+
+A minimizable, tabbed terminal dock lives below the editor. `` Ctrl+J `` (or `` Ctrl+` ``)
+opens and focuses it, spawning your shell on first use; press it again to close. Each tab is a
+real PTY-backed shell session parsed by a VT100 emulator, so colors, cursor addressing, and
+full-screen programs work. While the panel is focused every keystroke — including `Ctrl+C` —
+goes to the shell; click the editor to return there, or use the `terminal.*` commands. The
+header's `▾`/`▸` control minimizes and restores the dock, `×` closes a tab, and `+` opens a new
+one. Mouse-wheel over the panel scrolls its history. It is built to grow (split panes, task
+runners, and other bottom-dock contributions can hang off the same panel later).
 
 ## Configuration
 
@@ -62,6 +74,8 @@ trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from eve
 insert_final_newline = false      # on save, ensure the file ends with a single newline
 git_gutter = true           # per-line add/modify/delete change bar in the gutter (vs HEAD)
 icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
+terminal_height = 12        # rows the terminal panel occupies when expanded
+# terminal_shell = "bash"   # override the shell (default: $SHELL / /bin/sh, %ComSpec% on Windows)
 
 [keys]
 "ctrl+k ctrl+u" = "shout.line"

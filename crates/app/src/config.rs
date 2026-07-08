@@ -25,6 +25,11 @@ pub struct Config {
     pub git_gutter: bool,
     /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
     pub icons: bool,
+    /// Shell for the integrated terminal (program + optional args). `None` → the platform
+    /// default (`$SHELL` / `/bin/sh`, or `%ComSpec%` / `cmd.exe` on Windows).
+    pub terminal_shell: Option<String>,
+    /// Content height (rows) of the terminal panel when expanded.
+    pub terminal_height: u16,
     /// `language → server command (split into program + args)`.
     pub lsp_servers: std::collections::HashMap<String, Vec<String>>,
 }
@@ -43,6 +48,8 @@ impl Default for Config {
             insert_final_newline: false,
             git_gutter: true,
             icons: false,
+            terminal_shell: None,
+            terminal_height: 12,
             lsp_servers: std::collections::HashMap::new(),
         }
     }
@@ -118,6 +125,15 @@ impl Config {
         if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
             self.icons = b;
         }
+        if let Some(s) = settings.get("terminal_shell").and_then(|v| v.as_str()) {
+            let s = s.trim();
+            if !s.is_empty() {
+                self.terminal_shell = Some(s.to_string());
+            }
+        }
+        if let Some(n) = settings.get("terminal_height").and_then(|v| v.as_integer()) {
+            self.terminal_height = n.clamp(3, 60) as u16;
+        }
     }
 
     /// Merge the `[keys]` table of `chord -> command-id` overrides.
@@ -179,5 +195,23 @@ mod tests {
             .keybindings
             .iter()
             .any(|(c, i)| c == "ctrl+s" && i == "file.saveAll"));
+    }
+
+    #[test]
+    fn parses_terminal_settings() {
+        let src = r#"
+            [settings]
+            terminal_shell = "/bin/zsh -l"
+            terminal_height = 20
+        "#;
+        let cfg = Config::from_toml_str(src).unwrap();
+        assert_eq!(cfg.terminal_shell.as_deref(), Some("/bin/zsh -l"));
+        assert_eq!(cfg.terminal_height, 20);
+
+        // Out-of-range height is clamped; blank shell falls back to the default.
+        let cfg = Config::from_toml_str("[settings]\nterminal_height = 500\nterminal_shell = \"\"")
+            .unwrap();
+        assert_eq!(cfg.terminal_height, 60);
+        assert_eq!(cfg.terminal_shell, None);
     }
 }

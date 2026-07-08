@@ -83,6 +83,8 @@ pub struct App {
     lsp: crate::lsp::LspManager,
     /// Last document revision sent to the LSP, per DocId (change debounce).
     lsp_sent_revision: std::collections::HashMap<editor_core::DocId, u64>,
+    /// The bottom terminal dock (tabs of shell sessions).
+    pub panel: crate::terminal::TerminalPanel,
 }
 
 impl App {
@@ -132,6 +134,7 @@ impl App {
         theme.load_user_overrides();
 
         editor.sidebar_width = config.sidebar_width;
+        let panel = crate::terminal::TerminalPanel::new(config.terminal_height);
         let follow_mode = config.follow_mode;
         let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
         let keymap = build_keymap(&config);
@@ -178,6 +181,7 @@ impl App {
             last_search_run: String::new(),
             lsp,
             lsp_sent_revision: std::collections::HashMap::new(),
+            panel,
         })
     }
 
@@ -397,6 +401,7 @@ impl App {
     fn reload_config(&mut self) {
         self.config = crate::config::Config::load();
         self.editor.sidebar_width = self.config.sidebar_width;
+        self.panel.height = self.config.terminal_height.clamp(3, 60);
         self.keymap = build_keymap(&self.config);
         self.editor.status_message = Some("Configuration reloaded".into());
     }
@@ -409,17 +414,19 @@ impl App {
             self.editor.update_bracket_match();
             self.update_lsp();
             terminal.draw(|f| ui::draw(f, self))?;
+            // Reconcile each PTY's size to the panel region we just laid out.
+            self.sync_terminals();
 
             if event::poll(Duration::from_millis(16))? {
                 match event::read()? {
                     CtEvent::Key(k) if k.kind == KeyEventKind::Press => self.on_key(k),
                     CtEvent::Mouse(m) => self.on_mouse(m),
-                    CtEvent::Paste(s) => self.dispatch(Command::Paste(s)),
+                    CtEvent::Paste(s) => self.on_paste(s),
                     CtEvent::Resize(..) => {}
                     _ => {}
                 }
             }
-            // Drain background worker messages (FS/LSP/parse) — wired in later phases.
+            // Drain background worker messages (FS/LSP/parse/terminal output).
             self.drain_workers();
             self.ensure_cursor_visible();
         }
@@ -464,6 +471,10 @@ impl App {
 
         // Modal captures, in priority order.
         if self.handle_modal_key(key) {
+            return;
+        }
+        // Terminal focus: forward keystrokes to the shell (except panel-management chords).
+        if self.editor.focus == Focus::Panel && self.handle_terminal_key(key) {
             return;
         }
         // Completion popup: navigation / accept / dismiss keys are consumed here; anything
@@ -537,6 +548,49 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Forward a key to the active terminal. `terminal.*` management chords (e.g. the toggle)
+    /// are still honored, so there is always a keyboard way to close / switch / minimize the
+    /// panel from inside it; everything else becomes shell input. Returns `true` when handled.
+    fn handle_terminal_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        // A focused-but-empty or collapsed panel shouldn't hold the keyboard.
+        if self.panel.active_terminal().is_none() || !self.panel.open || self.panel.minimized {
+            self.editor.focus = Focus::Editor;
+            return false;
+        }
+        let chord = Chord::from_event(key);
+        if let crate::keymap::Resolve::Command(id) =
+            self.keymap.resolve(std::slice::from_ref(&chord))
+        {
+            if id.starts_with("terminal.") {
+                self.pending.clear();
+                self.exec_id(&id);
+                return true;
+            }
+        }
+        let app_cursor = self
+            .panel
+            .active_terminal()
+            .map(|t| t.application_cursor())
+            .unwrap_or(false);
+        if let Some(bytes) = crate::terminal::key_to_bytes(&key, app_cursor) {
+            if let Some(t) = self.panel.active_terminal_mut() {
+                t.send_input(&bytes);
+            }
+        }
+        true
+    }
+
+    /// Route a bracketed paste to the terminal when it is focused, else into the document.
+    fn on_paste(&mut self, s: String) {
+        if self.editor.focus == Focus::Panel && self.panel.open && !self.panel.minimized {
+            if let Some(t) = self.panel.active_terminal_mut() {
+                t.send_input(s.as_bytes());
+                return;
+            }
+        }
+        self.dispatch(Command::Paste(s));
     }
 
     /// Fallback for a key that resolved to nothing: printable text entry into the editor.
@@ -1308,8 +1362,8 @@ impl App {
                 self.drag_anchor = None;
                 self.tab_drag = None;
             }
-            MouseEventKind::ScrollUp => self.scroll_editor(-3),
-            MouseEventKind::ScrollDown => self.scroll_editor(3),
+            MouseEventKind::ScrollUp => self.scroll_at(col, row, -3),
+            MouseEventKind::ScrollDown => self.scroll_at(col, row, 3),
             _ => {}
         }
     }
@@ -1335,6 +1389,19 @@ impl App {
         } else if self.regions.sidebar.is_some_and(|r| in_rect(r, col, row)) {
             self.editor.focus = Focus::Sidebar;
             self.sidebar_click(col, row);
+        } else if self
+            .regions
+            .panel_header
+            .is_some_and(|r| in_rect(r, col, row))
+        {
+            self.panel_header_click(col, row);
+        } else if self
+            .regions
+            .panel_content
+            .is_some_and(|r| in_rect(r, col, row))
+            && self.panel.active_terminal().is_some()
+        {
+            self.editor.focus = Focus::Panel;
         }
     }
 
@@ -1494,6 +1561,153 @@ impl App {
         }
     }
 
+    /// Route a wheel scroll: the terminal's scrollback when over the panel, else the editor.
+    fn scroll_at(&mut self, col: u16, row: u16, delta: isize) {
+        if self
+            .regions
+            .panel_content
+            .is_some_and(|r| in_rect(r, col, row))
+        {
+            if let Some(t) = self.panel.active_terminal_mut() {
+                t.scroll(delta);
+            }
+        } else {
+            self.scroll_editor(delta);
+        }
+    }
+
+    // --- terminal panel -------------------------------------------------------
+
+    /// Toggle the dock: open + focus when closed or minimized, else close it.
+    fn toggle_terminal(&mut self) {
+        if self.panel.open && !self.panel.minimized {
+            self.panel.open = false;
+            self.editor.focus = Focus::Editor;
+        } else {
+            self.focus_terminal();
+        }
+    }
+
+    /// Open (if needed), expand, and focus the panel, spawning a shell on first use.
+    fn focus_terminal(&mut self) {
+        self.panel.open = true;
+        self.panel.minimized = false;
+        if self.panel.terminals.is_empty() {
+            self.spawn_terminal();
+        }
+        if self.panel.active_terminal().is_some() {
+            self.editor.focus = Focus::Panel;
+        } else {
+            self.panel.open = false;
+        }
+    }
+
+    /// Open a brand-new terminal tab and focus the panel.
+    fn new_terminal(&mut self) {
+        self.panel.open = true;
+        self.panel.minimized = false;
+        self.spawn_terminal();
+        if self.panel.active_terminal().is_some() {
+            self.editor.focus = Focus::Panel;
+        }
+    }
+
+    /// Close the active terminal tab; close the dock and return to the editor if it was last.
+    fn close_terminal(&mut self) {
+        if self.panel.close_active() {
+            self.panel.open = false;
+            self.editor.focus = Focus::Editor;
+        }
+    }
+
+    /// Collapse the panel to its header row, or restore it.
+    fn minimize_terminal(&mut self) {
+        if !self.panel.open {
+            return;
+        }
+        self.panel.toggle_minimized();
+        if self.panel.minimized {
+            self.editor.focus = Focus::Editor;
+        } else if self.panel.active_terminal().is_some() {
+            self.editor.focus = Focus::Panel;
+        }
+    }
+
+    /// Spawn a shell into a new tab, sized to the current panel region.
+    fn spawn_terminal(&mut self) {
+        let cwd = self.editor.workspace.root.clone();
+        let shell = crate::terminal::default_shell(self.config.terminal_shell.as_deref());
+        let (rows, cols) = self.panel_content_size();
+        let tx = self.worker_tx.clone();
+        if !self.panel.open_new(&cwd, &shell, rows, cols, tx) {
+            self.editor.status_message = Some("Failed to start terminal".into());
+        }
+    }
+
+    /// A terminal's `(rows, cols)`, from the last-laid-out panel region with a pre-draw fallback.
+    fn panel_content_size(&self) -> (u16, u16) {
+        if let Some(rect) = self.regions.panel_content {
+            if rect.width > 0 && rect.height > 0 {
+                return (rect.height, rect.width);
+            }
+        }
+        (self.panel.height, self.regions.editor.width.max(80))
+    }
+
+    /// Resize every PTY to the drawn content region (a cheap no-op when unchanged).
+    fn sync_terminals(&mut self) {
+        let Some(rect) = self.regions.panel_content else {
+            return;
+        };
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        for t in &mut self.panel.terminals {
+            t.resize(rect.height, rect.width);
+        }
+    }
+
+    /// Handle a left click on the panel header (minimize control, a tab, its close mark, or `+`).
+    fn panel_header_click(&mut self, col: u16, row: u16) {
+        let Some(header) = self.regions.panel_header else {
+            return;
+        };
+        if !in_rect(header, col, row) {
+            return;
+        }
+        let mut x = header.x;
+        for (label, hit) in self.panel.header_segments() {
+            let w = label.chars().count() as u16;
+            let seg_end = x.saturating_add(w);
+            if col >= x && col < seg_end {
+                self.activate_header_hit(hit, col, seg_end);
+                return;
+            }
+            x = seg_end;
+        }
+    }
+
+    /// Act on a header segment: the close mark sits in the tab's last two columns.
+    fn activate_header_hit(&mut self, hit: crate::terminal::HeaderHit, col: u16, seg_end: u16) {
+        use crate::terminal::HeaderHit;
+        match hit {
+            HeaderHit::Minimize => self.minimize_terminal(),
+            HeaderHit::New => self.new_terminal(),
+            HeaderHit::Tab(i) => {
+                self.panel.select(i);
+                if col >= seg_end.saturating_sub(2) {
+                    self.close_terminal();
+                } else {
+                    self.panel.open = true;
+                    self.panel.minimized = false;
+                    if self.panel.active_terminal().is_some() {
+                        self.editor.focus = Focus::Panel;
+                    }
+                }
+            }
+        }
+    }
+
     fn drain_workers(&mut self) {
         // Apply any queued opens/commands/events produced during dispatch.
         let opens: Vec<PathBuf> = std::mem::take(&mut self.editor.pending_opens);
@@ -1520,6 +1734,11 @@ impl App {
     /// Drain background worker messages (FS watch, git, project search) into state.
     fn drain_worker_channel(&mut self) {
         use crate::worker::WorkerMsg;
+        // Cap terminal bytes processed per tick so a flooding shell (e.g. `yes`) can't starve
+        // the render/input loop — the UI stays responsive, so Ctrl+C (which stops the flood)
+        // remains reachable. Anything past the budget stays queued for the next ticks.
+        const TERM_BYTE_BUDGET: usize = 1 << 20; // 1 MiB
+        let mut term_bytes = 0usize;
         while let Ok(msg) = self.worker_rx.try_recv() {
             match msg {
                 WorkerMsg::DiskChanged { path } => self.on_disk_changed(&path),
@@ -1529,6 +1748,20 @@ impl App {
                     }
                 }
                 WorkerMsg::SearchComplete { query, hits } => self.on_search_complete(query, hits),
+                WorkerMsg::TerminalOutput { id, bytes } => {
+                    term_bytes += bytes.len();
+                    if let Some(t) = self.panel.terminal_mut(id) {
+                        t.feed(&bytes);
+                    }
+                    if term_bytes >= TERM_BYTE_BUDGET {
+                        break;
+                    }
+                }
+                WorkerMsg::TerminalExited { id } => {
+                    if let Some(t) = self.panel.terminal_mut(id) {
+                        t.mark_exited();
+                    }
+                }
             }
         }
     }
@@ -1757,6 +1990,22 @@ impl App {
             Command::Palette => self.open_palette(),
             Command::QuickOpen => self.open_quick_open(),
             Command::GotoLine => self.open_goto_line(),
+
+            // --- terminal panel ---
+            Command::ToggleTerminal => self.toggle_terminal(),
+            Command::NewTerminal => self.new_terminal(),
+            Command::CloseTerminal => self.close_terminal(),
+            Command::MinimizeTerminal => self.minimize_terminal(),
+            Command::NextTerminal => {
+                if self.panel.open {
+                    self.panel.next();
+                }
+            }
+            Command::PrevTerminal => {
+                if self.panel.open {
+                    self.panel.prev();
+                }
+            }
 
             // A plugin-contributed command referenced by id.
             Command::Run(id) => {
@@ -3438,6 +3687,116 @@ mod tests {
             "explorer.revealActiveFile",
         ] {
             app.registry.dispatch_command(id, &mut app.editor);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- terminal panel ------------------------------------------------------
+
+    #[test]
+    fn terminal_panel_layout_and_header_render_without_a_shell() {
+        // Force the dock open without spawning a shell, exercising the layout split, the header
+        // controls, and the empty-content branch — all PTY-free, so it runs everywhere.
+        let path = temp_file("x");
+        let mut app = app_with(&path);
+        assert!(!app.panel.open);
+
+        app.panel.open = true;
+        let text = render_to_string(&mut app, 60, 16);
+        assert!(text.contains('▾'), "header shows the minimize control");
+        assert!(text.contains('+'), "header shows the new-terminal control");
+
+        // Minimized → only the header row is laid out (no content region recorded).
+        app.panel.minimized = true;
+        let _ = render_to_string(&mut app, 60, 16);
+        assert!(app.regions.panel_header.is_some());
+        assert!(app.regions.panel_content.is_none());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn minimize_and_close_return_focus_to_editor() {
+        // State transitions without a live shell: minimize/restore + close bookkeeping.
+        let path = temp_file("x");
+        let mut app = app_with(&path);
+        app.panel.open = true;
+        app.editor.focus = Focus::Panel;
+
+        app.minimize_terminal();
+        assert!(app.panel.minimized);
+        assert_eq!(app.editor.focus, Focus::Editor);
+
+        app.minimize_terminal();
+        assert!(!app.panel.minimized);
+
+        // Closing with no terminals collapses the dock and restores editor focus.
+        app.close_terminal();
+        assert!(!app.panel.open);
+        assert_eq!(app.editor.focus, Focus::Editor);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// End-to-end: toggle the dock, type a command, and confirm the shell's echo lands in a
+    /// rendered frame. Spawns a real PTY + `/bin/sh`, so it is `#[ignore]`d (opt-in via
+    /// `cargo test -p editor-app -- --ignored terminal_echoes`) and kept out of portable CI.
+    #[test]
+    #[ignore = "spawns a real PTY + /bin/sh; run locally with --ignored"]
+    fn terminal_echoes_typed_command() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let dir = temp_dir_with_files();
+        let mut app = app_with(&dir);
+        app.config.terminal_shell = Some("/bin/sh".to_string());
+
+        // First frame lays out the (closed) panel; toggling then spawns + focuses the shell.
+        let _ = render_to_string(&mut app, 120, 40);
+        app.dispatch(Command::ToggleTerminal);
+        assert_eq!(app.editor.focus, Focus::Panel);
+        assert_eq!(app.panel.terminals.len(), 1);
+        // Re-lay-out so the PTY is sized to the panel region.
+        let _ = render_to_string(&mut app, 120, 40);
+        app.sync_terminals();
+
+        for ch in "echo lumina_smoke".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Pump: drain PTY output and redraw until the echo appears, or time out.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut found = false;
+        while Instant::now() < deadline {
+            app.drain_workers();
+            if render_to_string(&mut app, 120, 40).contains("lumina_smoke") {
+                found = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        assert!(found, "the shell echo should render in the terminal panel");
+
+        // Emit far more than one screenful, then wheel up hard over the panel: scrolling past a
+        // screenful must not panic vt100's `cell()` (regression for the scrollback-clamp fix).
+        for ch in "seq 1 300".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            app.drain_workers();
+            if render_to_string(&mut app, 120, 40).contains("300") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        let content = app.regions.panel_content.expect("panel content region");
+        for _ in 0..50 {
+            app.on_mouse(mouse(
+                MouseEventKind::ScrollUp,
+                content.x + 2,
+                content.y + 1,
+            ));
+            let _ = render_to_string(&mut app, 120, 40); // must not panic
         }
         std::fs::remove_dir_all(&dir).ok();
     }

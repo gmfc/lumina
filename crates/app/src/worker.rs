@@ -22,6 +22,10 @@ pub enum WorkerMsg {
         path: PathBuf,
         statuses: crate::git::LineStatuses,
     },
+    /// A chunk of output from a terminal's PTY reader thread.
+    TerminalOutput { id: u64, bytes: Vec<u8> },
+    /// A terminal's shell process exited (its reader thread reached EOF).
+    TerminalExited { id: u64 },
 }
 
 /// Create the worker channel.

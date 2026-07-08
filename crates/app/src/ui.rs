@@ -31,31 +31,47 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     ])
     .areas(area);
 
-    // Remember body height for PageUp/PageDown next tick.
-    app.page_height = body.height.saturating_sub(0) as usize;
+    // Split the terminal dock off the bottom of the body (full width, below the editor).
+    let panel_rows = terminal_panel_rows(app, body.height);
+    let (main_body, panel_area) = if panel_rows > 0 {
+        let [main, panel] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(panel_rows)]).areas(body);
+        (main, Some(panel))
+    } else {
+        (body, None)
+    };
+
+    // Remember the editor viewport height for PageUp/PageDown next tick.
+    app.page_height = main_body.height.saturating_sub(0) as usize;
 
     let (editor_area, sidebar_area, sidebar_inner) = if app.editor.sidebar_visible {
         let [sidebar, editors] = Layout::horizontal([
             Constraint::Length(app.editor.sidebar_width),
             Constraint::Min(0),
         ])
-        .areas(body);
+        .areas(main_body);
         let inner = render_sidebar(f, app, sidebar);
         (editors, Some(sidebar), Some(inner))
     } else {
-        (body, None, None)
+        (main_body, None, None)
     };
 
     render_tabs(f, app, tabs_area);
     render_editor(f, app, editor_area);
     render_status(f, app, status_area);
 
-    // Overlays draw last, on top of the body (plan §4).
+    // The terminal dock draws after the editor so its cursor wins when the panel is focused.
+    let (panel_header, panel_content) = match panel_area {
+        Some(panel) => render_terminal_panel(f, app, panel),
+        None => (None, None),
+    };
+
+    // Overlays draw last, on top of the body above the dock (plan §4).
     render_completion(f, app, editor_area);
     render_find(f, app, editor_area);
-    render_search(f, app, body);
-    render_picker(f, app, body);
-    render_overlay(f, app, body);
+    render_search(f, app, main_body);
+    render_picker(f, app, main_body);
+    render_overlay(f, app, main_body);
 
     // Record laid-out regions so the mouse router (which runs outside draw) can hit-test.
     app.regions = Regions {
@@ -63,7 +79,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         sidebar: sidebar_area,
         sidebar_inner,
         editor: editor_area,
+        panel_header,
+        panel_content,
     };
+}
+
+/// Rows the terminal dock occupies in the body: 0 when closed, 1 when minimized (header only),
+/// else `height + 1` (header + content), always leaving at least one row for the editor.
+fn terminal_panel_rows(app: &App, body_height: u16) -> u16 {
+    if !app.panel.open || body_height <= 1 {
+        0
+    } else if app.panel.minimized {
+        1
+    } else {
+        (app.panel.height + 1).min(body_height.saturating_sub(1))
+    }
 }
 
 fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
@@ -506,6 +536,10 @@ pub struct Regions {
     /// maps against this, not `sidebar`, so clicks land on the row actually drawn there.
     pub sidebar_inner: Option<Rect>,
     pub editor: Rect,
+    /// The terminal panel's header (tab bar) row, when the dock is open.
+    pub panel_header: Option<Rect>,
+    /// The terminal panel's content region (the active shell's grid), when expanded.
+    pub panel_content: Option<Rect>,
 }
 
 /// Gutter width for a document (digits + one padding space). Shared with the mouse router.
@@ -557,6 +591,140 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(line).style(Style::default().bg(Color::Rgb(30, 33, 39))),
         area,
     );
+}
+
+/// Render the terminal dock (header row + the active shell's grid). Returns the header and
+/// content regions so the mouse router can hit-test against exactly what was drawn.
+fn render_terminal_panel(f: &mut Frame, app: &App, area: Rect) -> (Option<Rect>, Option<Rect>) {
+    if area.height == 0 || area.width == 0 {
+        return (None, None);
+    }
+    let header = Rect::new(area.x, area.y, area.width, 1);
+    render_terminal_header(f, app, header);
+    if app.panel.minimized || area.height <= 1 {
+        return (Some(header), None);
+    }
+    let content = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+    render_terminal_content(f, app, content);
+    (Some(header), Some(content))
+}
+
+/// The header: the minimize control, one segment per terminal tab, and a `+` to add one.
+fn render_terminal_header(f: &mut Frame, app: &App, area: Rect) {
+    let focused = app.editor.focus == Focus::Panel;
+    let bg = Style::default().bg(Color::Rgb(30, 33, 39));
+    let active = app.panel.active;
+    let buf = f.buffer_mut();
+    // Paint the whole row with the header background first.
+    for x in area.x..area.right() {
+        if let Some(cell) = cell_at(buf, x, area.y) {
+            cell.set_char(' ');
+            cell.set_style(bg);
+        }
+    }
+    let mut x = area.x;
+    for (label, hit) in app.panel.header_segments() {
+        if x >= area.right() {
+            break;
+        }
+        let style = header_seg_style(hit, active, focused);
+        put_str(buf, x, area.y, &label, style, area.right());
+        x = x.saturating_add(label.chars().count() as u16);
+    }
+}
+
+/// Style for one header segment (active tab highlighted; accented when the panel is focused).
+fn header_seg_style(hit: crate::terminal::HeaderHit, active: usize, focused: bool) -> Style {
+    use crate::terminal::HeaderHit;
+    match hit {
+        HeaderHit::Tab(i) if i == active => {
+            if focused {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(CLR_ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Rgb(55, 58, 66))
+                    .add_modifier(Modifier::BOLD)
+            }
+        }
+        HeaderHit::Tab(_) => Style::default().fg(Color::Gray).bg(Color::Rgb(30, 33, 39)),
+        _ => Style::default()
+            .fg(Color::DarkGray)
+            .bg(Color::Rgb(30, 33, 39)),
+    }
+}
+
+/// Render the active terminal's `vt100` grid into `area`, cell by cell, and place the hardware
+/// cursor at the shell's cursor when the panel is focused.
+fn render_terminal_content(f: &mut Frame, app: &App, area: Rect) {
+    let focused = app.editor.focus == Focus::Panel;
+    let Some(term) = app.panel.active_terminal() else {
+        let buf = f.buffer_mut();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = cell_at(buf, x, y) {
+                    cell.set_char(' ');
+                    cell.set_style(Style::default());
+                }
+            }
+        }
+        return;
+    };
+    let screen = term.screen();
+    let (grid_rows, grid_cols) = screen.size();
+    let buf = f.buffer_mut();
+    for row in 0..area.height.min(grid_rows) {
+        for col in 0..area.width.min(grid_cols) {
+            let Some(src) = screen.cell(row, col) else {
+                continue;
+            };
+            let Some(dst) = cell_at(buf, area.x + col, area.y + row) else {
+                continue;
+            };
+            let text = src.contents();
+            dst.set_char(if text.is_empty() {
+                ' '
+            } else {
+                text.chars().next().unwrap_or(' ')
+            });
+            dst.set_style(terminal_cell_style(src));
+        }
+    }
+    // Only show the cursor at the live view: `cursor_position()` is the live cursor, which does
+    // not correspond to the grid the user sees while scrolled into history.
+    if focused && term.at_live() && !screen.hide_cursor() {
+        let (crow, ccol) = screen.cursor_position();
+        if crow < area.height && ccol < area.width {
+            f.set_cursor_position(Position::new(area.x + ccol, area.y + crow));
+        }
+    }
+}
+
+/// Translate a `vt100` cell's colors and attributes into a ratatui style.
+fn terminal_cell_style(cell: &vt100::Cell) -> Style {
+    let mut style = Style::default();
+    if let Some(fg) = crate::terminal::vt_color(cell.fgcolor()) {
+        style = style.fg(fg);
+    }
+    if let Some(bg) = crate::terminal::vt_color(cell.bgcolor()) {
+        style = style.bg(bg);
+    }
+    if cell.bold() {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if cell.italic() {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if cell.underline() {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if cell.inverse() {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    style
 }
 
 /// Render the sidebar and return its inner content region (below the title), so the mouse
@@ -701,7 +869,11 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    place_cursor(f, area, primary_screen);
+    // Only the editor shows the hardware cursor when it holds focus; the terminal panel
+    // places its own cursor when focused (and draws after the editor, so it would win anyway).
+    if app.editor.focus == Focus::Editor {
+        place_cursor(f, area, primary_screen);
+    }
 }
 
 /// Show the hardware cursor at the primary caret, if it landed inside the pane.

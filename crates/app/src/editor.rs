@@ -16,6 +16,8 @@ use editor_plugin::{Host, PanelContent};
 pub enum Focus {
     Editor,
     Sidebar,
+    /// The bottom terminal panel — keystrokes are forwarded to the active shell.
+    Panel,
 }
 
 /// A modal overlay drawn on top of the body, capturing input while active. The same
