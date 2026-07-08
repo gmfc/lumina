@@ -69,8 +69,19 @@ impl App {
             }
             // Drain background worker messages (FS/LSP/parse) — wired in later phases.
             self.drain_workers();
+            self.ensure_cursor_visible();
         }
         Ok(())
+    }
+
+    /// Keep the primary cursor within the viewport by adjusting the active doc's scroll.
+    fn ensure_cursor_visible(&mut self) {
+        let height = self.page_height.max(1);
+        if let Some(doc) = self.editor.active_document_mut() {
+            let head = doc.selections.primary().head;
+            let line = doc.char_to_line(head);
+            doc.view.scroll_to_line(line, height);
+        }
     }
 
     fn on_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -314,6 +325,26 @@ mod tests {
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert_eq!(on_disk, "abcXYZ");
         assert!(!app.editor.active_document().unwrap().dirty);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn large_file_scrolls_to_follow_cursor() {
+        let body: String = (0..5000).map(|i| format!("line {i}\n")).collect();
+        let path = temp_file(&body);
+        let mut app = app_with(&path);
+        app.page_height = 40;
+        // Jump to end of document; the viewport must scroll to keep the cursor visible.
+        app.dispatch(Command::Move(Motion::DocEnd));
+        app.ensure_cursor_visible();
+        let doc = app.editor.active_document().unwrap();
+        let head_line = doc.char_to_line(doc.selections.primary().head);
+        let top = doc.view.scroll_line;
+        assert!(
+            head_line >= top && head_line < top + 40,
+            "cursor off-screen"
+        );
+        assert!(top > 0, "did not scroll for a large file");
         std::fs::remove_file(&path).ok();
     }
 
