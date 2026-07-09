@@ -23,34 +23,42 @@ pub fn matching_bracket(doc: &Document, pos: usize) -> Option<usize> {
         _ => return None,
     };
     if forward {
-        // The opening bracket sits at `pos`; walk forward until depth returns to zero. `(pos..)`
-        // supplies the absolute offset so there's no manual loop counter (clippy).
-        let mut depth = 0isize;
-        for (i, c) in (pos..).zip(doc.text.chars_at(pos)) {
-            depth += bracket_delta(c, open, close);
-            if depth == 0 {
-                return Some(i);
-            }
-        }
-        None
+        scan_forward(doc, pos, open, close)
     } else {
-        // The closing bracket sits at `pos`; walk backward until depth returns to zero. The
-        // reverse cursor starts just past `pos`, so its first `prev()` yields `chars[pos]`.
-        let mut depth = 0isize;
-        let mut i = pos;
-        let mut chars = doc.text.chars_at(pos + 1);
-        while let Some(c) = chars.prev() {
-            depth -= bracket_delta(c, open, close);
-            if depth == 0 {
-                return Some(i);
-            }
-            if i == 0 {
-                break;
-            }
-            i -= 1;
-        }
-        None
+        scan_backward(doc, pos, open, close)
     }
+}
+
+/// The opening bracket sits at `pos`; walk forward until nesting depth returns to zero. `(pos..)`
+/// supplies the absolute offset so there's no manual loop counter (clippy).
+fn scan_forward(doc: &Document, pos: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0isize;
+    for (i, c) in (pos..).zip(doc.text.chars_at(pos)) {
+        depth += bracket_delta(c, open, close);
+        if depth == 0 {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// The closing bracket sits at `pos`; walk backward until nesting depth returns to zero. The
+/// reverse cursor starts just past `pos`, so its first `prev()` yields `chars[pos]`.
+fn scan_backward(doc: &Document, pos: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0isize;
+    let mut i = pos;
+    let mut chars = doc.text.chars_at(pos + 1);
+    while let Some(c) = chars.prev() {
+        depth -= bracket_delta(c, open, close);
+        if depth == 0 {
+            return Some(i);
+        }
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    None
 }
 
 /// `+1` when `c` opens, `-1` when `c` closes, `0` otherwise.

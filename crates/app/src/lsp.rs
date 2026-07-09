@@ -86,35 +86,13 @@ impl LspManager {
                     let Some(kind) = self.pending.remove(&id) else {
                         continue;
                     };
-                    // A JSON-RPC error response: report it instead of parsing a null result as
-                    // "no results" (which would make a failed rename/goto a silent no-op).
+                    // A JSON-RPC error response is reported as-is rather than parsing a null
+                    // result as "no results" (which would make a failed rename/goto a silent
+                    // no-op). Otherwise interpret the result against the request kind.
                     if let Some(message) = error {
                         out.push(LspEvent::Error(message));
-                        continue;
-                    }
-                    match kind {
-                        Pending::Hover => {
-                            if let Some(text) = parse_hover(&result) {
-                                out.push(LspEvent::Hover(text));
-                            }
-                        }
-                        Pending::Definition => {
-                            if let Some(loc) = parse_locations(&result).into_iter().next() {
-                                out.push(LspEvent::Goto(loc));
-                            }
-                        }
-                        Pending::Completion => {
-                            out.push(LspEvent::Completion(parse_completion(&result)));
-                        }
-                        Pending::Rename => {
-                            out.push(LspEvent::Rename(parse_workspace_edit(&result)));
-                        }
-                        Pending::References => {
-                            out.push(LspEvent::References(parse_locations(&result)));
-                        }
-                        Pending::DocumentSymbols => {
-                            out.push(LspEvent::DocumentSymbols(parse_document_symbols(&result)));
-                        }
+                    } else {
+                        out.extend(response_event(kind, &result));
                     }
                 }
             }
@@ -191,6 +169,20 @@ impl LspManager {
     pub fn is_enabled(&self) -> bool {
         !self.servers.is_empty()
     }
+}
+
+/// Interpret a successful response `result` against the request `kind` that produced it. Returns
+/// `None` when the payload carries nothing to act on (an empty hover / no definition), so the
+/// caller simply drops it.
+fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent> {
+    Some(match kind {
+        Pending::Hover => LspEvent::Hover(parse_hover(result)?),
+        Pending::Definition => LspEvent::Goto(parse_locations(result).into_iter().next()?),
+        Pending::Completion => LspEvent::Completion(parse_completion(result)),
+        Pending::Rename => LspEvent::Rename(parse_workspace_edit(result)),
+        Pending::References => LspEvent::References(parse_locations(result)),
+        Pending::DocumentSymbols => LspEvent::DocumentSymbols(parse_document_symbols(result)),
+    })
 }
 
 /// A `file://` URI for a path (best-effort; no percent-encoding of exotic chars).
