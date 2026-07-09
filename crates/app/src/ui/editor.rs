@@ -48,7 +48,7 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let Some(doc) = app.editor.active_document() else {
-        super::chrome::render_welcome(f, area);
+        super::chrome::render_welcome(f, app, area);
         return;
     };
 

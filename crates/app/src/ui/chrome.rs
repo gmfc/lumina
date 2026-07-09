@@ -65,26 +65,40 @@ const BANNER: &[&str] = &[
     "╚══════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝",
 ];
 
-/// The commands surfaced on the empty-state screen: `(keys, label)`, laid out two per row.
-/// Every one of these is also reachable from the command palette (`Ctrl+Shift+P`).
-const WELCOME_COMMANDS: &[(&str, &str)] = &[
-    ("Ctrl+P", "Open File"),
-    ("Ctrl+Shift+P", "Command Palette"),
-    ("Ctrl+N", "New File"),
-    ("Ctrl+Shift+F", "Search in Files"),
-    ("Ctrl+F", "Find"),
-    ("Ctrl+H", "Replace"),
-    ("Ctrl+B", "Toggle Sidebar"),
-    ("Ctrl+`", "Toggle Terminal"),
-    ("Ctrl+D", "Add Cursor / Next Match"),
-    ("F12", "Go to Definition"),
-    ("Ctrl+/", "Toggle Comment"),
-    ("Ctrl+Q", "Quit"),
+/// The commands surfaced on the empty-state screen: `(command id, label, fallback keys)`. The
+/// key shown is looked up live from the active keymap so config remaps are reflected; the
+/// fallback stands in only when nothing is bound. Every one is also in the command palette.
+const WELCOME_COMMANDS: &[(&str, &str, &str)] = &[
+    ("view.quickOpen", "Open File", "Ctrl+P"),
+    ("view.commandPalette", "Command Palette", "Ctrl+Shift+P"),
+    ("file.new", "New File", "Ctrl+N"),
+    ("file.save", "Save", "Ctrl+S"),
+    ("search.find", "Find", "Ctrl+F"),
+    ("edit.toggleComment", "Toggle Comment", "Ctrl+/"),
+    ("view.toggleSidebar", "Toggle Sidebar", "Ctrl+B"),
+    ("terminal.toggle", "Toggle Terminal", "Ctrl+`"),
+    ("cursor.addNextMatch", "Add Cursor / Next Match", "Ctrl+D"),
+    ("lsp.gotoDefinition", "Go to Definition", "F12"),
+    ("view.gotoLine", "Go to Line", "Ctrl+G"),
+    ("app.quit", "Quit", "Ctrl+Q"),
 ];
 
-pub(super) fn render_welcome(f: &mut Frame, area: Rect) {
+pub(super) fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
     let accent = Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD);
     let mut rows: Vec<Line> = Vec::new();
+
+    // Resolve each command's current key from the live keymap (falling back to the default),
+    // so a user's `[keys]` config overrides show through here too.
+    let commands: Vec<(String, &str)> = WELCOME_COMMANDS
+        .iter()
+        .map(|(id, label, fallback)| {
+            let keys = app
+                .keymap
+                .binding_label(id)
+                .unwrap_or_else(|| (*fallback).to_string());
+            (keys, *label)
+        })
+        .collect();
 
     // Banner — only when it fits the pane width; otherwise a plain wordmark stands in.
     let banner_w = BANNER.iter().map(|l| display_len(l)).max().unwrap_or(0);
@@ -104,12 +118,12 @@ pub(super) fn render_welcome(f: &mut Frame, area: Rect) {
 
     // Command hints. Keys accented, labels dim, aligned on a grid. Two columns when the pane
     // is wide enough, otherwise a single column so nothing is clipped.
-    let key_col = WELCOME_COMMANDS
+    let key_col = commands
         .iter()
         .map(|(k, _)| display_len(k))
         .max()
         .unwrap_or(0);
-    let label_col = WELCOME_COMMANDS
+    let label_col = commands
         .iter()
         .map(|(_, l)| display_len(l))
         .max()
@@ -118,10 +132,10 @@ pub(super) fn render_welcome(f: &mut Frame, area: Rect) {
     let two_col = (2 * cell_w + 3) <= area.width as usize;
     // Every cell is padded to the same width, so all command rows share a width and their
     // left edges align once each row is centered.
-    let cell = |(keys, label): &(&str, &str)| {
+    let cell = |(keys, label): &(String, &str)| {
         let kpad = " ".repeat(key_col - display_len(keys));
         vec![
-            TSpan::styled((*keys).to_string(), accent),
+            TSpan::styled(keys.clone(), accent),
             TSpan::raw(format!("{kpad}  ")),
             TSpan::styled(
                 format!("{label:<w$}", w = label_col),
@@ -130,7 +144,7 @@ pub(super) fn render_welcome(f: &mut Frame, area: Rect) {
         ]
     };
     let per_row = if two_col { 2 } else { 1 };
-    for pair in WELCOME_COMMANDS.chunks(per_row) {
+    for pair in commands.chunks(per_row) {
         let mut spans = Vec::new();
         for (i, entry) in pair.iter().enumerate() {
             if i > 0 {
