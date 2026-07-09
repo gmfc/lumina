@@ -99,6 +99,7 @@ impl App {
             lsp,
             lsp_sent_revision: std::collections::HashMap::new(),
             panel,
+            closed_tabs: Vec::new(),
         })
     }
 

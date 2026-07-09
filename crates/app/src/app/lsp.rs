@@ -200,6 +200,8 @@ impl App {
             match req {
                 LspRequest::Hover => self.lsp.request_hover(&p, &l, line, ch),
                 LspRequest::Definition => self.lsp.request_definition(&p, &l, line, ch),
+                LspRequest::Implementation => self.lsp.request_implementation(&p, &l, line, ch),
+                LspRequest::TypeDefinition => self.lsp.request_type_definition(&p, &l, line, ch),
                 LspRequest::Completion => self.lsp.request_completion(&p, &l, line, ch),
                 LspRequest::References => self.lsp.request_references(&p, &l, line, ch),
             };

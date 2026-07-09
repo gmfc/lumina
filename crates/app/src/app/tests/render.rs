@@ -74,4 +74,23 @@ fn renders_welcome_when_no_document_is_open() {
     std::fs::remove_file(&path).ok();
 }
 
+#[test]
+fn welcome_screen_lists_main_commands_and_banner() {
+    let path = temp_file("x");
+    let mut app = app_with(&path);
+    app.dispatch(Command::CloseTab);
+    // At a roomy width the block banner and the command hints both render.
+    let text = render_to_string(&mut app, 90, 24);
+    assert!(text.contains("█"), "block-letter LUMINA banner is drawn");
+    assert!(
+        text.contains("Command Palette"),
+        "surfaces the palette hint"
+    );
+    assert!(
+        text.contains("Go to Definition"),
+        "surfaces a navigation hint"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
 // ---- mouse routing -------------------------------------------------------

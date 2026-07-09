@@ -28,8 +28,11 @@ pub use hygiene::apply_save_hygiene;
 pub use insert::{
     delete_backward, delete_forward, delete_word_backward, insert_char, insert_newline, insert_text,
 };
-pub use linewise::{duplicate_line, indent, move_lines, outdent, toggle_comment};
-pub use select::{move_selections, select_line, select_word};
+pub use linewise::{
+    copy_line_up, delete_lines, duplicate_line, indent, insert_line_above, insert_line_below,
+    move_lines, outdent, toggle_comment,
+};
+pub use select::{cursors_to_line_ends, move_selections, select_line, select_word};
 pub use smart::{delete_backward_smart, insert_char_smart, insert_newline_smart};
 pub use undo::{redo, undo};
 

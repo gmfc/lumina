@@ -83,9 +83,15 @@ cargo run -p editor-app -- <path>     # or: cargo run --bin lmn -- <path>
 
 `Ctrl+P` quick-open · `Ctrl+Shift+P` command palette · `Ctrl+F`/`Ctrl+H` find/replace ·
 `Ctrl+Shift+F` project search · `Ctrl+B` toggle sidebar · `Ctrl+D` add cursor at next match ·
-`Alt+Click` add cursor · `Ctrl+G` go to line · `Ctrl+S` save · `Ctrl+K Ctrl+S` save as ·
-`Ctrl+N` new file · `F8`/`Shift+F8` next/prev diagnostic · `Ctrl+Space` completions ·
-`F12` go to definition · `Shift+F12` find references · `Ctrl+Shift+O` document symbols ·
+`Ctrl+F2` select all occurrences · `Shift+Alt+I` cursors to line ends · `Alt+Click` add cursor ·
+`Ctrl+G` go to line · `Ctrl+\` jump to matching bracket · `Ctrl+S` save · `Ctrl+K S` save all ·
+`Ctrl+K Ctrl+S` save as · `Ctrl+N` new file · `Ctrl+W` close tab · `Ctrl+K Ctrl+W` close all ·
+`Ctrl+Shift+T` reopen closed editor · `Ctrl+K Ctrl+K` delete line ·
+`Shift+Alt+Down`/`Shift+Alt+Up` copy line down/up · `Alt+Down`/`Alt+Up` move line ·
+`Ctrl+Enter`/`Ctrl+Shift+Enter` insert line below/above · `Ctrl+/` toggle comment ·
+`Ctrl+K Ctrl+X` trim trailing whitespace · `F8`/`Shift+F8` next/prev diagnostic ·
+`Ctrl+Space` completions · `F12` go to definition · `Ctrl+F12` go to implementation ·
+`Shift+F12` find references · `Ctrl+Shift+O` document symbols · `F2` rename ·
 `Alt+J`/`Alt+K` next/prev git change · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
 `Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+Q` quit.
 
