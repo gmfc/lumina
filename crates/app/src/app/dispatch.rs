@@ -45,6 +45,10 @@ impl App {
             Command::DeleteForward => self.with_doc(edit::delete_forward),
             Command::DeleteWordBackward => self.with_doc(edit::delete_word_backward),
             Command::DuplicateLine => self.with_doc(edit::duplicate_line),
+            Command::CopyLineUp => self.with_doc(edit::copy_line_up),
+            Command::DeleteLine => self.with_doc(edit::delete_lines),
+            Command::InsertLineBelow => self.with_doc(edit::insert_line_below),
+            Command::InsertLineAbove => self.with_doc(edit::insert_line_above),
             Command::MoveLineUp => self.with_doc(|d| edit::move_lines(d, -1)),
             Command::MoveLineDown => self.with_doc(|d| edit::move_lines(d, 1)),
             Command::ToggleComment => {
@@ -58,11 +62,16 @@ impl App {
             }
             Command::Indent => self.with_doc(edit::indent),
             Command::Outdent => self.with_doc(edit::outdent),
+            Command::TrimTrailingWhitespace => self.with_doc(|d| {
+                edit::apply_save_hygiene(d, true, false);
+            }),
 
             // --- multi-cursor ---
             Command::AddCursorAtNextMatch => self.add_cursor_next_match(),
             Command::AddCursorAbove => self.add_cursor_vertical(-1),
             Command::AddCursorBelow => self.add_cursor_vertical(1),
+            Command::SelectAllMatches => self.select_all_matches(),
+            Command::CursorsToLineEnds => self.with_doc(edit::cursors_to_line_ends),
             Command::Paste(s) => {
                 let text = if s.is_empty() {
                     self.clipboard.get()
@@ -83,9 +92,12 @@ impl App {
             // --- files / tabs ---
             Command::Save => self.save_or_save_as(),
             Command::SaveAs => self.open_save_as(),
+            Command::SaveAll => self.save_all(),
             Command::NewFile => self.new_file(),
             Command::OpenFile(p) => self.open_path(&p),
             Command::CloseTab => self.request_close(self.editor.workspace.active_tab),
+            Command::CloseAllTabs => self.close_all_tabs(),
+            Command::ReopenClosedTab => self.reopen_closed_tab(),
             Command::NextTab => self.cycle_tab(1),
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),
@@ -121,6 +133,8 @@ impl App {
             // --- language server ---
             Command::Hover => self.lsp_request(LspRequest::Hover),
             Command::GotoDefinition => self.lsp_request(LspRequest::Definition),
+            Command::GotoImplementation => self.lsp_request(LspRequest::Implementation),
+            Command::GotoTypeDefinition => self.lsp_request(LspRequest::TypeDefinition),
             Command::Completion => self.lsp_request(LspRequest::Completion),
             Command::RenameSymbol => self.open_rename(),
             Command::NextDiagnostic => self.goto_diagnostic(1),

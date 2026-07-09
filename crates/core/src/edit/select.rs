@@ -6,6 +6,30 @@ use crate::selection::{Selection, Selections};
 
 use super::helpers::span_end_line;
 
+/// Place a caret at the end of every line each selection spans (Shift+Alt+I —
+/// `editor.action.insertCursorAtEndOfEachLineSelected`). A bare caret yields a single caret
+/// at its own line end; a multi-line selection fans out into one caret per line.
+pub fn cursors_to_line_ends(doc: &mut Document) {
+    let mut carets: Vec<Selection> = Vec::new();
+    for s in doc.selections.ranges() {
+        let first = doc.char_to_line(s.from());
+        let last = span_end_line(doc, s);
+        for l in first..=last {
+            let end = doc.line_to_char(l) + doc.line_len_chars(l);
+            carets.push(Selection::caret(end));
+        }
+    }
+    if carets.is_empty() {
+        return;
+    }
+    let mut set = Selections::from_iter(carets);
+    // Keep the bottom-most caret primary, so the viewport follows the newest one.
+    let primary = set.len().saturating_sub(1);
+    set.set_primary(primary);
+    doc.selections = set;
+    doc.view.goal_col = None;
+}
+
 /// Move (or extend) every selection by `motion`. `page` is the viewport height.
 pub fn move_selections(doc: &mut Document, motion: Motion, page: usize, extend: bool) {
     // Track the sticky goal column for vertical motions on the primary selection.

@@ -49,6 +49,33 @@ impl LspManager {
         })
     }
 
+    pub fn request_implementation(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        // Reuses the Definition correlation: the response is location(s) we jump to.
+        self.send_request(language, Pending::Definition, |c| {
+            c.implementation(&uri, line, character)
+        })
+    }
+
+    pub fn request_type_definition(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, Pending::Definition, |c| {
+            c.type_definition(&uri, line, character)
+        })
+    }
+
     pub fn request_completion(
         &mut self,
         path: &Path,

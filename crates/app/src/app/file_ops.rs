@@ -18,7 +18,84 @@ impl App {
         if dirty {
             self.editor.overlay = Some(crate::editor::Overlay::ConfirmClose { tab });
         } else {
+            self.remember_closed(tab);
             self.editor.workspace.close_tab(tab);
+        }
+    }
+
+    /// Push a closed tab's path onto the reopen stack (Ctrl+Shift+T restores the newest).
+    /// Untitled buffers have no path, so nothing is remembered for them.
+    pub(super) fn remember_closed(&mut self, tab: usize) {
+        if let Some(&id) = self.editor.workspace.tabs.get(tab) {
+            if let Some(path) = self
+                .editor
+                .workspace
+                .documents
+                .get(id)
+                .and_then(|d| d.path.clone())
+            {
+                self.closed_tabs.push(path);
+            }
+        }
+    }
+
+    /// Ctrl+Shift+T: reopen the most recently closed tab that still exists and isn't already
+    /// open, focusing it. Skips missing files and duplicates, popping until one lands.
+    pub(super) fn reopen_closed_tab(&mut self) {
+        while let Some(path) = self.closed_tabs.pop() {
+            if let Some(id) = self.editor.workspace.find_by_path(&path) {
+                self.editor.workspace.focus_doc(id);
+                self.editor.focus = Focus::Editor;
+                return;
+            }
+            if path.exists() {
+                self.open_path(&path);
+                self.editor.focus = Focus::Editor;
+                return;
+            }
+        }
+        self.editor.status_message = Some("No closed editors to reopen".into());
+    }
+
+    /// Ctrl+K S: save every open, path-backed tab that has unsaved changes.
+    pub(super) fn save_all(&mut self) {
+        let restore = self.editor.workspace.active_tab;
+        let count = self.editor.workspace.tabs.len();
+        let mut saved = 0;
+        for i in 0..count {
+            self.editor.workspace.focus_tab(i);
+            let (has_path, dirty) = self
+                .editor
+                .active_document()
+                .map(|d| (d.path.is_some(), d.dirty))
+                .unwrap_or((false, false));
+            if has_path && dirty {
+                self.save_active();
+                saved += 1;
+            }
+        }
+        self.editor.workspace.focus_tab(restore);
+        self.editor.status_message = Some(format!("Saved {saved} file(s)"));
+    }
+
+    /// Ctrl+K Ctrl+W: close every tab. Clean tabs close outright; the first dirty one opens
+    /// the confirm-close prompt and stops, so no unsaved work is lost silently.
+    pub(super) fn close_all_tabs(&mut self) {
+        while let Some(&id) = self.editor.workspace.tabs.last() {
+            let idx = self.editor.workspace.tabs.len() - 1;
+            let dirty = self
+                .editor
+                .workspace
+                .documents
+                .get(id)
+                .map(|d| d.dirty)
+                .unwrap_or(false);
+            if dirty {
+                self.request_close(idx); // prompt; re-run Close All after resolving it
+                return;
+            }
+            self.remember_closed(idx);
+            self.editor.workspace.close_tab(idx);
         }
     }
 

@@ -75,6 +75,47 @@ impl App {
         }
     }
 
+    /// Ctrl+F2 / Select All Occurrences: replace the selection set with one selection over
+    /// every occurrence of the current selection's text (or the word under a bare caret), so a
+    /// subsequent edit rewrites them all at once.
+    pub(super) fn select_all_matches(&mut self) {
+        let Some(doc) = self.editor.active_document_mut() else {
+            return;
+        };
+        let primary = doc.selections.primary();
+        let (from, to) = if primary.is_empty() {
+            motion::word_at(doc, primary.head)
+        } else {
+            (primary.from(), primary.to())
+        };
+        if from >= to {
+            return;
+        }
+        let chars: Vec<char> = doc.text.chars().collect();
+        let needle = &chars[from..to];
+        let (n, m) = (chars.len(), needle.len());
+        let mut sels: Vec<Selection> = Vec::new();
+        let mut i = 0;
+        while i + m <= n {
+            if &chars[i..i + m] == needle {
+                sels.push(Selection::new(i, i + m));
+                i += m;
+            } else {
+                i += 1;
+            }
+        }
+        if sels.is_empty() {
+            return;
+        }
+        let mut set = editor_core::Selections::from_iter(sels);
+        // Keep the caret's original match primary, so the viewport doesn't jump.
+        if let Some(idx) = set.ranges().iter().position(|s| s.from() >= from) {
+            set.set_primary(idx);
+        }
+        doc.selections = set;
+        doc.view.goal_col = None;
+    }
+
     /// Toggle between the dark and light themes.
     pub(super) fn toggle_theme(&mut self) {
         let truecolor = crate::theme::truecolor_supported();

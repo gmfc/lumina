@@ -33,6 +33,8 @@ struct ClickState {
 enum LspRequest {
     Hover,
     Definition,
+    Implementation,
+    TypeDefinition,
     Completion,
     References,
 }
@@ -85,6 +87,8 @@ pub struct App {
     lsp_sent_revision: std::collections::HashMap<editor_core::DocId, u64>,
     /// The bottom terminal dock (tabs of shell sessions).
     pub panel: crate::terminal::TerminalPanel,
+    /// Paths of recently closed tabs, newest last — the "reopen closed editor" stack.
+    closed_tabs: Vec<PathBuf>,
 }
 
 mod completion;

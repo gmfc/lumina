@@ -55,28 +55,107 @@ pub(super) fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// The `LUMINA` block-letter banner, drawn on the empty-state screen.
+const BANNER: &[&str] = &[
+    "██╗     ██╗   ██╗███╗   ███╗██╗███╗   ██╗ █████╗ ",
+    "██║     ██║   ██║████╗ ████║██║████╗  ██║██╔══██╗",
+    "██║     ██║   ██║██╔████╔██║██║██╔██╗ ██║███████║",
+    "██║     ██║   ██║██║╚██╔╝██║██║██║╚██╗██║██╔══██║",
+    "███████╗╚██████╔╝██║ ╚═╝ ██║██║██║ ╚██╗██║██║  ██║",
+    "╚══════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝",
+];
+
+/// The commands surfaced on the empty-state screen: `(keys, label)`, laid out two per row.
+/// Every one of these is also reachable from the command palette (`Ctrl+Shift+P`).
+const WELCOME_COMMANDS: &[(&str, &str)] = &[
+    ("Ctrl+P", "Open File"),
+    ("Ctrl+Shift+P", "Command Palette"),
+    ("Ctrl+N", "New File"),
+    ("Ctrl+Shift+F", "Search in Files"),
+    ("Ctrl+F", "Find"),
+    ("Ctrl+H", "Replace"),
+    ("Ctrl+B", "Toggle Sidebar"),
+    ("Ctrl+`", "Toggle Terminal"),
+    ("Ctrl+D", "Add Cursor / Next Match"),
+    ("F12", "Go to Definition"),
+    ("Ctrl+/", "Toggle Comment"),
+    ("Ctrl+Q", "Quit"),
+];
+
 pub(super) fn render_welcome(f: &mut Frame, area: Rect) {
-    let lines = vec![
-        Line::from(""),
-        Line::from(TSpan::styled(
-            "  lumina",
-            Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(TSpan::styled(
-            "  a mouse-first terminal code editor",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(""),
-        Line::from(TSpan::styled(
-            "  Ctrl+P  open file      Ctrl+Shift+P  commands",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(TSpan::styled(
-            "  Ctrl+B  toggle sidebar Ctrl+Q       quit",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-    f.render_widget(Paragraph::new(lines), area);
+    let accent = Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD);
+    let mut rows: Vec<Line> = Vec::new();
+
+    // Banner — only when it fits the pane width; otherwise a plain wordmark stands in.
+    let banner_w = BANNER.iter().map(|l| display_len(l)).max().unwrap_or(0);
+    if (banner_w as u16) <= area.width {
+        for l in BANNER {
+            rows.push(Line::from(TSpan::styled(*l, accent)));
+        }
+    } else {
+        rows.push(Line::from(TSpan::styled("lumina", accent)));
+    }
+    rows.push(Line::from(""));
+    rows.push(Line::from(TSpan::styled(
+        "a mouse-first terminal code editor",
+        Style::default().fg(Color::Gray),
+    )));
+    rows.push(Line::from(""));
+
+    // Command hints. Keys accented, labels dim, aligned on a grid. Two columns when the pane
+    // is wide enough, otherwise a single column so nothing is clipped.
+    let key_col = WELCOME_COMMANDS
+        .iter()
+        .map(|(k, _)| display_len(k))
+        .max()
+        .unwrap_or(0);
+    let label_col = WELCOME_COMMANDS
+        .iter()
+        .map(|(_, l)| display_len(l))
+        .max()
+        .unwrap_or(0);
+    let cell_w = key_col + 2 + label_col;
+    let two_col = (2 * cell_w + 3) <= area.width as usize;
+    // Every cell is padded to the same width, so all command rows share a width and their
+    // left edges align once each row is centered.
+    let cell = |(keys, label): &(&str, &str)| {
+        let kpad = " ".repeat(key_col - display_len(keys));
+        vec![
+            TSpan::styled((*keys).to_string(), accent),
+            TSpan::raw(format!("{kpad}  ")),
+            TSpan::styled(
+                format!("{label:<w$}", w = label_col),
+                Style::default().fg(Color::Gray),
+            ),
+        ]
+    };
+    let per_row = if two_col { 2 } else { 1 };
+    for pair in WELCOME_COMMANDS.chunks(per_row) {
+        let mut spans = Vec::new();
+        for (i, entry) in pair.iter().enumerate() {
+            if i > 0 {
+                spans.push(TSpan::raw("   "));
+            }
+            spans.extend(cell(entry));
+        }
+        rows.push(Line::from(spans));
+    }
+
+    // Center the block vertically, and each row horizontally, within the pane.
+    let content_h = rows.len() as u16;
+    let top = area.height.saturating_sub(content_h) / 2;
+    let mut out: Vec<Line> = Vec::with_capacity(rows.len() + top as usize);
+    for _ in 0..top {
+        out.push(Line::from(""));
+    }
+    for row in rows {
+        let w: usize = row.spans.iter().map(|s| display_len(&s.content)).sum();
+        let left = (area.width as usize).saturating_sub(w) / 2;
+        let mut spans = vec![TSpan::raw(" ".repeat(left))];
+        spans.extend(row.spans);
+        out.push(Line::from(spans));
+    }
+    f.render_widget(Paragraph::new(out), area);
 }
 
 pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {

@@ -123,6 +123,22 @@ impl LspHandle {
         )
     }
 
+    /// Request the implementation location(s) of the symbol at a position.
+    pub fn implementation(&self, uri: &str, line: u32, character: u32) -> io::Result<i64> {
+        self.request(
+            "textDocument/implementation",
+            Self::position(uri, line, character),
+        )
+    }
+
+    /// Request the type-definition location(s) of the symbol at a position.
+    pub fn type_definition(&self, uri: &str, line: u32, character: u32) -> io::Result<i64> {
+        self.request(
+            "textDocument/typeDefinition",
+            Self::position(uri, line, character),
+        )
+    }
+
     /// Request completions at a position.
     pub fn completion(&self, uri: &str, line: u32, character: u32) -> io::Result<i64> {
         self.request(
