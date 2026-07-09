@@ -14,6 +14,13 @@ impl App {
         self.lsp_sent_revision.remove(&id);
     }
 
+    /// Close the tab at `idx` and drop the removed document's per-doc state (see [`forget_doc`]).
+    pub(super) fn close_and_forget(&mut self, idx: usize) {
+        if let Some(id) = self.editor.workspace.close_tab(idx) {
+            self.forget_doc(id);
+        }
+    }
+
     /// Close a tab, prompting first if it has unsaved changes (plan §6).
     pub(super) fn request_close(&mut self, tab: usize) {
         let dirty = self
@@ -28,9 +35,7 @@ impl App {
             self.editor.overlay = Some(crate::editor::Overlay::ConfirmClose { tab });
         } else {
             self.remember_closed(tab);
-            if let Some(id) = self.editor.workspace.close_tab(tab) {
-                self.forget_doc(id);
-            }
+            self.close_and_forget(tab);
         }
     }
 
@@ -106,9 +111,7 @@ impl App {
                 return;
             }
             self.remember_closed(idx);
-            if let Some(id) = self.editor.workspace.close_tab(idx) {
-                self.forget_doc(id);
-            }
+            self.close_and_forget(idx);
         }
     }
 
