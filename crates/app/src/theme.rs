@@ -173,10 +173,8 @@ impl Theme {
             if let Some(cs) = self.map.get(name) {
                 return Some(Style::default().fg(cs.fg).add_modifier(cs.modifier));
             }
-            match name.rfind('.') {
-                Some(i) => name = &name[..i],
-                None => return None,
-            }
+            let i = name.rfind('.')?;
+            name = &name[..i];
         }
     }
 
