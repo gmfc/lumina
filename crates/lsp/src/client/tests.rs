@@ -58,8 +58,39 @@ fn classify_distinguishes_notification_and_response() {
 
     let resp = serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":7,"result":null}"#).unwrap();
     match classify(&resp) {
-        Some(Incoming::Response { id, .. }) => assert_eq!(id, 7),
+        Some(Incoming::Response { id, error, .. }) => {
+            assert_eq!(id, 7);
+            assert!(
+                error.is_none(),
+                "a plain result must not look like an error"
+            );
+        }
         other => panic!("expected response, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_preserves_error_message() {
+    // A JSON-RPC error reply must carry its message, not degrade to a null result — otherwise a
+    // failed request (rename, goto, …) is indistinguishable from "no results".
+    let err = serde_json::from_str::<Value>(
+        r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"rename failed"}}"#,
+    )
+    .unwrap();
+    match classify(&err) {
+        Some(Incoming::Response { id, error, .. }) => {
+            assert_eq!(id, 4);
+            assert_eq!(error.as_deref(), Some("rename failed"));
+        }
+        other => panic!("expected error response, got {other:?}"),
+    }
+
+    // An error object without a `message` field falls back to its JSON form (still non-None).
+    let err2 =
+        serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":5,"error":{"code":-1}}"#).unwrap();
+    match classify(&err2) {
+        Some(Incoming::Response { error, .. }) => assert!(error.is_some()),
+        other => panic!("expected error response, got {other:?}"),
     }
 }
 

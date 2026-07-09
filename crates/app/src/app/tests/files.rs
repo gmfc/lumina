@@ -136,3 +136,29 @@ fn dirty_close_prompts_then_discards() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "data");
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn session_active_index_accounts_for_dropped_untitled_tabs() {
+    // Untitled buffers aren't persisted, so the saved `active` must index the filtered file
+    // list, not all tabs — an untitled tab before the active one must not shift focus on restore.
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    app.editor.workspace.tabs.clear();
+    // Tabs: [untitled, a.txt] with the path-backed file active (tab 1).
+    app.editor
+        .workspace
+        .open_document(editor_core::Document::from_str("scratch"));
+    let file = dir.join("a.txt");
+    let doc = crate::files::load(&file).unwrap();
+    app.editor.workspace.open_document(doc);
+    assert_eq!(app.editor.workspace.active_tab, 1);
+
+    app.save_session();
+    let session = crate::session::load(&app.editor.workspace.root).expect("session saved");
+    assert_eq!(session.files.len(), 1, "only the path-backed tab is saved");
+    assert_eq!(
+        session.active, 0,
+        "active must index the filtered file list"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -202,3 +202,48 @@ pub fn uri_for(path: &Path) -> String {
 pub fn path_from_uri(uri: &str) -> Option<std::path::PathBuf> {
     uri.strip_prefix("file://").map(std::path::PathBuf::from)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use editor_lsp::Incoming;
+
+    fn manager() -> LspManager {
+        LspManager::new(Path::new("/tmp"), HashMap::new())
+    }
+
+    #[test]
+    fn error_response_surfaces_as_error_event() {
+        // A server error reply to a tracked request becomes an `Error` event, not a parsed
+        // (empty) result that would read as "nothing found".
+        let mut mgr = manager();
+        mgr.pending.insert(1, Pending::Rename);
+        mgr.tx
+            .send(Incoming::Response {
+                id: 1,
+                result: Default::default(), // Null; irrelevant on the error path
+                error: Some("rename failed".into()),
+            })
+            .unwrap();
+        let events = mgr.poll();
+        assert!(
+            matches!(events.as_slice(), [LspEvent::Error(m)] if m == "rename failed"),
+            "error response did not surface as LspEvent::Error"
+        );
+    }
+
+    #[test]
+    fn success_response_still_parses_result() {
+        let mut mgr = manager();
+        mgr.pending.insert(2, Pending::Rename);
+        mgr.tx
+            .send(Incoming::Response {
+                id: 2,
+                result: Default::default(), // a null result still parses to an (empty) Rename
+                error: None,
+            })
+            .unwrap();
+        let events = mgr.poll();
+        assert!(matches!(events.as_slice(), [LspEvent::Rename(_)]));
+    }
+}

@@ -23,15 +23,14 @@ pub fn matching_bracket(doc: &Document, pos: usize) -> Option<usize> {
         _ => return None,
     };
     if forward {
-        // The opening bracket sits at `pos`; walk forward until depth returns to zero.
+        // The opening bracket sits at `pos`; walk forward until depth returns to zero. `(pos..)`
+        // supplies the absolute offset so there's no manual loop counter (clippy).
         let mut depth = 0isize;
-        let mut i = pos;
-        for c in doc.text.chars_at(pos) {
+        for (i, c) in (pos..).zip(doc.text.chars_at(pos)) {
             depth += bracket_delta(c, open, close);
             if depth == 0 {
                 return Some(i);
             }
-            i += 1;
         }
         None
     } else {

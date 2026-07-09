@@ -150,6 +150,19 @@ fn references_open_picker_and_jump() {
 }
 
 #[test]
+fn lsp_error_event_is_shown_on_status_bar() {
+    let path = temp_file("x");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::Error("rename failed".into()));
+    assert_eq!(
+        app.editor.status_message.as_deref(),
+        Some("LSP: rename failed"),
+        "a server error should surface, not be swallowed"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn diagnostic_nav_and_caret_message() {
     let path = temp_file("aaa\nbbb\nccc\n");
     let mut app = app_with(&path);
