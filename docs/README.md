@@ -1,4 +1,10 @@
-# docs/ — README assets
+# docs/
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — Lumina's architecture guide: the invariants, crate
+  layout, the plugin kernel, and the house Rust style. This is what doc comments mean when
+  they cite "CLAUDE.md invariant #N" and "plan §N".
+
+## README assets
 
 Screenshots referenced by the top-level `README.md`:
 

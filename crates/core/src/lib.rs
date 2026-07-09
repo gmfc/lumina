@@ -4,7 +4,6 @@
 //! transaction/undo model, motions, and the pure coordinate-mapping functions.
 //! This crate has **zero** terminal/UI dependencies and is unit-testable without a TTY
 //! (CLAUDE.md invariant #7).
-#![forbid(unsafe_code)]
 
 pub mod document;
 pub mod edit;

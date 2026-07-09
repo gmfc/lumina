@@ -8,6 +8,9 @@ rust-version.workspace = true
 [lib]
 name = "editor_syntax"
 
+[lints]
+workspace = true
+
 [dependencies]
 editor-core = { path = "../core" }
 ropey.workspace = true

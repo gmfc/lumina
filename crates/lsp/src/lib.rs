@@ -7,7 +7,6 @@
 //!
 //! The transport + position code is deterministic and unit-tested; the spawning client is
 //! integration-only (needs a real server binary), so CI never depends on one.
-#![forbid(unsafe_code)]
 
 pub mod client;
 pub mod position;

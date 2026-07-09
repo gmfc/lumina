@@ -4,7 +4,6 @@
 //!
 //! The self-hosting test proves this: disabling a plugin removes exactly its
 //! contributions and nothing else.
-#![forbid(unsafe_code)]
 
 use editor_plugin::Plugin;
 

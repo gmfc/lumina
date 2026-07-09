@@ -9,6 +9,9 @@ rust-version.workspace = true
 name = "lmn"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 editor-core = { path = "../core" }
 editor-syntax = { path = "../syntax" }

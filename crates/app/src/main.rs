@@ -1,6 +1,5 @@
 //! `lmn` — the lumina binary. Owns the panic-safe terminal lifecycle, the input event loop,
 //! and wiring of the kernel + plugins. Rendering is a pure function of state (plan §4).
-#![forbid(unsafe_code)]
 
 mod app;
 mod cli;

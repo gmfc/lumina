@@ -27,6 +27,10 @@ Six crates (headless core, thin view — the Helix/VS Code split):
 Everything is a command; a document holds a *set* of selections; features are plugins;
 render is a pure function of state; all buffer mutation goes through the transaction API.
 
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full guide: the load-bearing
+invariants, the crate dependency direction, the plugin kernel's ports-and-adapters seam,
+and the conventions the doc comments reference.
+
 ## Install
 
 Prebuilt `lmn` binaries are published for macOS, Windows and Linux on every tagged
