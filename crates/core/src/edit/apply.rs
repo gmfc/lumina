@@ -20,6 +20,7 @@ where
     let mut ops: Vec<(Range<usize>, String)> =
         doc.selections.ranges().iter().map(|s| f(doc, *s)).collect();
     ops.sort_by_key(|(r, _)| r.start);
+    clamp_non_overlapping(&mut ops);
 
     let changes: Vec<Change> = ops
         .iter()
@@ -59,6 +60,25 @@ where
     doc.view.goal_col = None;
     doc.dirty = true;
     doc.history.record(txn, inverse, before, after, group);
+}
+
+/// Clamp a start-sorted op list so the ranges are non-overlapping, merging any overlap into the
+/// earlier op. `edit_selections` maps one op per selection, and the selection *set* is normalized
+/// (non-overlapping) — but an op whose range reaches *outside* its own selection can still cover a
+/// neighbour. The clearest case is a word-wise backspace with two carets inside one word: each
+/// derives a delete reaching back to the word start, so the ranges overlap even though the carets
+/// don't. `Transaction` requires non-overlapping changes, so without this the forward apply
+/// double-removes and the inverse underflows — silent buffer + undo corruption. Pulling each
+/// range's start up to the previous range's end turns the overlap into one contiguous deletion,
+/// which is exactly the intended union for the delete-style ops that can reach.
+fn clamp_non_overlapping(ops: &mut [(Range<usize>, String)]) {
+    let mut running_end = 0usize;
+    for (r, _) in ops.iter_mut() {
+        if r.start < running_end {
+            r.start = running_end.min(r.end);
+        }
+        running_end = running_end.max(r.end);
+    }
 }
 
 /// Like [`edit_selections`] but each op also dictates the resulting selection, via

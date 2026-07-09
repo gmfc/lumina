@@ -51,6 +51,31 @@ fn delete_word_backward_removes_word() {
 }
 
 #[test]
+fn multi_cursor_word_backspace_inside_one_word_does_not_corrupt() {
+    // Two carets inside the *same* word derive overlapping word-left delete ranges (0..3 and
+    // 0..6). Transaction changes must stay non-overlapping, so the overlap merges into one
+    // deletion of the union — the buffer keeps the tail and undo round-trips cleanly.
+    let mut doc = Document::from_str("abcdefgh");
+    multi_caret(&mut doc, &[3, 6]);
+    delete_word_backward(&mut doc);
+    assert_eq!(doc.to_string(), "gh");
+    undo(&mut doc);
+    assert_eq!(doc.to_string(), "abcdefgh");
+}
+
+#[test]
+fn caret_backspacing_into_adjacent_selection_does_not_corrupt() {
+    // A selection [2,5) and a bare caret at 5 (kept distinct — they only touch). Backspace makes
+    // the caret reach back to 4, inside the selection's span; the ranges must not overlap.
+    let mut doc = Document::from_str("abcdefgh");
+    doc.selections = Selections::from_iter([Selection::new(2, 5), Selection::caret(5)]);
+    delete_backward(&mut doc);
+    assert_eq!(doc.to_string(), "abfgh"); // only [2,5) removed; the caret's char is subsumed
+    undo(&mut doc);
+    assert_eq!(doc.to_string(), "abcdefgh");
+}
+
+#[test]
 fn select_word_and_line() {
     let mut doc = Document::from_str("foo bar\nbaz");
     doc.set_caret(5); // inside "bar"

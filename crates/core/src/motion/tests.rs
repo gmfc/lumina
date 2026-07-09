@@ -26,6 +26,27 @@ fn word_motions() {
 }
 
 #[test]
+fn word_motions_over_punctuation_and_whitespace() {
+    // Class boundaries: word | punct-run | whitespace. Exercises the rope-cursor walk that
+    // replaced the whole-document Vec<char> allocation.
+    let doc = Document::from_str("foo::bar  baz");
+    // From 0: over "foo", then the "::" punct run is a separate stop.
+    assert_eq!(resolve(&doc, 0, Motion::WordRight, 10), 3); // -> "::"
+    assert_eq!(resolve(&doc, 3, Motion::WordRight, 10), 5); // "::" -> "bar"
+    assert_eq!(resolve(&doc, 5, Motion::WordRight, 10), 10); // "bar" + gap -> "baz"
+                                                             // WordLeft mirrors it.
+    assert_eq!(resolve(&doc, 10, Motion::WordLeft, 10), 5); // back to "bar"
+    assert_eq!(resolve(&doc, 5, Motion::WordLeft, 10), 3); // back to "::"
+                                                           // WordEndRight lands on the end of the next run.
+    assert_eq!(resolve(&doc, 0, Motion::WordEndRight, 10), 3); // end of "foo"
+    assert_eq!(resolve(&doc, 3, Motion::WordEndRight, 10), 5); // end of "::"
+                                                               // word_at over the punct run selects exactly "::".
+    assert_eq!(matching_bracket(&doc, 0), None); // sanity: not a bracket
+    let (s, e) = super::word_at(&doc, 4);
+    assert_eq!((s, e), (3, 5));
+}
+
+#[test]
 fn vertical_keeps_column() {
     let doc = Document::from_str("hello\nhi\nworld");
     // From col 4 on line 0, down to short line 1 clamps to its end.
@@ -60,4 +81,22 @@ fn matching_bracket_all_kinds_and_edges() {
     // Unbalanced openers/closers return None.
     assert_eq!(matching_bracket(&Document::from_str("("), 0), None);
     assert_eq!(matching_bracket(&Document::from_str(")"), 0), None);
+}
+
+#[test]
+fn matching_bracket_deep_nesting_and_offsets() {
+    // A deeply nested run exercises the rope-cursor scan (no whole-doc Vec allocation) and
+    // confirms the returned offsets stay correct far from `pos`, in both directions.
+    let src = "(".repeat(500) + &")".repeat(500);
+    let doc = Document::from_str(&src);
+    // Outermost opener at 0 matches the last closer at 999; innermost pair is 499 <-> 500.
+    assert_eq!(matching_bracket(&doc, 0), Some(999));
+    assert_eq!(matching_bracket(&doc, 999), Some(0));
+    assert_eq!(matching_bracket(&doc, 499), Some(500));
+    assert_eq!(matching_bracket(&doc, 500), Some(499));
+    // A bracket whose partner is missing (unbalanced tail) still returns None without panicking.
+    let lopsided = Document::from_str("((()");
+    assert_eq!(matching_bracket(&lopsided, 0), None); // no closer for the outermost opener
+    assert_eq!(matching_bracket(&lopsided, 1), None); // still one unmatched opener remains
+    assert_eq!(matching_bracket(&lopsided, 2), Some(3)); // the innermost pair balances
 }

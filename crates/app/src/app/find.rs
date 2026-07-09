@@ -168,6 +168,10 @@ impl App {
         if matches.is_empty() {
             return;
         }
+        // Compile the replacement regex once, not once per match: `replace_all` can touch up to
+        // MAX_MATCHES (5000) hits, and rebuilding the pattern each time made a single Replace All
+        // recompile the regex thousands of times.
+        let re = self.editor.find.as_ref().and_then(|f| f.compiled());
         let mut changes = Vec::with_capacity(matches.len());
         {
             let doc = &self.editor.workspace.documents[id];
@@ -183,7 +187,7 @@ impl App {
                     .editor
                     .find
                     .as_ref()
-                    .map(|f| f.replacement_for(&matched))
+                    .map(|f| f.replacement_with(re.as_ref(), &matched))
                     .unwrap_or_default();
                 changes.push(Change {
                     at: s,

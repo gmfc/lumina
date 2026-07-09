@@ -5,12 +5,15 @@ use crate::document::Document;
 /// The char offset of the bracket that balances the one at `pos`, or `None` when `pos` is not
 /// on a bracket or the bracket is unbalanced. Public so the app can precompute a bracket-match
 /// highlight into render state (plan §1.3) without duplicating the scan.
+///
+/// Scans the rope directly from `pos` (forward for an opener, backward for a closer) rather than
+/// materializing the whole document into a `Vec<char>` — this runs once per frame on the primary
+/// caret, so an allocation proportional to file size would be a per-frame cost on large buffers.
 pub fn matching_bracket(doc: &Document, pos: usize) -> Option<usize> {
-    let chars: Vec<char> = doc.text.chars().collect();
-    if pos >= chars.len() {
+    if pos >= doc.len_chars() {
         return None;
     }
-    let (open, close, forward) = match chars[pos] {
+    let (open, close, forward) = match doc.text.char(pos) {
         '(' => ('(', ')', true),
         '[' => ('[', ']', true),
         '{' => ('{', '}', true),
@@ -20,39 +23,35 @@ pub fn matching_bracket(doc: &Document, pos: usize) -> Option<usize> {
         _ => return None,
     };
     if forward {
-        // The opening bracket sits at `pos`; scan the tail and offset the hit back.
-        scan_bracket(&chars[pos..], open, close).map(|off| pos + off)
+        // The opening bracket sits at `pos`; walk forward until depth returns to zero.
+        let mut depth = 0isize;
+        let mut i = pos;
+        for c in doc.text.chars_at(pos) {
+            depth += bracket_delta(c, open, close);
+            if depth == 0 {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
     } else {
-        // The closing bracket sits at `pos`; scan the reversed head, indices realign.
-        let n = pos + 1;
-        scan_bracket_rev(&chars[..n], open, close)
-    }
-}
-
-/// Index within `chars` of the bracket that balances `chars[0]`, scanning forward.
-/// `chars[0]` is assumed to be an opening bracket; depth returns to zero at the match.
-fn scan_bracket(chars: &[char], open: char, close: char) -> Option<usize> {
-    let mut depth = 0isize;
-    for (i, &c) in chars.iter().enumerate() {
-        depth += bracket_delta(c, open, close);
-        if depth == 0 {
-            return Some(i);
+        // The closing bracket sits at `pos`; walk backward until depth returns to zero. The
+        // reverse cursor starts just past `pos`, so its first `prev()` yields `chars[pos]`.
+        let mut depth = 0isize;
+        let mut i = pos;
+        let mut chars = doc.text.chars_at(pos + 1);
+        while let Some(c) = chars.prev() {
+            depth -= bracket_delta(c, open, close);
+            if depth == 0 {
+                return Some(i);
+            }
+            if i == 0 {
+                break;
+            }
+            i -= 1;
         }
+        None
     }
-    None
-}
-
-/// Index within `chars` of the bracket that balances the last element, scanning
-/// backward. The last element is assumed to be a closing bracket.
-fn scan_bracket_rev(chars: &[char], open: char, close: char) -> Option<usize> {
-    let mut depth = 0isize;
-    for i in (0..chars.len()).rev() {
-        depth -= bracket_delta(chars[i], open, close);
-        if depth == 0 {
-            return Some(i);
-        }
-    }
-    None
 }
 
 /// `+1` when `c` opens, `-1` when `c` closes, `0` otherwise.
