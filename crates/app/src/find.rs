@@ -124,7 +124,8 @@ impl FindState {
             ti += 1;
         }
         for (i, _) in raw.iter().enumerate() {
-            self.matches.push((char_of_target[i * 2], char_of_target[i * 2 + 1]));
+            self.matches
+                .push((char_of_target[i * 2], char_of_target[i * 2 + 1]));
         }
         // Current = first match at/after the cursor, else the last.
         self.current = self

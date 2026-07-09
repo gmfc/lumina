@@ -2,9 +2,9 @@
 //! screen grid. A dedicated reader thread pumps output onto the shared `WorkerMsg` channel,
 //! so every mutation still lands on the single-threaded main loop.
 
+use crate::worker::WorkerTx;
 use std::io::{Read, Write};
 use std::path::Path;
-use crate::worker::WorkerTx;
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 

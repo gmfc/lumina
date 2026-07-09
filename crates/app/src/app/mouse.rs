@@ -167,7 +167,8 @@ impl App {
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "untitled".into());
-            let label_w = 1 + name.chars().count() + 1 + 1 + 1; // " name _ marker _ "
+            // Segment width: " name _ marker _ ".
+            let label_w = 1 + name.chars().count() + 1 + 1 + 1;
             // Saturate: many/long tabs could push the running offset past u16::MAX, overflowing
             // (panic in debug, mis-hit in release). A click can't land past the screen anyway.
             let seg_end = x.saturating_add(u16::try_from(label_w).unwrap_or(u16::MAX));

@@ -139,7 +139,10 @@ fn run_action_requires_commands_run_capability() {
         module,
     };
     let (mut host, _id) = TestHost::with_doc("x");
-    denied.apply_actions(&json!([{ "action": "run", "command": "file.save" }]), &mut host);
+    denied.apply_actions(
+        &json!([{ "action": "run", "command": "file.save" }]),
+        &mut host,
+    );
     assert!(
         host.executed.is_empty(),
         "ungated `run` escaped the capability sandbox: {:?}",
@@ -157,7 +160,10 @@ fn run_action_requires_commands_run_capability() {
         module,
     };
     let (mut host, _id) = TestHost::with_doc("x");
-    granted.apply_actions(&json!([{ "action": "run", "command": "file.save" }]), &mut host);
+    granted.apply_actions(
+        &json!([{ "action": "run", "command": "file.save" }]),
+        &mut host,
+    );
     assert_eq!(host.executed, vec!["file.save".to_string()]);
 }
 
