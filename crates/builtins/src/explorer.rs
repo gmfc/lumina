@@ -140,7 +140,14 @@ impl ExplorerPlugin {
                 continue; // the directory itself
             }
             let path = entry.path().to_path_buf();
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            // Resolve through symlinks so a symlinked directory is treated as a directory
+            // (expandable) rather than a file. `file_type()` reports the link itself, not its
+            // target; `path().is_dir()` follows it (and reports false for a broken link).
+            let is_dir = match entry.file_type() {
+                Some(t) if t.is_symlink() => path.is_dir(),
+                Some(t) => t.is_dir(),
+                None => false,
+            };
             out.push((path, is_dir));
         }
         out.sort_by(|a, b| {

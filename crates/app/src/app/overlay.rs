@@ -36,12 +36,16 @@ impl App {
                     self.editor.workspace.focus_tab(tab);
                     self.save_active();
                     self.remember_closed(tab);
-                    self.editor.workspace.close_tab(tab);
+                    if let Some(id) = self.editor.workspace.close_tab(tab) {
+                        self.forget_doc(id);
+                    }
                     self.editor.overlay = None;
                 }
                 KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('y') => {
                     self.remember_closed(tab);
-                    self.editor.workspace.close_tab(tab);
+                    if let Some(id) = self.editor.workspace.close_tab(tab) {
+                        self.forget_doc(id);
+                    }
                     self.editor.overlay = None;
                 }
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('c') => {

@@ -13,6 +13,7 @@ use crate::host::DirEntry;
 struct TestHost {
     ws: Workspace,
     panels: HashMap<String, PanelContent>,
+    executed: Vec<String>,
 }
 
 impl TestHost {
@@ -24,6 +25,7 @@ impl TestHost {
             TestHost {
                 ws,
                 panels: HashMap::new(),
+                executed: Vec::new(),
             },
             id,
         )
@@ -56,7 +58,9 @@ impl Host for TestHost {
     }
     fn set_status(&mut self, _item_id: &str, _text: String) {}
     fn notify(&mut self, _message: String) {}
-    fn execute(&mut self, _command_id: &str) {}
+    fn execute(&mut self, command_id: &str) {
+        self.executed.push(command_id.to_string());
+    }
 }
 
 fn example_plugin_dir() -> PathBuf {
@@ -120,12 +124,55 @@ fn ungranted_capability_is_denied() {
 }
 
 #[test]
+fn run_action_requires_commands_run_capability() {
+    // The `run` action lets a guest invoke arbitrary editor commands (which reach the full
+    // registry), so it must be gated like every other action. Without `commands:run` a guest
+    // that emits `run` must be ignored; with it, the command reaches the host.
+    let (engine, module) = empty_module();
+    let denied = WasmPlugin {
+        id: "denied".into(),
+        contributions: Contributions::default(),
+        capabilities: Vec::new(),
+        command_ids: Vec::new(),
+        panel_ids: Vec::new(),
+        engine,
+        module,
+    };
+    let (mut host, _id) = TestHost::with_doc("x");
+    denied.apply_actions(&json!([{ "action": "run", "command": "file.save" }]), &mut host);
+    assert!(
+        host.executed.is_empty(),
+        "ungated `run` escaped the capability sandbox: {:?}",
+        host.executed
+    );
+
+    let (engine, module) = empty_module();
+    let granted = WasmPlugin {
+        id: "granted".into(),
+        contributions: Contributions::default(),
+        capabilities: vec!["commands:run".into()],
+        command_ids: Vec::new(),
+        panel_ids: Vec::new(),
+        engine,
+        module,
+    };
+    let (mut host, _id) = TestHost::with_doc("x");
+    granted.apply_actions(&json!([{ "action": "run", "command": "file.save" }]), &mut host);
+    assert_eq!(host.executed, vec!["file.save".to_string()]);
+}
+
+#[test]
 fn granted_capabilities_dispatch_every_action_kind() {
     let (engine, module) = empty_module();
     let plugin = WasmPlugin {
         id: "multi".into(),
         contributions: Contributions::default(),
-        capabilities: vec!["edit".into(), "ui".into(), "fs:read".into()],
+        capabilities: vec![
+            "edit".into(),
+            "ui".into(),
+            "fs:read".into(),
+            "commands:run".into(),
+        ],
         command_ids: Vec::new(),
         panel_ids: Vec::new(),
         engine,

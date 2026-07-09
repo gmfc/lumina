@@ -6,6 +6,11 @@
 
 use regex::{Regex, RegexBuilder};
 
+/// Upper bound on in-file matches tracked at once. A broad query (e.g. `.`) on a large file
+/// could otherwise produce a match-per-char list that bloats memory and the per-frame highlight
+/// scan; capping keeps find responsive (project search caps similarly).
+const MAX_MATCHES: usize = 5000;
+
 /// Which field of the find widget currently receives typed input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -82,28 +87,44 @@ impl FindState {
                 return;
             }
         };
-        // Map byte offsets to char offsets with a single running counter.
-        let mut byte_to_char: Vec<usize> = Vec::new();
-        let mut char_idx = 0;
-        let mut next_byte = 0;
-        for (b, _) in text.char_indices() {
-            while next_byte <= b {
-                byte_to_char.push(char_idx);
-                next_byte += 1;
-            }
-            char_idx += 1;
-        }
-        while byte_to_char.len() <= text.len() {
-            byte_to_char.push(char_idx);
-        }
-
+        // Collect match byte ranges, capped so a pathological query on a huge file (e.g. `.`)
+        // can't produce a match-per-char list that blows up memory and the per-frame highlight
+        // scan. Matches arrive in ascending, non-overlapping order.
+        let mut raw: Vec<(usize, usize)> = Vec::new();
         for m in re.find_iter(text) {
             if m.start() == m.end() {
                 continue; // skip empty matches
             }
-            let s = byte_to_char[m.start()];
-            let e = byte_to_char[m.end()];
-            self.matches.push((s, e));
+            raw.push((m.start(), m.end()));
+            if raw.len() >= MAX_MATCHES {
+                break;
+            }
+        }
+
+        // Convert the ascending byte boundaries to char offsets in a single pass — O(matches)
+        // space, rather than materializing a whole-document byte→char table on every keystroke.
+        let mut targets: Vec<usize> = Vec::with_capacity(raw.len() * 2);
+        for &(s, e) in &raw {
+            targets.push(s);
+            targets.push(e);
+        }
+        let mut char_of_target = vec![0usize; targets.len()];
+        let mut ti = 0;
+        let mut char_idx = 0usize;
+        for (b, _) in text.char_indices() {
+            while ti < targets.len() && targets[ti] <= b {
+                char_of_target[ti] = char_idx;
+                ti += 1;
+            }
+            char_idx += 1;
+        }
+        // Any remaining targets sit at end-of-text (byte == text.len()).
+        while ti < targets.len() {
+            char_of_target[ti] = char_idx;
+            ti += 1;
+        }
+        for (i, _) in raw.iter().enumerate() {
+            self.matches.push((char_of_target[i * 2], char_of_target[i * 2 + 1]));
         }
         // Current = first match at/after the cursor, else the last.
         self.current = self
@@ -220,5 +241,25 @@ mod tests {
         f.query = "x".into();
         f.recompute("x..x..x", 3);
         assert_eq!(f.current_match(), Some((3, 4)));
+    }
+
+    #[test]
+    fn multibyte_offsets_are_char_ranges_not_byte_ranges() {
+        // "é" is two bytes; matches must be reported in char offsets. "café" then "café".
+        let mut f = FindState::new(false);
+        f.query = "café".into();
+        f.recompute("café café", 0);
+        // char offsets: first "café" = [0,4); space at 4; second "café" = [5,9).
+        assert_eq!(f.matches, vec![(0, 4), (5, 9)]);
+    }
+
+    #[test]
+    fn match_count_is_capped() {
+        let mut f = FindState::new(false);
+        f.regex = true;
+        f.query = ".".into(); // matches every char
+        let text = "a".repeat(MAX_MATCHES + 500);
+        f.recompute(&text, 0);
+        assert_eq!(f.matches.len(), MAX_MATCHES);
     }
 }

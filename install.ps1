@@ -51,22 +51,22 @@ try {
   Write-Host "downloading $asset ($version) ..."
   Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
 
-  # Verify the SHA-256 checksum when the sidecar file is published.
+  # Verify the SHA-256 checksum. Every release publishes a `.sha256` sidecar (see
+  # .github/workflows/release.yml), so verification is mandatory and fail-closed: a missing
+  # sidecar aborts the install rather than trusting the downloaded bytes.
+  Write-Host "verifying checksum ..."
   $shaFile = "$zip.sha256"
-  $haveSha = $true
   try {
     Invoke-WebRequest -Uri "$url.sha256" -OutFile $shaFile -UseBasicParsing
   } catch {
-    $haveSha = $false
-    Write-Warning "no published checksum for $asset - skipping verification"
+    throw "could not download checksum: $url.sha256"
   }
-  if ($haveSha) {
-    $expected = ((Get-Content $shaFile -Raw).Trim() -split '\s+')[0].ToLower()
-    $actual   = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
-    if ($expected -ne $actual) {
-      throw "checksum mismatch (expected $expected, got $actual)"
-    }
+  $expected = ((Get-Content $shaFile -Raw).Trim() -split '\s+')[0].ToLower()
+  $actual   = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+  if ($expected -ne $actual) {
+    throw "checksum mismatch (expected $expected, got $actual)"
   }
+  Write-Host "checksum OK"
 
   Expand-Archive -Path $zip -DestinationPath $tmp -Force
 
@@ -91,16 +91,34 @@ try {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
-# Add the install dir to the user PATH if it isn't there already.
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if (-not $userPath) { $userPath = '' }
-$onPath = $userPath.Split(';') | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') }
-if (-not $onPath) {
-  $newPath = if ($userPath) { "$userPath;$installDir" } else { $installDir }
-  [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-  $env:Path = "$env:Path;$installDir"
-  Write-Host ""
-  Write-Host "added $installDir to your user PATH (open a new terminal to pick it up)"
+# Add the install dir to the user PATH if it isn't there already. Read and write the *raw*
+# registry value and preserve its kind: [Environment]::GetEnvironmentVariable expands %VAR%
+# references, so round-tripping it through SetEnvironmentVariable would bake e.g.
+# %USERPROFILE%\bin into its literal and rewrite a REG_EXPAND_SZ entry as plain REG_SZ,
+# silently corrupting the user's PATH. Editing the registry key directly avoids that.
+$envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+if (-not $envKey) { $envKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment') }
+try {
+  $rawPath = [string]$envKey.GetValue(
+    'Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+  # Preserve the existing value kind (REG_EXPAND_SZ when it holds %VAR% refs); default new
+  # values to ExpandString, which is what Windows uses for PATH.
+  $kind = if ($rawPath) { $envKey.GetValueKind('Path') }
+          else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+  # Detect an already-present entry against the *expanded* segments, so a dir added via a
+  # variable reference is still recognised.
+  $expanded = [Environment]::ExpandEnvironmentVariables($rawPath)
+  $already = $expanded.Split(';') |
+    Where-Object { $_ -and $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') }
+  if (-not $already) {
+    $newPath = if ($rawPath) { "$rawPath;$installDir" } else { $installDir }
+    $envKey.SetValue('Path', $newPath, $kind)
+    $env:Path = "$env:Path;$installDir"
+    Write-Host ""
+    Write-Host "added $installDir to your user PATH (open a new terminal to pick it up)"
+  }
+} finally {
+  $envKey.Dispose()
 }
 
 Write-Host ""

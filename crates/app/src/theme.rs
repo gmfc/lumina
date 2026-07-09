@@ -204,7 +204,10 @@ impl Theme {
 
 fn parse_hex(s: &str) -> Option<Color> {
     let s = s.trim_start_matches('#');
-    if s.len() != 6 {
+    // Require exactly six ASCII hex digits. Verifying ASCII before the fixed-offset slices keeps
+    // them on char boundaries — a 6-*byte* multibyte string (e.g. "aébcd") would otherwise slice
+    // mid-codepoint and panic (crashing the editor on a theme typo).
+    if s.len() != 6 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let r = u8::from_str_radix(&s[0..2], 16).ok()?;
@@ -232,5 +235,17 @@ mod tests {
         t.apply_toml("[theme]\nkeyword = \"#ff0000\"").unwrap();
         let s = t.style_for("keyword").unwrap();
         assert_eq!(s.fg, Some(Color::Rgb(255, 0, 0)));
+    }
+
+    #[test]
+    fn multibyte_hex_value_is_rejected_not_panicked() {
+        // "aébcd" is 6 bytes but not 6 ASCII hex digits; parse_hex must reject it, not slice
+        // through the middle of 'é' and panic.
+        assert_eq!(parse_hex("aébcd"), None);
+        assert_eq!(parse_hex("gggggg"), None);
+        assert_eq!(parse_hex("ff00ff"), Some(Color::Rgb(255, 0, 255)));
+        // A malformed value in a real theme file must not crash the loader.
+        let mut t = Theme::default_dark(true);
+        assert!(t.apply_toml("[theme]\nkeyword = \"aébcd\"").is_ok());
     }
 }

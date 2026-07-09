@@ -17,14 +17,14 @@ INSTALL_DIR="${LMN_INSTALL_DIR:-$HOME/.local/bin}"
 BIN="lmn"
 
 say()  { printf '%s\n' "$*"; }
-warn() { printf '%s\n' "warning: $*" >&2; }
 err()  { printf '%s\n' "error: $*" >&2; exit 1; }
 
-# Pick a downloader up front.
+# Pick a downloader up front. Both are pinned to HTTPS so a tampered redirect can't downgrade
+# the transfer to cleartext http.
 if command -v curl >/dev/null 2>&1; then
   dl() { curl -fSL --proto '=https' --tlsv1.2 "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then
-  dl() { wget -q "$1" -O "$2"; }
+  dl() { wget -q --https-only "$1" -O "$2"; }
 else
   err "need curl or wget on PATH"
 fi
@@ -61,25 +61,26 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 say "downloading ${asset} (${VERSION}) ..."
 dl "$url" "$tmp/$asset" || err "download failed: $url"
 
-# Verify the SHA-256 checksum when the sidecar file is published and a hashing tool exists.
-if dl "${url}.sha256" "$tmp/$asset.sha256" 2>/dev/null; then
-  expected="$(awk '{print $1}' "$tmp/$asset.sha256")"
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
-  else
-    actual=""
-    warn "no sha256sum/shasum found — skipping checksum verification"
-  fi
-  if [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
-    err "checksum mismatch (expected $expected, got $actual)"
-  fi
+# Verify the SHA-256 checksum. Every release publishes a `.sha256` sidecar alongside the
+# archive (see .github/workflows/release.yml), so verification is mandatory and fail-closed:
+# a missing sidecar or missing hashing tool aborts the install rather than trusting the bytes.
+say "verifying checksum ..."
+dl "${url}.sha256" "$tmp/$asset.sha256" || err "could not download checksum: ${url}.sha256"
+expected="$(awk '{print $1}' "$tmp/$asset.sha256")"
+[ -n "$expected" ] || err "checksum file was empty"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
 else
-  warn "no published checksum for ${asset} — skipping verification"
+  err "need sha256sum or shasum to verify the download"
 fi
+[ "$expected" = "$actual" ] || err "checksum mismatch (expected $expected, got $actual)"
+say "checksum OK"
 
-tar -xzf "$tmp/$asset" -C "$tmp"
+# Extract without applying archived ownership (--no-same-owner); modern tar also rejects
+# absolute/`..` members by default, so extraction stays inside the temp dir.
+tar -xzf "$tmp/$asset" -C "$tmp" --no-same-owner
 
 # The archive holds a single versioned folder (lmn-<version>-<target>/lmn); locate the
 # binary rather than assume the folder name, so `latest` works without knowing the version.

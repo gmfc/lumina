@@ -54,6 +54,20 @@ fn main() -> Result<()> {
     }
 
     let mut terminal = ratatui::init();
+    // ratatui's panic hook restores raw mode + the alternate screen, but not the extra input
+    // modes we enable below. Chain a hook that also disables mouse capture / bracketed paste /
+    // keyboard-enhancement flags, so a panic doesn't leave the user's shell echoing raw mouse
+    // escapes and mangling pastes.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(
+            io::stdout(),
+            PopKeyboardEnhancementFlags,
+            DisableBracketedPaste,
+            DisableMouseCapture
+        );
+        prev_hook(info);
+    }));
     // Best-effort enable of mouse capture + bracketed paste; ignore on unsupported terms.
     let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     // The kitty keyboard protocol lets us disambiguate Ctrl+I/Tab, Ctrl+M/Enter, and detect

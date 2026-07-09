@@ -168,7 +168,9 @@ impl App {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "untitled".into());
             let label_w = 1 + name.chars().count() + 1 + 1 + 1; // " name _ marker _ "
-            let seg_end = x + label_w as u16;
+            // Saturate: many/long tabs could push the running offset past u16::MAX, overflowing
+            // (panic in debug, mis-hit in release). A click can't land past the screen anyway.
+            let seg_end = x.saturating_add(u16::try_from(label_w).unwrap_or(u16::MAX));
             if col >= x && col < seg_end {
                 // The marker (× / ●) sits near the segment's right edge.
                 return Some((i, col >= seg_end.saturating_sub(2)));

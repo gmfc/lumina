@@ -147,9 +147,12 @@ impl Transaction {
                 // Change is entirely before pos: shift by delta.
                 result += ch.delta();
             } else if ch.at < pos {
-                // pos falls inside the removed span: clamp to the change start + inserted.
-                let clamped = ch.at + inserted;
-                return clamped;
+                // pos falls inside the removed span: clamp to just past this change's inserted
+                // text, in *edited* coordinates. `result - pos` is the delta accumulated from
+                // all earlier changes (which shift this change's start too), so the edited start
+                // of the change is `ch.at + (result - pos)`; add `inserted` to land after it.
+                return (result + ch.at as isize - pos as isize + inserted as isize).max(0)
+                    as usize;
             } else {
                 // Change is at/after pos: no effect.
                 break;
@@ -222,5 +225,26 @@ mod tests {
         let txn = Transaction::insert(&doc, 0, ">>");
         assert_eq!(txn.map_position(5), 7);
         assert_eq!(txn.map_position(0), 2);
+    }
+
+    #[test]
+    fn map_position_in_removed_span_accounts_for_earlier_deltas() {
+        // Two deletions: remove "aaa\n" at 0 and "ccc\n" at 8 from "aaa\nbbb\nccc\nddd\n".
+        // A position inside the *second* removed span must map through the *first* delta too.
+        let txn = Transaction::from_changes(vec![
+            Change {
+                at: 0,
+                removed: "aaa\n".into(),
+                inserted: String::new(),
+            },
+            Change {
+                at: 8,
+                removed: "ccc\n".into(),
+                inserted: String::new(),
+            },
+        ]);
+        // Offset 9 sits inside the deleted "ccc\n" [8,12). Result text is "bbb\nddd\n"; the
+        // surviving line "ddd" starts at offset 4, not the buffer end (8).
+        assert_eq!(txn.map_position(9), 4);
     }
 }

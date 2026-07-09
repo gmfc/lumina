@@ -109,8 +109,13 @@ pub fn char_to_screen(doc: &Document, geo: &PaneGeometry, char_idx: usize) -> Op
     }
     let text = line_body(doc, line);
     let display_col = char_to_display_col(&text, col_chars, geo.tab_width);
-    let x = geo.origin_x + geo.gutter + display_col as u16;
-    let y = geo.origin_y + y_off as u16;
+    // Saturate rather than truncate/overflow: a caret past column ~65535 (an extremely long
+    // line) would otherwise wrap to a bogus small X or panic on overflow in debug builds.
+    let x = geo
+        .origin_x
+        .saturating_add(geo.gutter)
+        .saturating_add(u16::try_from(display_col).unwrap_or(u16::MAX));
+    let y = geo.origin_y.saturating_add(y_off as u16);
     Some((x, y))
 }
 
