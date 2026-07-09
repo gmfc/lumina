@@ -8,6 +8,9 @@ rust-version.workspace = true
 [lib]
 name = "editor_builtins"
 
+[lints]
+workspace = true
+
 [features]
 proptests = []
 

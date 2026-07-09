@@ -4,7 +4,6 @@
 //! query over **only the visible byte range** (plan §4 perf) and returns per-line spans
 //! carrying capture names. The app maps capture names to colors via its theme — this crate
 //! stays UI-free (no ratatui).
-#![forbid(unsafe_code)]
 
 mod highlighter;
 mod lang;

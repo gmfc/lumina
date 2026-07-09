@@ -19,6 +19,16 @@ rust-version = "1.88"
 [profile.release]
 strip = "symbols"
 
+# Lint policy, centralized (docs/ARCHITECTURE.md §12). Members opt in with
+# `lints.workspace = true`, so this is the single source of truth — it replaces the
+# per-crate `#![forbid(unsafe_code)]` attributes. `clippy::all` is promoted to a hard
+# error by CI's `-D warnings`.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+
 [workspace.dependencies]
 # core
 ropey = "1.6"

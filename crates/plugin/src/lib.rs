@@ -7,7 +7,6 @@
 //! The [`Registry`] owns the live plugin instances and aggregates their declarative
 //! [`Contributions`]. The self-hosting test proves the built-ins reach the editor only
 //! through this API.
-#![forbid(unsafe_code)]
 
 pub mod contribution;
 pub mod event;
