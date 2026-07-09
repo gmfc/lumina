@@ -5,6 +5,15 @@
 use super::*;
 
 impl App {
+    /// Drop all per-document state for a closed document, so these maps don't grow unbounded
+    /// over a long session of opening and closing files.
+    pub(super) fn forget_doc(&mut self, id: editor_core::DocId) {
+        self.editor.highlighters.remove(&id);
+        self.editor.diagnostics.remove(&id);
+        self.editor.git_hunks.remove(&id);
+        self.lsp_sent_revision.remove(&id);
+    }
+
     /// Close a tab, prompting first if it has unsaved changes (plan §6).
     pub(super) fn request_close(&mut self, tab: usize) {
         let dirty = self
@@ -19,7 +28,9 @@ impl App {
             self.editor.overlay = Some(crate::editor::Overlay::ConfirmClose { tab });
         } else {
             self.remember_closed(tab);
-            self.editor.workspace.close_tab(tab);
+            if let Some(id) = self.editor.workspace.close_tab(tab) {
+                self.forget_doc(id);
+            }
         }
     }
 
@@ -95,7 +106,9 @@ impl App {
                 return;
             }
             self.remember_closed(idx);
-            self.editor.workspace.close_tab(idx);
+            if let Some(id) = self.editor.workspace.close_tab(idx) {
+                self.forget_doc(id);
+            }
         }
     }
 

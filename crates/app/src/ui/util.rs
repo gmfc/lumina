@@ -15,7 +15,9 @@ pub(super) const CLR_ACCENT: Color = Color::Rgb(90, 130, 210);
 pub(super) const CLR_MATCH: Color = Color::Rgb(90, 74, 30);
 
 /// Resolve syntax spans into a per-char style vector; for overlapping spans the **shortest**
-/// (most specific) wins, which sidesteps tree-sitter capture-precedence subtleties.
+/// (most specific) wins. On a length *tie*, the later span wins, matching tree-sitter's
+/// "later/more-specific pattern overrides" convention (e.g. `@variable.builtin` captured over
+/// the same node as `@variable`, where the builtin pattern comes later in the query).
 pub(super) fn resolve_line_styles(
     spans: &[HighlightSpan],
     line_len: usize,
@@ -29,7 +31,7 @@ pub(super) fn resolve_line_styles(
         };
         let len = span.end.saturating_sub(span.start);
         for i in span.start..span.end.min(line_len) {
-            if len < best_len[i] {
+            if len <= best_len[i] {
                 best_len[i] = len;
                 styles[i] = Some(style);
             }

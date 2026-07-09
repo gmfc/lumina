@@ -2,9 +2,8 @@
 //! and the header layout the renderer and mouse router share.
 
 use std::path::Path;
-use std::sync::mpsc::Sender;
 
-use crate::worker::WorkerMsg;
+use crate::worker::WorkerTx;
 
 use super::session::Terminal;
 
@@ -64,7 +63,7 @@ impl TerminalPanel {
         shell: &str,
         rows: u16,
         cols: u16,
-        tx: Sender<WorkerMsg>,
+        tx: WorkerTx,
     ) -> bool {
         let id = self.next_id;
         match Terminal::new(id, cwd, shell, rows, cols, tx) {

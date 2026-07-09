@@ -13,13 +13,13 @@ use editor_core::{Document, Encoding, LineEnding};
 /// Cheap content hash used for change detection + save-echo suppression.
 pub fn fingerprint(bytes: &[u8]) -> DiskFingerprint {
     DiskFingerprint {
-        hash: seahash_hash(bytes),
+        hash: fnv1a_hash(bytes),
         len: bytes.len(),
     }
 }
 
 // A tiny dependency-free 64-bit hash (FNV-1a) — good enough to detect real changes.
-fn seahash_hash(bytes: &[u8]) -> u64 {
+fn fnv1a_hash(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for &b in bytes {
         hash ^= b as u64;
@@ -141,11 +141,27 @@ pub fn save(doc: &Document, path: &Path) -> Result<DiskFingerprint> {
         f.write_all(&bytes)?;
         f.sync_all()?;
     }
+    // Preserve the original file's permissions across the temp+rename: a fresh temp file gets
+    // default umask perms, which would otherwise silently strip e.g. a script's executable bit.
+    preserve_mode(path, &tmp);
     // Rename is atomic on the same filesystem.
     fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
     let _ = dir; // dir kept for clarity; rename target already includes it.
     Ok(fp)
 }
+
+/// Copy `src`'s permission bits onto `dst` when `src` already exists (a resave). Best-effort:
+/// a metadata/permission error must not fail the save. No-op on non-Unix targets, where the
+/// executable bit isn't file-mode-based.
+#[cfg(unix)]
+fn preserve_mode(src: &Path, dst: &Path) {
+    if let Ok(meta) = fs::metadata(src) {
+        let _ = fs::set_permissions(dst, meta.permissions());
+    }
+}
+
+#[cfg(not(unix))]
+fn preserve_mode(_src: &Path, _dst: &Path) {}
 
 fn temp_path(path: &Path) -> PathBuf {
     let mut name = path
@@ -196,5 +212,30 @@ mod tests {
         let doc = Document::from_str("a\r\nb"); // detected CRLF, stored LF internally
         let bytes = encode(&doc);
         assert_eq!(bytes, b"a\r\nb");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_preserves_unix_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "lumina_perm_test_{}_{}.sh",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::write(&path, "#!/bin/sh\necho hi\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut doc = Document::from_str("#!/bin/sh\necho bye\n");
+        doc.path = Some(path.clone());
+        save(&doc, &path).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        fs::remove_file(&path).ok();
+        assert_eq!(mode, 0o755, "executable bit was dropped on save");
     }
 }

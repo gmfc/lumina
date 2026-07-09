@@ -191,28 +191,38 @@ pub(super) fn parse_diagnostics(value: &Value) -> Option<DiagnosticsUpdate> {
     let mut diagnostics = Vec::new();
     if let Some(arr) = params.get("diagnostics").and_then(|d| d.as_array()) {
         for d in arr {
-            let range = d.get("range")?;
-            let start = range.get("start")?;
-            let end = range.get("end")?;
-            let severity = match d.get("severity").and_then(|s| s.as_u64()) {
-                Some(1) => Severity::Error,
-                Some(2) => Severity::Warning,
-                Some(3) => Severity::Info,
-                _ => Severity::Hint,
-            };
-            diagnostics.push(Diagnostic {
-                line: start.get("line")?.as_u64()? as u32,
-                start_char16: start.get("character")?.as_u64()? as u32,
-                end_line: end.get("line")?.as_u64()? as u32,
-                end_char16: end.get("character")?.as_u64()? as u32,
-                severity,
-                message: d
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            });
+            // Skip a single malformed entry rather than discarding the whole batch (which
+            // would also fail to clear stale diagnostics for this URI). One buggy or hostile
+            // diagnostic must not suppress the valid ones.
+            if let Some(diag) = parse_one_diagnostic(d) {
+                diagnostics.push(diag);
+            }
         }
     }
     Some(DiagnosticsUpdate { uri, diagnostics })
+}
+
+/// Parse a single diagnostic object, returning `None` (to be skipped) if it is malformed.
+fn parse_one_diagnostic(d: &Value) -> Option<Diagnostic> {
+    let range = d.get("range")?;
+    let start = range.get("start")?;
+    let end = range.get("end")?;
+    let severity = match d.get("severity").and_then(|s| s.as_u64()) {
+        Some(1) => Severity::Error,
+        Some(2) => Severity::Warning,
+        Some(3) => Severity::Info,
+        _ => Severity::Hint,
+    };
+    Some(Diagnostic {
+        line: start.get("line")?.as_u64()? as u32,
+        start_char16: start.get("character")?.as_u64()? as u32,
+        end_line: end.get("line")?.as_u64()? as u32,
+        end_char16: end.get("character")?.as_u64()? as u32,
+        severity,
+        message: d
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
 }

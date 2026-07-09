@@ -71,6 +71,27 @@ impl App {
         self.recompute_find();
     }
 
+    /// Refresh find matches after `id` was reloaded from disk, without moving the cursor.
+    ///
+    /// `FindState.matches` holds raw char offsets; a shorter external reload would leave them
+    /// pointing past the new buffer end, so a later replace slices out of range and panics.
+    /// Only the active document's matches are ever shown, so recomputing it is sufficient;
+    /// selections are left as the sync-mapped positions (unlike [`Self::recompute_find`], which
+    /// also jumps to the current match).
+    pub(super) fn refresh_find_after_reload(&mut self, id: editor_core::DocId) {
+        if self.editor.find.is_none() || self.editor.workspace.active_doc() != Some(id) {
+            return;
+        }
+        let Some(doc) = self.editor.workspace.documents.get(id) else {
+            return;
+        };
+        let text = doc.text.to_string();
+        if let Some(find) = &mut self.editor.find {
+            let origin = find.origin;
+            find.recompute(&text, origin);
+        }
+    }
+
     /// Recompute matches against the active document and move to the current one.
     pub(super) fn recompute_find(&mut self) {
         let Some(id) = self.editor.workspace.active_doc() else {
@@ -112,6 +133,11 @@ impl App {
             let Some(doc) = self.editor.workspace.documents.get(id) else {
                 return;
             };
+            // Defensive: a stale match (e.g. from a race with an external reload) could point
+            // past the current buffer; skip rather than panic slicing out of range.
+            if s > e || e > doc.len_chars() {
+                return;
+            }
             doc.text.slice(s..e).to_string()
         };
         let repl = self
@@ -145,7 +171,13 @@ impl App {
         let mut changes = Vec::with_capacity(matches.len());
         {
             let doc = &self.editor.workspace.documents[id];
+            let len = doc.len_chars();
             for &(s, e) in &matches {
+                // Defensive: never slice past the current buffer (a stale match from a race
+                // would otherwise panic ropey). Matches are normally kept fresh on reload.
+                if s > e || e > len {
+                    continue;
+                }
                 let matched = doc.text.slice(s..e).to_string();
                 let inserted = self
                     .editor

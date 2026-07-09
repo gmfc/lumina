@@ -64,8 +64,8 @@ pub struct App {
     /// Last click for multi-click detection.
     last_click: Option<ClickState>,
     // --- Phase 8: background workers + external sync ---
-    /// Sender handed to background workers (search, watcher).
-    worker_tx: std::sync::mpsc::Sender<crate::worker::WorkerMsg>,
+    /// Sender handed to background workers (search, watcher). Bounded (see [`crate::worker`]).
+    worker_tx: crate::worker::WorkerTx,
     /// Receiver drained each tick by the main loop.
     worker_rx: std::sync::mpsc::Receiver<crate::worker::WorkerMsg>,
     /// The filesystem debouncer; kept alive so the watch persists.

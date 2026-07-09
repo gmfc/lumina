@@ -3,7 +3,7 @@
 //! into the same single-threaded dispatch path.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::Duration;
 
 use notify::{PollWatcher, RecursiveMode, Watcher};
@@ -28,13 +28,23 @@ pub enum WorkerMsg {
     TerminalExited { id: u64 },
 }
 
+/// Sending half of the worker channel. A **bounded** sync channel: when the main loop falls
+/// behind (e.g. a terminal spewing `yes`), senders block instead of growing an unbounded
+/// backlog until OOM. The bound is in messages; terminal chunks are ≤ 8 KiB, so the worst-case
+/// resident backlog is a few tens of MiB. The main loop is the only receiver and never sends,
+/// so this can't deadlock.
+pub type WorkerTx = SyncSender<WorkerMsg>;
+
+/// Backlog bound for the worker channel (see [`WorkerTx`]).
+const CHANNEL_BOUND: usize = 2048;
+
 /// Create the worker channel.
-pub fn channel() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>) {
-    std::sync::mpsc::channel()
+pub fn channel() -> (WorkerTx, Receiver<WorkerMsg>) {
+    std::sync::mpsc::sync_channel(CHANNEL_BOUND)
 }
 
 /// Build a debounced-event handler that forwards each changed path to the main loop.
-fn make_handler(tx: Sender<WorkerMsg>) -> impl FnMut(DebounceEventResult) + Send + 'static {
+fn make_handler(tx: WorkerTx) -> impl FnMut(DebounceEventResult) + Send + 'static {
     move |res: DebounceEventResult| {
         if let Ok(events) = res {
             for event in events {
@@ -57,7 +67,7 @@ pub fn spawn_watcher(
     root: PathBuf,
     extra: Option<PathBuf>,
     poll: bool,
-    tx: Sender<WorkerMsg>,
+    tx: WorkerTx,
 ) -> Option<Box<dyn std::any::Any>> {
     if poll {
         let cfg = notify::Config::default().with_poll_interval(Duration::from_millis(250));
@@ -88,7 +98,7 @@ pub fn spawn_watcher(
 }
 
 /// Run a project search on a worker thread; the result arrives as `SearchComplete`.
-pub fn spawn_search(root: PathBuf, query: String, case_sensitive: bool, tx: Sender<WorkerMsg>) {
+pub fn spawn_search(root: PathBuf, query: String, case_sensitive: bool, tx: WorkerTx) {
     std::thread::spawn(move || {
         let hits = crate::search::run_search(&root, &query, case_sensitive, 2000);
         let _ = tx.send(WorkerMsg::SearchComplete { query, hits });
@@ -97,7 +107,7 @@ pub fn spawn_search(root: PathBuf, query: String, case_sensitive: bool, tx: Send
 
 /// Compute a file's git change map off the main thread; result arrives as `GitStatus`
 /// (plan §4.1 — git compute never blocks the event loop).
-pub fn spawn_git(root: PathBuf, path: PathBuf, tx: Sender<WorkerMsg>) {
+pub fn spawn_git(root: PathBuf, path: PathBuf, tx: WorkerTx) {
     std::thread::spawn(move || {
         let statuses = crate::git::compute(&root, &path);
         let _ = tx.send(WorkerMsg::GitStatus { path, statuses });

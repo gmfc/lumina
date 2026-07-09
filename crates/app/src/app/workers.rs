@@ -15,7 +15,20 @@ impl App {
         for id in cmds {
             self.registry.dispatch_command(&id, &mut self.editor);
         }
-        let events = std::mem::take(&mut self.editor.pending_events);
+        // Coalesce duplicate notifications from this tick: a burst of external changes (e.g. a
+        // build touching files, or a formatter rewriting several open tabs) can enqueue the same
+        // idempotent event many times, and each broadcast makes reactive plugins (like the
+        // explorer's full re-walk) redo the same work. Keep first occurrences, preserving order.
+        let mut events = std::mem::take(&mut self.editor.pending_events);
+        let mut seen = Vec::new();
+        events.retain(|ev| {
+            if seen.contains(ev) {
+                false
+            } else {
+                seen.push(ev.clone());
+                true
+            }
+        });
         for ev in events {
             self.registry.broadcast(&ev, &mut self.editor);
         }
@@ -155,6 +168,9 @@ impl App {
         self.editor
             .pending_events
             .push(editor_plugin::event::Event::ExternalReload(id));
+        // Find matches held raw offsets into the *old* text; recompute them against the reload
+        // so a later replace can't slice past the new buffer end (which would panic).
+        self.refresh_find_after_reload(id);
         // The file changed under us (e.g. an agent wrote it) — refresh its git gutter.
         self.request_git_status(id);
     }

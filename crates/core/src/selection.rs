@@ -140,8 +140,12 @@ impl Selections {
         let mut merged: Vec<Selection> = Vec::with_capacity(self.ranges.len());
         for &cur in &self.ranges {
             if let Some(last) = merged.last_mut() {
-                // Overlap when the current span starts strictly before the last ends.
-                if cur.from() < last.to() {
+                // Merge when the current span overlaps the last (starts strictly before it
+                // ends), or when both are the *same* empty caret — two carets at one offset are
+                // a single cursor, and keeping both would double every per-cursor edit.
+                let coincident_carets =
+                    cur.is_empty() && last.is_empty() && cur.from() == last.from();
+                if cur.from() < last.to() || coincident_carets {
                     let forward = last.head >= last.anchor;
                     let lo = last.from().min(cur.from());
                     let hi = last.to().max(cur.to());
@@ -220,5 +224,16 @@ mod tests {
         let s = Selections::from_iter([Selection::new(0, 4), Selection::new(2, 6)]);
         assert_eq!(s.ranges().len(), 1);
         assert_eq!(s.ranges()[0].span(), 0..6);
+    }
+
+    #[test]
+    fn coincident_carets_collapse_to_one() {
+        // Two bare carets at the same offset are one cursor; keeping both would double edits.
+        let s = Selections::from_iter([Selection::caret(3), Selection::caret(3)]);
+        assert_eq!(s.ranges().len(), 1);
+        assert_eq!(s.ranges()[0], Selection::caret(3));
+        // Distinct carets are preserved.
+        let s = Selections::from_iter([Selection::caret(1), Selection::caret(3)]);
+        assert_eq!(s.ranges().len(), 2);
     }
 }

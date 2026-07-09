@@ -4,7 +4,7 @@
 use editor_core::DocId;
 
 /// A notification broadcast to plugins after the corresponding state change.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// A document was opened in a tab.
     DidOpen(DocId),

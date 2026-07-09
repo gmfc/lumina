@@ -21,13 +21,17 @@ impl App {
             return;
         };
         let rev = doc.revision;
-        let text = doc.to_string();
-        match self.lsp_sent_revision.get(&id) {
+        // Serialize the rope only when we actually have something to send. This runs every
+        // frame; materializing a multi-MB document to a String on each unchanged tick would be
+        // needless allocation churn.
+        match self.lsp_sent_revision.get(&id).copied() {
             None => {
+                let text = doc.to_string();
                 self.lsp.did_open(&path, &lang, &text);
                 self.lsp_sent_revision.insert(id, rev);
             }
-            Some(&sent) if sent != rev => {
+            Some(sent) if sent != rev => {
+                let text = doc.to_string();
                 self.lsp.did_change(&path, &lang, &text);
                 self.lsp_sent_revision.insert(id, rev);
             }

@@ -5,8 +5,8 @@
 //! back doors. It is sandboxed and **deny-by-default**: the guest has no imports at all, so it
 //! physically cannot touch the filesystem, network, or clock. It communicates only by
 //! returning a JSON list of *actions*; the host applies only the ones the manifest was granted
-//! (`edit`, `ui`, `fs:read`). A per-call **fuel** budget bounds runaway loops without killing
-//! the editor.
+//! (`edit`, `ui`, `fs:read`, `commands:run`). A per-call **fuel** budget bounds runaway loops
+//! without killing the editor.
 //!
 //! ## Engine choice
 //! The plan recommends WebAssembly as the strong-sandbox substrate (wasmtime/extism). We use
@@ -195,13 +195,17 @@ impl WasmPlugin {
             Err(_) => (0, 0),
         };
 
-        let packed = entry.call(&mut store, (ptr, len)).ok()?;
+        let packed = entry.call(&mut store, (ptr, len)).ok()? as u64;
+        // Mask each half explicitly: `packed` is guest-controlled, so an arithmetic shift of a
+        // negative i64 (or `out_ptr + out_len` overflowing) would panic in debug builds. Treat
+        // it as u64 and use checked math; an out-of-range slice simply yields `None`.
         let out_ptr = (packed >> 32) as usize;
         let out_len = (packed & 0xffff_ffff) as usize;
         if out_len == 0 {
             return None;
         }
-        let data = memory.data(&store).get(out_ptr..out_ptr + out_len)?;
+        let end = out_ptr.checked_add(out_len)?;
+        let data = memory.data(&store).get(out_ptr..end)?;
         serde_json::from_slice(data).ok()
     }
 
@@ -236,7 +240,7 @@ impl WasmPlugin {
                     host.open_path(Path::new(path));
                 }
             }
-            "run" => {
+            "run" if self.has_cap("commands:run") => {
                 if let Some(cmd) = field("command") {
                     host.execute(cmd);
                 }

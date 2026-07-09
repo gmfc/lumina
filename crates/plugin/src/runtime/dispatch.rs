@@ -71,7 +71,7 @@ impl ScriptPlugin {
                     host.open_path(Path::new(&path));
                 }
             }
-            "run" => {
+            "run" if self.has_cap("commands:run") => {
                 if let Some(cmd) = str_field(map, "command") {
                     host.execute(&cmd);
                 }

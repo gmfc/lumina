@@ -38,7 +38,12 @@ pub fn save(root: &Path, session: &Session) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(src) = toml::to_string(session) {
-        let _ = std::fs::write(path, src);
+        // Write atomically (temp + rename) like file saves do: a crash mid-write would
+        // otherwise leave a truncated TOML that `load` silently discards.
+        let tmp = path.with_extension("toml.tmp");
+        if std::fs::write(&tmp, &src).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
     }
 }
 

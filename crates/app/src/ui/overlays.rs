@@ -52,12 +52,15 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                 .take(body.height.saturating_sub(4) as usize)
                 .map(|l| Line::from(l.to_string()))
                 .collect();
+            // On a very narrow terminal the available width can fall below the 20-col floor;
+            // `usize::clamp` panics if `max < min`, so take the wider of the two as the ceiling.
+            let max_w = (body.width.saturating_sub(8) as usize).max(20);
             let w = body_text
                 .lines()
                 .map(|l| l.chars().count())
                 .max()
                 .unwrap_or(20)
-                .clamp(20, body.width.saturating_sub(8) as usize) as u16;
+                .clamp(20, max_w) as u16;
             let h = (lines.len() as u16 + 2).min(body.height.saturating_sub(2));
             let rect = centered(body, w + 4, h);
             f.render_widget(Clear, rect);

@@ -4,7 +4,7 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::mpsc::Sender;
+use crate::worker::WorkerTx;
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
@@ -29,6 +29,9 @@ pub struct Terminal {
     writer: Box<dyn Write + Send>,
     /// Handle to terminate the child on close / drop.
     killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The child process, kept so we can `wait()` (reap the zombie) on exit or drop. `None`
+    /// once already reaped.
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     /// Current grid size, so we only touch the PTY when it actually changes.
     rows: u16,
     cols: u16,
@@ -46,7 +49,7 @@ impl Terminal {
         shell: &str,
         rows: u16,
         cols: u16,
-        tx: Sender<WorkerMsg>,
+        tx: WorkerTx,
     ) -> Option<Terminal> {
         let rows = rows.max(1);
         let cols = cols.max(1);
@@ -72,29 +75,30 @@ impl Terminal {
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
 
-        let child = pair.slave.spawn_command(cmd).ok()?;
+        let mut child = pair.slave.spawn_command(cmd).ok()?;
         // Critical: drop the slave so the master read returns EOF once the child exits;
         // otherwise the reader thread blocks forever holding an open slave fd.
         drop(pair.slave);
 
-        // From here the child is live: any setup failure must kill it, or we leak a shell
-        // process (its reader thread — the only other thing that would reap it — never starts).
-        let mut killer = child.clone_killer();
+        // From here the child is live: any setup failure must kill *and reap* it, or we leak a
+        // shell process. The reader thread no longer owns the child (it only reports EOF), so
+        // reaping is done here on failure and by the Terminal itself on exit / drop.
+        let killer = child.clone_killer();
         let Some((reader, writer)) = pair
             .master
             .try_clone_reader()
             .ok()
             .zip(pair.master.take_writer().ok())
         else {
-            let _ = killer.kill();
+            reap(&mut child);
             return None;
         };
         if std::thread::Builder::new()
             .name(format!("term-{id}"))
-            .spawn(move || read_loop(id, reader, child, tx))
+            .spawn(move || read_loop(id, reader, tx))
             .is_err()
         {
-            let _ = killer.kill();
+            reap(&mut child);
             return None;
         }
 
@@ -106,6 +110,7 @@ impl Terminal {
             master: pair.master,
             writer,
             killer,
+            child: Some(child),
             rows,
             cols,
             scrollback: 0,
@@ -189,26 +194,42 @@ impl Terminal {
         self.scrollback = self.parser.screen().scrollback();
     }
 
-    /// Mark the shell as exited (its reader thread has ended).
+    /// Mark the shell as exited (its reader thread reached EOF) and reap the zombie.
+    ///
+    /// Runs on the main loop, so it must not block: the PTY reached EOF, meaning the shell has
+    /// almost always already exited and a non-blocking `try_wait` reaps it immediately. In the
+    /// rare case of a process that closed the terminal but lingers, we leave it for `Drop`
+    /// (which kills first) rather than stalling the UI on a blocking `wait`.
     pub fn mark_exited(&mut self) {
         self.exited = true;
+        if let Some(child) = &mut self.child {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                self.child = None;
+            }
+        }
     }
+}
+
+/// Kill and reap a child process (best-effort), so it doesn't linger as a zombie.
+fn reap(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
+    let _ = child.clone_killer().kill();
+    let _ = child.wait();
 }
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        // Best-effort: terminate the shell so we don't leak child processes.
+        // Best-effort: terminate the shell and reap it so we don't leak child processes.
         let _ = self.killer.kill();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.wait();
+        }
     }
 }
 
-/// Reader thread body: pump PTY output to the main loop until EOF, then report the exit.
-fn read_loop(
-    id: u64,
-    mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn portable_pty::Child + Send + Sync>,
-    tx: Sender<WorkerMsg>,
-) {
+/// Reader thread body: pump PTY output to the main loop until EOF, then report the exit. The
+/// child is reaped by the [`Terminal`] (on the `TerminalExited` it triggers, or on drop), so
+/// this thread does not own it.
+fn read_loop(id: u64, mut reader: Box<dyn Read + Send>, tx: WorkerTx) {
     let mut buf = [0u8; 8192];
     loop {
         match reader.read(&mut buf) {
@@ -226,6 +247,5 @@ fn read_loop(
             }
         }
     }
-    let _ = child.wait();
     let _ = tx.send(WorkerMsg::TerminalExited { id });
 }
