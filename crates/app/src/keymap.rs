@@ -65,6 +65,43 @@ impl Chord {
     }
 }
 
+/// A display label for one chord (`Ctrl+Shift+P`, `Ctrl+\`, `F12`, `Enter`, `Ctrl+``…).
+fn chord_label(c: &Chord) -> String {
+    let mut s = String::new();
+    if c.ctrl {
+        s.push_str("Ctrl+");
+    }
+    if c.alt {
+        s.push_str("Alt+");
+    }
+    if c.shift {
+        s.push_str("Shift+");
+    }
+    let key = match c.code {
+        KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char(ch) => ch.to_ascii_uppercase().to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "Shift+Tab".to_string(),
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::Up => "Up".to_string(),
+        KeyCode::Down => "Down".to_string(),
+        KeyCode::Left => "Left".to_string(),
+        KeyCode::Right => "Right".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PageUp".to_string(),
+        KeyCode::PageDown => "PageDown".to_string(),
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Delete => "Delete".to_string(),
+        KeyCode::Insert => "Insert".to_string(),
+        KeyCode::F(n) => format!("F{n}"),
+        other => format!("{other:?}"),
+    };
+    s.push_str(&key);
+    s
+}
+
 fn parse_code(s: &str) -> Option<KeyCode> {
     let code = match s {
         "enter" | "return" => KeyCode::Enter,
@@ -139,6 +176,16 @@ impl Keymap {
         }
     }
 
+    /// The first bound chord sequence for `id`, formatted for display (e.g. `"Ctrl+K Ctrl+S"`),
+    /// so UI hints track config remaps rather than hard-coded defaults. `None` when nothing is
+    /// bound to `id`.
+    pub fn binding_label(&self, id: &str) -> Option<String> {
+        self.bindings
+            .iter()
+            .find(|(_, bound)| bound == id)
+            .map(|(seq, _)| seq.iter().map(chord_label).collect::<Vec<_>>().join(" "))
+    }
+
     /// Resolve a pending chord sequence.
     pub fn resolve(&self, seq: &[Chord]) -> Resolve {
         let mut partial = false;
@@ -194,6 +241,34 @@ mod tests {
         km.bind("ctrl+s", "file.saveAs");
         let c = Chord::from_event(ev(KeyCode::Char('s'), KeyModifiers::CONTROL));
         assert_eq!(km.resolve(&[c]), Resolve::Command("file.saveAs".into()));
+    }
+
+    #[test]
+    fn binding_label_reflects_overrides_and_formats() {
+        let mut km = Keymap::from_pairs([
+            ("ctrl+g", "view.gotoLine"),
+            ("ctrl+k ctrl+s", "file.saveAs"),
+            ("f12", "lsp.gotoDefinition"),
+            ("ctrl+\\", "cursor.jumpToBracket"),
+        ]);
+        assert_eq!(km.binding_label("view.gotoLine").as_deref(), Some("Ctrl+G"));
+        assert_eq!(
+            km.binding_label("file.saveAs").as_deref(),
+            Some("Ctrl+K Ctrl+S")
+        );
+        assert_eq!(
+            km.binding_label("lsp.gotoDefinition").as_deref(),
+            Some("F12")
+        );
+        assert_eq!(
+            km.binding_label("cursor.jumpToBracket").as_deref(),
+            Some("Ctrl+\\")
+        );
+        assert_eq!(km.binding_label("nope"), None);
+        // A config override that repoints a chord moves the label with it.
+        km.bind("ctrl+g", "app.quit");
+        assert_eq!(km.binding_label("app.quit").as_deref(), Some("Ctrl+G"));
+        assert_eq!(km.binding_label("view.gotoLine"), None);
     }
 
     #[test]
