@@ -249,6 +249,27 @@ mod tests {
     }
 
     #[test]
+    fn replacement_with_prebuilt_regex_matches_replacement_for() {
+        // Replace All compiles the regex once and reuses it; the result must equal the per-call
+        // path. Also covers the non-regex short-circuit and the `None` (no regex) branch.
+        let mut f = FindState::new(true);
+        f.regex = true;
+        f.query = r"(\w+)@(\w+)".into();
+        f.replace = "$2.$1".into();
+        let re = f.compiled();
+        assert_eq!(f.replacement_with(re.as_ref(), "user@host"), "host.user");
+        // A None regex in regex mode falls back to the literal replacement.
+        assert_eq!(f.replacement_with(None, "user@host"), "$2.$1");
+        // Outside regex mode the replacement is verbatim regardless of the passed regex.
+        f.regex = false;
+        f.replace = "PLAIN".into();
+        assert_eq!(
+            f.replacement_with(f.compiled().as_ref(), "whatever"),
+            "PLAIN"
+        );
+    }
+
+    #[test]
     fn cursor_selects_nearest_forward_match() {
         let mut f = FindState::new(false);
         f.query = "x".into();

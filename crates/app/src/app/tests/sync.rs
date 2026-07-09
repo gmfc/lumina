@@ -53,6 +53,63 @@ fn external_clean_reload_follows_cursor() {
 }
 
 #[test]
+fn external_reload_preserves_utf16_encoding() {
+    use editor_core::{Document, Encoding};
+    // A UTF-16LE file, externally rewritten (still UTF-16LE). The reload must decode with the
+    // encoding-aware path — a bare from_utf8_lossy would turn UTF-16 bytes into mojibake and the
+    // stale encoding would re-encode that garbage on the next save.
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("lumina_u16_{}_{}.txt", std::process::id(), n));
+    let mut d0 = Document::from_str("café");
+    d0.encoding = Encoding::Utf16Le;
+    std::fs::write(&path, crate::files::encode(&d0)).unwrap();
+
+    let mut app = app_with(&path);
+    assert_eq!(
+        app.editor.active_document().unwrap().encoding,
+        Encoding::Utf16Le
+    );
+
+    let mut d1 = Document::from_str("naïve text");
+    d1.encoding = Encoding::Utf16Le;
+    std::fs::write(&path, crate::files::encode(&d1)).unwrap();
+    app.on_disk_changed(&path);
+
+    let doc = app.editor.active_document().unwrap();
+    assert_eq!(doc.to_string(), "naïve text", "UTF-16 reload decoded wrong");
+    assert_eq!(doc.encoding, Encoding::Utf16Le, "encoding not preserved");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn external_reload_of_bom_file_does_not_double_bom() {
+    use editor_core::{Document, Encoding};
+    // A UTF-8 BOM file must not accumulate a second BOM across reload+save cycles: the reload has
+    // to strip the BOM (via files::decode) rather than keep a literal U+FEFF in the text.
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("lumina_bom_{}_{}.txt", std::process::id(), n));
+    let mut d0 = Document::from_str("hi");
+    d0.encoding = Encoding::Utf8Bom;
+    std::fs::write(&path, crate::files::encode(&d0)).unwrap();
+
+    let mut app = app_with(&path);
+    let mut d1 = Document::from_str("bye");
+    d1.encoding = Encoding::Utf8Bom;
+    std::fs::write(&path, crate::files::encode(&d1)).unwrap();
+    app.on_disk_changed(&path);
+
+    let doc = app.editor.active_document().unwrap();
+    assert_eq!(
+        doc.to_string(),
+        "bye",
+        "text must not carry a literal BOM char"
+    );
+    assert!(!doc.to_string().starts_with('\u{feff}'));
+    assert_eq!(doc.encoding, Encoding::Utf8Bom);
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn external_change_on_dirty_flags_conflict() {
     let path = temp_file("original");
     let mut app = app_with(&path);

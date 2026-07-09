@@ -47,6 +47,26 @@ fn word_motions_over_punctuation_and_whitespace() {
 }
 
 #[test]
+fn word_motion_edges_and_whitespace_starts() {
+    let doc = Document::from_str("ab  cd");
+    // WordRight starting *on* whitespace skips just the whitespace run.
+    assert_eq!(resolve(&doc, 2, Motion::WordRight, 10), 4); // "  " -> "cd"
+                                                            // WordRight from within the last run walks to end-of-buffer.
+    assert_eq!(resolve(&doc, 4, Motion::WordRight, 10), 6);
+    // WordLeft from the very start stays put; WordLeft skips leading whitespace.
+    assert_eq!(resolve(&doc, 0, Motion::WordLeft, 10), 0);
+    assert_eq!(resolve(&doc, 4, Motion::WordLeft, 10), 0); // back over "  " and "ab"
+                                                           // WordEndRight over a trailing-whitespace tail and past end-of-buffer.
+    assert_eq!(resolve(&doc, 6, Motion::WordEndRight, 10), 6); // already at end
+                                                               // Motions clamp at/after the buffer end.
+    assert_eq!(resolve(&doc, 6, Motion::WordRight, 10), 6);
+    assert_eq!(resolve(&doc, 99, Motion::WordLeft, 10), 4); // past-end clamps, walks to "cd" start
+                                                            // word_at on an empty document is a degenerate empty range.
+    let empty = Document::from_str("");
+    assert_eq!(super::word_at(&empty, 0), (0, 0));
+}
+
+#[test]
 fn vertical_keeps_column() {
     let doc = Document::from_str("hello\nhi\nworld");
     // From col 4 on line 0, down to short line 1 clamps to its end.
