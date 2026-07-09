@@ -39,11 +39,34 @@ pub fn apply_save_hygiene(doc: &mut Document, trim_trailing: bool, final_newline
         let len = doc.len_chars();
         let ends_with_nl = len > 0 && doc.text.char(len - 1) == '\n';
         if len > 0 && !ends_with_nl {
-            changes.push(Change {
-                at: len,
-                removed: String::new(),
-                inserted: "\n".into(),
-            });
+            // Decide against the *post-trim* tail, not the raw buffer: if trimming empties the
+            // last line down to the newline before it, the buffer already ends in `\n` and a
+            // second one would add a spurious blank line. When the last line keeps content but
+            // also has trailing whitespace being trimmed, fold the `\n` into that same trim
+            // change instead of pushing a second change at the identical offset (two changes at
+            // one offset are not something `Transaction` can order — insert + delete would race).
+            let last_line = doc.char_to_line(len - 1);
+            let line_start = doc.line_to_char(last_line);
+            let body = doc.line_text(last_line);
+            let body = body.trim_end_matches(['\n', '\r']);
+            let body_chars = body.chars().count();
+            let kept_chars = body.trim_end_matches([' ', '\t']).chars().count();
+            let content_end = line_start + kept_chars;
+            if trim_trailing && kept_chars == 0 && line_start > 0 {
+                // Last line is all whitespace and trims away; the preceding `\n` becomes the
+                // final char — nothing to insert.
+            } else if trim_trailing && kept_chars < body_chars {
+                // The last-line trim removes `[content_end, len)`; make it re-emit a `\n` there.
+                if let Some(ch) = changes.iter_mut().find(|c| c.at == content_end) {
+                    ch.inserted = "\n".into();
+                }
+            } else {
+                changes.push(Change {
+                    at: len,
+                    removed: String::new(),
+                    inserted: "\n".into(),
+                });
+            }
         }
     }
 

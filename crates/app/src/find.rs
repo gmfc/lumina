@@ -151,13 +151,25 @@ impl FindState {
         }
     }
 
+    /// The compiled effective regex, for callers that reuse it across many matches (Replace All)
+    /// instead of rebuilding it per replacement. `None` when the pattern fails to compile.
+    pub fn compiled(&self) -> Option<Regex> {
+        self.build().ok()
+    }
+
     /// The replacement string for a match's captured text (expands `$1` etc. in regex mode).
     pub fn replacement_for(&self, matched: &str) -> String {
+        self.replacement_with(self.compiled().as_ref(), matched)
+    }
+
+    /// Like [`Self::replacement_for`] but uses a pre-built regex, so a bulk replace compiles the
+    /// pattern once rather than once per match. `re` is ignored outside regex mode.
+    pub fn replacement_with(&self, re: Option<&Regex>, matched: &str) -> String {
         if !self.regex {
             return self.replace.clone();
         }
-        match self.build() {
-            Ok(re) => {
+        match re {
+            Some(re) => {
                 if let Some(caps) = re.captures(matched) {
                     let mut out = String::new();
                     caps.expand(&self.replace, &mut out);
@@ -166,7 +178,7 @@ impl FindState {
                     self.replace.clone()
                 }
             }
-            Err(_) => self.replace.clone(),
+            None => self.replace.clone(),
         }
     }
 

@@ -124,7 +124,11 @@ impl Plugin for WasmPlugin {
     }
 
     fn render_panel(&mut self, panel_id: &str, host: &mut dyn Host) {
-        if !self.panel_ids.iter().any(|p| p == panel_id) || !self.has_cap("ui") {
+        // A plugin may render into a panel it declared in its own manifest without a separate
+        // `ui` grant — the declaration is the grant, and it can only touch its own `panel_ids`.
+        // This matches the Rhai tier (which renders declared panels ungated); the `ui` capability
+        // still gates the imperative `notify`/`set_panel` *actions* a command can emit.
+        if !self.panel_ids.iter().any(|p| p == panel_id) {
             return;
         }
         let ctx = Self::build_ctx(host);
@@ -202,7 +206,10 @@ impl WasmPlugin {
         let out_ptr = (packed >> 32) as usize;
         let out_len = (packed & 0xffff_ffff) as usize;
         if out_len == 0 {
-            return None;
+            // A guest that ran fine but has nothing to return (packed length 0) is success with no
+            // actions — not a failure. Returning an empty array here keeps `run_command` from
+            // showing a spurious "wasm command error" toast for a legitimate no-op.
+            return Some(Value::Array(Vec::new()));
         }
         let end = out_ptr.checked_add(out_len)?;
         let data = memory.data(&store).get(out_ptr..end)?;

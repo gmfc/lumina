@@ -39,6 +39,8 @@ pub enum LspEvent {
     Rename(WorkspaceEdit),
     References(Vec<Location>),
     DocumentSymbols(Vec<DocumentSymbol>),
+    /// The server replied to one of our requests with an error instead of a result.
+    Error(String),
 }
 
 /// Owns the running servers and the merged incoming-message stream.
@@ -80,10 +82,16 @@ impl LspManager {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Incoming::Diagnostics(u) => out.push(LspEvent::Diagnostics(u)),
-                Incoming::Response { id, result } => {
+                Incoming::Response { id, result, error } => {
                     let Some(kind) = self.pending.remove(&id) else {
                         continue;
                     };
+                    // A JSON-RPC error response: report it instead of parsing a null result as
+                    // "no results" (which would make a failed rename/goto a silent no-op).
+                    if let Some(message) = error {
+                        out.push(LspEvent::Error(message));
+                        continue;
+                    }
                     match kind {
                         Pending::Hover => {
                             if let Some(text) = parse_hover(&result) {

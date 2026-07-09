@@ -19,7 +19,14 @@ pub use client::{LspClient, LspHandle};
 #[derive(Debug, Clone)]
 pub enum Incoming {
     Diagnostics(DiagnosticsUpdate),
-    Response { id: i64, result: serde_json::Value },
+    Response {
+        id: i64,
+        result: serde_json::Value,
+        /// `Some(message)` when the server replied with a JSON-RPC `error` object instead of a
+        /// result. Kept distinct from a `null` result so a failed request (rename, goto, …) can
+        /// be surfaced to the user rather than silently degrading to "no result".
+        error: Option<String>,
+    },
 }
 
 /// A source location in (line, UTF-16 char) coordinates — the result of go-to-definition.

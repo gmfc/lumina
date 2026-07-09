@@ -142,8 +142,12 @@ impl App {
             return;
         }
 
-        // Clean buffer → reload, following the cursor/scroll through the diff.
-        let new_text = String::from_utf8_lossy(&bytes).into_owned();
+        // Clean buffer → reload, following the cursor/scroll through the diff. Decode with the
+        // same encoding-aware path as the initial load (strip/track a BOM, decode UTF-16), not a
+        // bare `from_utf8_lossy` — otherwise a UTF-16 or BOM file reloads as mojibake and the
+        // stale `doc.encoding` re-encodes that garbage on the next save (and a BOM file would
+        // accrue a second BOM each cycle).
+        let (new_text, encoding) = crate::files::decode(&bytes);
         let old_text = doc.to_string();
         let heads: Vec<usize> = doc.selections.ranges().iter().map(|s| s.head).collect();
         let mapped: Vec<usize> = heads
@@ -152,6 +156,7 @@ impl App {
             .collect();
 
         doc.set_text_str(&new_text);
+        doc.encoding = encoding;
         let clamped: Vec<editor_core::Selection> = mapped
             .iter()
             .map(|&m| editor_core::Selection::caret(doc.clamp(m)))

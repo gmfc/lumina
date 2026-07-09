@@ -257,7 +257,16 @@ fn classify(value: &Value) -> Option<Incoming> {
     if let Some(id) = value.get("id").and_then(|v| v.as_i64()) {
         if value.get("result").is_some() || value.get("error").is_some() {
             let result = value.get("result").cloned().unwrap_or(Value::Null);
-            return Some(Incoming::Response { id, result });
+            // Preserve the server's error message so the app can report the failure rather than
+            // treating it as an empty result (a `null` result and a real error look identical
+            // otherwise, silently turning e.g. a failed rename into a no-op).
+            let error = value.get("error").map(|e| {
+                e.get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| e.to_string())
+            });
+            return Some(Incoming::Response { id, result, error });
         }
     }
     None

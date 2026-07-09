@@ -25,6 +25,28 @@ fn save_hygiene_inserts_final_newline_only_when_missing() {
 }
 
 #[test]
+fn save_hygiene_no_spurious_blank_line_when_last_line_trims_away() {
+    // Last line is all whitespace with no final newline. Trimming it empties the line, leaving
+    // the buffer ending in the preceding "\n"; the final-newline pass must not add a second.
+    let mut doc = Document::from_str("x\n    ");
+    assert!(apply_save_hygiene(&mut doc, true, true));
+    assert_eq!(doc.to_string(), "x\n");
+    undo(&mut doc);
+    assert_eq!(doc.to_string(), "x\n    ");
+}
+
+#[test]
+fn save_hygiene_trims_last_line_and_adds_newline_together() {
+    // Last line keeps content but has trailing whitespace and no final newline: one change trims
+    // and re-emits the newline (no colliding same-offset changes).
+    let mut doc = Document::from_str("x   ");
+    assert!(apply_save_hygiene(&mut doc, true, true));
+    assert_eq!(doc.to_string(), "x\n");
+    undo(&mut doc);
+    assert_eq!(doc.to_string(), "x   ");
+}
+
+#[test]
 fn save_hygiene_noop_when_both_off() {
     let mut doc = Document::from_str("foo  \n");
     assert!(!apply_save_hygiene(&mut doc, false, false));

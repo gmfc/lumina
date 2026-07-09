@@ -148,22 +148,29 @@ impl App {
     /// Persist the open files + cursor/scroll for this project root (plan §6).
     pub(super) fn save_session(&self) {
         let ws = &self.editor.workspace;
-        let files: Vec<crate::session::SessionEntry> = ws
-            .tabs
-            .iter()
-            .filter_map(|&id| ws.documents.get(id))
-            .filter_map(|doc| {
-                doc.path.clone().map(|path| crate::session::SessionEntry {
-                    path,
-                    cursor: doc.selections.primary().head,
-                    scroll: doc.view.scroll_line,
-                })
-            })
-            .collect();
-        let session = crate::session::Session {
-            files,
-            active: ws.active_tab,
-        };
+        // Untitled buffers can't be restored, so only path-backed tabs are saved. `active` must
+        // index that *filtered* list, not `ws.tabs` — otherwise an untitled tab sitting before the
+        // active one shifts the indices and restore focuses the wrong file. Track where the active
+        // tab (or the last path-backed tab at/before it) lands after the untitled tabs drop out.
+        let mut files: Vec<crate::session::SessionEntry> = Vec::new();
+        let mut active = 0usize;
+        for (i, &id) in ws.tabs.iter().enumerate() {
+            let Some(doc) = ws.documents.get(id) else {
+                continue;
+            };
+            let Some(path) = doc.path.clone() else {
+                continue;
+            };
+            if i <= ws.active_tab {
+                active = files.len();
+            }
+            files.push(crate::session::SessionEntry {
+                path,
+                cursor: doc.selections.primary().head,
+                scroll: doc.view.scroll_line,
+            });
+        }
+        let session = crate::session::Session { files, active };
         crate::session::save(&ws.root, &session);
     }
 

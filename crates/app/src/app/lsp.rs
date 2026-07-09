@@ -104,6 +104,9 @@ impl App {
                     .collect();
                 self.open_locations_picker(entries, "Symbols");
             }
+            LspEvent::Error(message) => {
+                self.editor.status_message = Some(format!("LSP: {message}"));
+            }
         }
     }
 
