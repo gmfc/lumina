@@ -85,7 +85,7 @@ cargo run -p editor-app -- <path>     # or: cargo run --bin lmn -- <path>
 
 ## Keys (defaults, remappable in config)
 
-`Ctrl+P` quick-open · `Ctrl+Shift+P` command palette · `Ctrl+F`/`Ctrl+H` find/replace ·
+`Ctrl+P` quick-open (files; type `>` for the command palette) · `Ctrl+F`/`Ctrl+H` find/replace ·
 `Ctrl+Shift+F` project search · `Ctrl+B` toggle sidebar · `Ctrl+D` add cursor at next match ·
 `Ctrl+F2` select all occurrences · `Shift+Alt+I` cursors to line ends · `Alt+Click` add cursor ·
 `Ctrl+G` go to line · `Ctrl+\` jump to matching bracket · `Ctrl+S` save · `Ctrl+K S` save all ·

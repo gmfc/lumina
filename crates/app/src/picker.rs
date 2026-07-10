@@ -1,13 +1,13 @@
-//! The fuzzy picker overlay — one component parameterized by its item source, backing both
-//! the command palette (`Ctrl+Shift+P`) and quick open (`Ctrl+P`), plus a Go-to-Line prompt
-//! (plan §5). A tiny built-in fuzzy matcher scores and ranks candidates.
+//! The fuzzy picker overlay — one component parameterized by its item source. It backs a
+//! **unified** quick-open / command palette (VS Code style: files by default, commands when
+//! the query starts with `>`), plus a Go-to-Line prompt and LSP location lists (plan §5).
+//! A tiny built-in fuzzy matcher scores and ranks candidates.
 
 /// What the picker is choosing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
-    /// Command ids (built-in + plugin-contributed).
-    Command,
-    /// Project files; `id` is the absolute path.
+    /// Project files; `id` is the absolute path. The unified quick-open uses this as its base
+    /// kind and carries `commands` too, switching to command mode on a leading `>`.
     File,
     /// A line-number prompt; `query` holds the digits.
     GotoLine,
@@ -27,7 +27,9 @@ pub struct Picker {
     pub prompt: String,
     pub query: String,
     pub items: Vec<PickerItem>,
-    /// Indices into `items` that pass the current filter, best first.
+    /// The command source for the unified picker's `>` mode (empty for other kinds).
+    pub commands: Vec<PickerItem>,
+    /// Indices into the *active* source (`items` or `commands`) passing the filter, best first.
     pub filtered: Vec<usize>,
     pub selected: usize,
 }
@@ -39,6 +41,7 @@ impl Picker {
             prompt: prompt.to_string(),
             query: String::new(),
             items,
+            commands: Vec::new(),
             filtered: Vec::new(),
             selected: 0,
         };
@@ -46,18 +49,76 @@ impl Picker {
         p
     }
 
-    /// Recompute the filtered/ranked list for the current query.
+    /// A unified quick-open / command palette: `files` by default, `commands` when the query
+    /// starts with `>`. `start_in_commands` pre-fills the `>` (the command-palette entry point).
+    pub fn unified(
+        prompt: &str,
+        files: Vec<PickerItem>,
+        commands: Vec<PickerItem>,
+        start_in_commands: bool,
+    ) -> Picker {
+        let mut p = Picker {
+            kind: PickerKind::File,
+            prompt: prompt.to_string(),
+            query: if start_in_commands {
+                ">".into()
+            } else {
+                String::new()
+            },
+            items: files,
+            commands,
+            filtered: Vec::new(),
+            selected: 0,
+        };
+        p.refilter();
+        p
+    }
+
+    /// True when the `>` command mode is active (unified picker, query starts with `>`).
+    pub fn command_mode(&self) -> bool {
+        !self.commands.is_empty() && self.query.starts_with('>')
+    }
+
+    /// The source currently being filtered (files or commands).
+    pub fn active_items(&self) -> &[PickerItem] {
+        if self.command_mode() {
+            &self.commands
+        } else {
+            &self.items
+        }
+    }
+
+    /// The query used for matching, with the `>` command-mode sigil stripped.
+    pub fn effective_query(&self) -> &str {
+        if self.command_mode() {
+            self.query.trim_start_matches('>').trim_start()
+        } else {
+            &self.query
+        }
+    }
+
+    /// The title to show, reflecting the active mode.
+    pub fn prompt_label(&self) -> &str {
+        if self.command_mode() {
+            "Command Palette"
+        } else {
+            &self.prompt
+        }
+    }
+
+    /// Recompute the filtered/ranked list for the current query against the active source.
     pub fn refilter(&mut self) {
         if self.kind == PickerKind::GotoLine {
             self.filtered.clear();
             self.selected = 0;
             return;
         }
+        let query = self.effective_query().to_string();
         let mut scored: Vec<(usize, i64)> = self
-            .items
+            .active_items()
             .iter()
             .enumerate()
-            .filter_map(|(i, item)| fuzzy_score(&self.query, &item.label).map(|s| (i, s)))
+            .filter_map(|(i, item)| fuzzy_score(&query, &item.label).map(|s| (i, s)))
             .collect();
         // Higher score first; ties keep original order (stable sort).
         scored.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
@@ -66,7 +127,9 @@ impl Picker {
     }
 
     pub fn selected_item(&self) -> Option<&PickerItem> {
-        self.filtered.get(self.selected).map(|&i| &self.items[i])
+        self.filtered
+            .get(self.selected)
+            .map(|&i| &self.active_items()[i])
     }
 
     pub fn move_selection(&mut self, delta: isize) {
@@ -147,9 +210,44 @@ mod tests {
                 label: "File: Save".into(),
             },
         ];
-        let mut p = Picker::new(PickerKind::Command, "Command", items);
+        let mut p = Picker::new(PickerKind::File, "Files", items);
         p.query = "save".into();
         p.refilter();
         assert_eq!(p.selected_item().unwrap().id, "2");
+    }
+
+    fn item(id: &str, label: &str) -> PickerItem {
+        PickerItem {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
+
+    #[test]
+    fn unified_switches_to_commands_on_gt() {
+        let files = vec![item("a.rs", "a.rs"), item("save.rs", "save.rs")];
+        let commands = vec![item("file.save", "File: Save"), item("app.quit", "Quit")];
+        let mut p = Picker::unified("Files", files, commands, false);
+        // File mode by default.
+        assert!(!p.command_mode());
+        p.query = "save".into();
+        p.refilter();
+        assert_eq!(p.selected_item().unwrap().id, "save.rs");
+        // A leading `>` flips to commands, and the sigil is stripped for matching.
+        p.query = ">save".into();
+        p.refilter();
+        assert!(p.command_mode());
+        assert_eq!(p.effective_query(), "save");
+        assert_eq!(p.selected_item().unwrap().id, "file.save");
+    }
+
+    #[test]
+    fn unified_can_start_in_command_mode() {
+        let files = vec![item("a.rs", "a.rs")];
+        let commands = vec![item("app.quit", "Quit")];
+        let p = Picker::unified("Files", files, commands, true);
+        assert!(p.command_mode());
+        assert_eq!(p.prompt_label(), "Command Palette");
+        assert_eq!(p.selected_item().unwrap().id, "app.quit");
     }
 }

@@ -6,7 +6,13 @@ fn palette_lists_builtin_and_plugin_commands() {
     let mut app = app_with(&dir);
     app.open_palette();
     let picker = app.editor.picker.as_ref().unwrap();
-    let labels: Vec<&str> = picker.items.iter().map(|i| i.label.as_str()).collect();
+    // The palette opens in command mode (`>`), so the active source is the command list.
+    assert!(picker.command_mode());
+    let labels: Vec<&str> = picker
+        .active_items()
+        .iter()
+        .map(|i| i.label.as_str())
+        .collect();
     assert!(labels.contains(&"File: Save"));
     // Plugin-contributed command titles are present too (explorer).
     assert!(labels.iter().any(|l| l.starts_with("Explorer:")));
