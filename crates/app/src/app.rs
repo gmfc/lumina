@@ -136,9 +136,17 @@ fn in_rect(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
-/// Build the keymap from defaults, then layer config overrides on top.
-fn build_keymap(config: &crate::config::Config) -> Keymap {
+/// Build the keymap from three tiers, later tiers overriding earlier ones:
+/// built-in defaults < plugin-contributed bindings < user config. `Keymap::bind` is
+/// last-writer-wins, so a user remap still overrides a plugin's chord, which in turn
+/// overrides a default. Folding in `registry.keybindings()` is what lets a migrated
+/// feature contribute its own chords (invariant #3) and honors an external plugin's
+/// manifest bindings; see `crates/plugin/src/contribution.rs::KeybindingSpec`.
+fn build_keymap(config: &crate::config::Config, registry: &Registry) -> Keymap {
     let mut km = Keymap::from_pairs(crate::commands::default_bindings().iter().copied());
+    for kb in registry.keybindings() {
+        km.bind(&kb.chord, &kb.command);
+    }
     for (chord, id) in &config.keybindings {
         km.bind(chord, id);
     }

@@ -59,7 +59,7 @@ impl App {
         let panel = crate::terminal::TerminalPanel::new(config.terminal_height);
         let follow_mode = config.follow_mode;
         let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
-        let keymap = build_keymap(&config);
+        let keymap = build_keymap(&config, &registry);
 
         // Background worker channel + directory watcher on the project root (plan §6). Also
         // watch the config dir (non-recursively) so edits to config.toml hot-reload.
@@ -120,7 +120,7 @@ impl App {
         self.config = crate::config::Config::load();
         self.editor.sidebar_width = self.config.sidebar_width;
         self.panel.height = self.config.terminal_height.clamp(3, 60);
-        self.keymap = build_keymap(&self.config);
+        self.keymap = build_keymap(&self.config, &self.registry);
         // Reconcile the Vim layer with the reloaded config, preserving it if already on.
         if self.config.vim && self.editor.vim.is_none() {
             self.editor.vim = Some(crate::vim::VimState::new());
