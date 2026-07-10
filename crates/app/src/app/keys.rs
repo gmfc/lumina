@@ -11,36 +11,8 @@ impl App {
         // Drop stale Settings state if its tab was closed.
         self.reconcile_settings();
 
-        // Modal captures, in priority order.
-        if self.handle_modal_key(key) {
-            return;
-        }
-        // Terminal focus: forward keystrokes to the shell (except panel-management chords).
-        if self.editor.focus == Focus::Panel && self.handle_terminal_key(key) {
-            return;
-        }
-        // Completion popup: navigation / accept / dismiss keys are consumed here; anything
-        // else falls through to edit the buffer, then re-syncs the popup below (plan §2.1).
-        if self.editor.completion.is_some() && self.completion_key(key) {
-            return;
-        }
-        // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
-        if self.editor.focus == Focus::Sidebar && self.handle_sidebar_key(key) {
-            return;
-        }
-        // Settings tab: its widgets consume nav/toggle/edit keys; un-owned chords
-        // (Ctrl+W, Ctrl+P, …) fall through to the keymap below.
-        if self.settings_active()
-            && self.editor.focus == Focus::Editor
-            && self.handle_settings_key(key)
-        {
-            self.pending.clear();
-            return;
-        }
-        // Vim modal layer (when enabled): consumes normal/visual keys and Esc-to-normal,
-        // but lets Insert-mode text and un-owned Ctrl chords fall through to the keymap.
-        if self.handle_vim_key(key) {
-            self.pending.clear();
+        // Focus- and overlay-specific handlers get first refusal on the key.
+        if self.capture_key(key) {
             return;
         }
 
@@ -72,6 +44,41 @@ impl App {
                 self.refresh_completion();
             }
         }
+    }
+
+    /// Give the active focus/overlay handlers first refusal on a key, in priority order.
+    /// Returns `true` when one of them consumed it (so chord resolution is skipped).
+    fn capture_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        // Modal overlays (confirm-close / picker / search / find).
+        if self.handle_modal_key(key) {
+            return true;
+        }
+        // Terminal focus: forward keystrokes to the shell (except panel-management chords).
+        if self.editor.focus == Focus::Panel && self.handle_terminal_key(key) {
+            return true;
+        }
+        // Completion popup: navigation / accept / dismiss keys are consumed here.
+        if self.editor.completion.is_some() && self.completion_key(key) {
+            return true;
+        }
+        // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
+        if self.editor.focus == Focus::Sidebar && self.handle_sidebar_key(key) {
+            return true;
+        }
+        // Settings tab: its widgets consume nav/toggle/edit keys; un-owned chords fall through.
+        if self.settings_active()
+            && self.editor.focus == Focus::Editor
+            && self.handle_settings_key(key)
+        {
+            self.pending.clear();
+            return true;
+        }
+        // Vim modal layer: consumes normal/visual keys; Insert text and un-owned chords fall through.
+        if self.handle_vim_key(key) {
+            self.pending.clear();
+            return true;
+        }
+        false
     }
 
     /// Route a key to an active modal (overlay / picker / search / find), in priority
