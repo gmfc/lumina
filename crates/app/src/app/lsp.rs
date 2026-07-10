@@ -200,19 +200,28 @@ impl App {
         }
     }
 
-    /// Issue an LSP request for the primary cursor position, if one resolves. The three
-    /// position-based requests (hover / definition / completion) share this lookup.
-    pub(super) fn lsp_request(&mut self, req: LspRequest) {
-        if let Some((p, l, line, ch)) = self.lsp_position() {
-            match req {
-                LspRequest::Hover => self.lsp.request_hover(&p, &l, line, ch),
-                LspRequest::Definition => self.lsp.request_definition(&p, &l, line, ch),
-                LspRequest::Implementation => self.lsp.request_implementation(&p, &l, line, ch),
-                LspRequest::TypeDefinition => self.lsp.request_type_definition(&p, &l, line, ch),
-                LspRequest::Completion => self.lsp.request_completion(&p, &l, line, ch),
-                LspRequest::References => self.lsp.request_references(&p, &l, line, ch),
-            };
+    /// Forward a plugin-queued LSP request to the manager, resolving the primary cursor position
+    /// app-side (the `lsp` plugin only expresses intent via `Host::lsp_request`). Symbols need no
+    /// cursor; the rest share the `lsp_position` lookup.
+    pub(super) fn dispatch_lsp_request(&mut self, kind: editor_plugin::LspRequestKind) {
+        use editor_plugin::LspRequestKind as K;
+        if let K::DocumentSymbols = kind {
+            self.request_document_symbols();
+            return;
         }
+        let Some((p, l, line, ch)) = self.lsp_position() else {
+            return;
+        };
+        match kind {
+            K::Hover => self.lsp.request_hover(&p, &l, line, ch),
+            K::Definition => self.lsp.request_definition(&p, &l, line, ch),
+            K::Implementation => self.lsp.request_implementation(&p, &l, line, ch),
+            K::TypeDefinition => self.lsp.request_type_definition(&p, &l, line, ch),
+            K::Completion => self.lsp.request_completion(&p, &l, line, ch),
+            K::References => self.lsp.request_references(&p, &l, line, ch),
+            K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
+            K::DocumentSymbols => false, // handled above
+        };
     }
 
     /// Request the symbols in the active document (no cursor position needed).

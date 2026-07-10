@@ -114,16 +114,11 @@ impl App {
             }
 
             // --- language server ---
-            Command::Hover => self.lsp_request(LspRequest::Hover),
-            Command::GotoDefinition => self.lsp_request(LspRequest::Definition),
-            Command::GotoImplementation => self.lsp_request(LspRequest::Implementation),
-            Command::GotoTypeDefinition => self.lsp_request(LspRequest::TypeDefinition),
-            Command::Completion => self.lsp_request(LspRequest::Completion),
-            Command::RenameSymbol => self.open_rename(),
+            // Request-issuing LSP commands (hover / goto* / completion / references / symbols /
+            // rename) are the `lsp` builtin plugin, dispatched through the registry; only diagnostic
+            // navigation (which reads the app-owned diagnostics map) stays here.
             Command::NextDiagnostic => self.goto_diagnostic(1),
             Command::PrevDiagnostic => self.goto_diagnostic(-1),
-            Command::FindReferences => self.lsp_request(LspRequest::References),
-            Command::DocumentSymbols => self.request_document_symbols(),
             // git change navigation (git.nextHunk/git.prevHunk) is the `git-nav` builtin plugin,
             // dispatched through the registry.
 

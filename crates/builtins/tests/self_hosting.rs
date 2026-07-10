@@ -42,6 +42,10 @@ const SEARCH_ID: &str = "project-search";
 const SEARCH_COMMAND: &str = "search.project";
 const SEARCH_PANEL: &str = "search.results";
 
+// The LSP request commands (over the lsp_request effect-queue + prompt ports).
+const LSP_ID: &str = "lsp";
+const LSP_COMMAND: &str = "lsp.gotoDefinition";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -211,6 +215,36 @@ fn disabling_project_search_removes_only_its_contributions() {
         assert!(
             reduced.command_ids().any(|c| &c == id),
             "disabling project-search wrongly removed unrelated command `{id}`"
+        );
+    }
+}
+
+#[test]
+fn lsp_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == LSP_COMMAND),
+        "lsp command missing — is the LSP request feature wired as a plugin?"
+    );
+}
+
+#[test]
+fn disabling_lsp_removes_only_its_contributions() {
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+
+    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != LSP_ID));
+
+    assert!(
+        !reduced.command_ids().any(|id| id == LSP_COMMAND),
+        "lsp command still present after disabling — it is hardcoded, not a plugin"
+    );
+    // Nothing unrelated removed (the app-side lsp.nextDiagnostic is not a plugin contribution, so
+    // it never appears in the registry command ids to begin with).
+    for id in before.iter().filter(|id| !id.starts_with("lsp.")) {
+        assert!(
+            reduced.command_ids().any(|c| &c == id),
+            "disabling lsp wrongly removed unrelated command `{id}`"
         );
     }
 }

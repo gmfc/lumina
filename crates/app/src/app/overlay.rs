@@ -60,47 +60,6 @@ impl App {
                 // Any key dismisses an info popup.
                 self.editor.overlay = None;
             }
-            crate::editor::Overlay::RenameInput {
-                path,
-                language,
-                line,
-                character,
-                mut buffer,
-            } => match key.code {
-                KeyCode::Esc => self.editor.overlay = None,
-                KeyCode::Enter => {
-                    self.editor.overlay = None;
-                    if !buffer.is_empty() {
-                        self.lsp
-                            .request_rename(&path, &language, line, character, &buffer);
-                    }
-                }
-                KeyCode::Backspace => {
-                    buffer.pop();
-                    self.editor.overlay = Some(crate::editor::Overlay::RenameInput {
-                        path,
-                        language,
-                        line,
-                        character,
-                        buffer,
-                    });
-                }
-                KeyCode::Char(c)
-                    if !key
-                        .modifiers
-                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                {
-                    buffer.push(c);
-                    self.editor.overlay = Some(crate::editor::Overlay::RenameInput {
-                        path,
-                        language,
-                        line,
-                        character,
-                        buffer,
-                    });
-                }
-                _ => {}
-            },
             crate::editor::Overlay::SaveAsInput { mut buffer } => match key.code {
                 KeyCode::Esc => self.editor.overlay = None,
                 KeyCode::Enter => {
@@ -122,28 +81,5 @@ impl App {
                 _ => {}
             },
         }
-    }
-
-    /// Open the rename prompt, prefilled with the identifier under the cursor.
-    pub(super) fn open_rename(&mut self) {
-        let Some((path, language, line, character)) = self.lsp_position() else {
-            return;
-        };
-        let buffer = self
-            .editor
-            .active_document()
-            .map(|d| {
-                let head = d.selections.primary().head;
-                let (s, e) = motion::word_at(d, head);
-                d.rope().slice(s..e).to_string()
-            })
-            .unwrap_or_default();
-        self.editor.overlay = Some(crate::editor::Overlay::RenameInput {
-            path,
-            language,
-            line,
-            character,
-            buffer,
-        });
     }
 }

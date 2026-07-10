@@ -172,6 +172,17 @@ pub trait Host {
     /// applies it on the next drain (an effect-queue, like `open_path`). Default no-op.
     fn toggle_theme(&mut self) {}
 
+    /// Fire-and-forget a language-server request at the active document's primary cursor. The app
+    /// owns the transport, the UTF-16 cursor math, and the response handling; the plugin only
+    /// expresses intent (queued like `open_path`). Default no-op.
+    fn lsp_request(&mut self, _kind: crate::lsp::LspRequestKind) {}
+
+    /// Whether a language server is configured (so a plugin can cleanly no-op its LSP commands
+    /// when there's nothing to talk to). Default `false`.
+    fn lsp_enabled(&self) -> bool {
+        false
+    }
+
     /// Execute another registered command by id (composability).
     fn execute(&mut self, command_id: &str);
 }

@@ -28,16 +28,6 @@ struct ClickState {
     count: u8,
 }
 
-/// The position-based LSP requests, which all resolve the primary cursor the same way.
-enum LspRequest {
-    Hover,
-    Definition,
-    Implementation,
-    TypeDefinition,
-    Completion,
-    References,
-}
-
 pub struct App {
     pub editor: EditorState,
     pub registry: Registry,
