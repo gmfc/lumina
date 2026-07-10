@@ -42,6 +42,11 @@ struct EditorCtx<'a> {
     bracket_match: Option<(usize, usize)>,
     /// Git change map for the gutter change-bar (plan §4.1), when enabled.
     git: Option<&'a crate::git::LineStatuses>,
+    /// In Vim charwise Visual mode: extend the primary selection's highlight by one
+    /// char so the block under the cursor is shown (Vim's inclusive selection).
+    vim_visual_char: bool,
+    /// In Vim linewise Visual mode: the whole-line `[start, end)` char range to tint.
+    vim_visual_lines: Option<(usize, usize)>,
 }
 
 /// The editor pane: gutter + line numbers + text + selections + cursor.
@@ -87,6 +92,25 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
             active_id.and_then(|id| app.editor.git_hunks.get(&id))
         } else {
             None
+        },
+        vim_visual_char: matches!(
+            app.editor.vim.as_ref().map(|v| v.mode),
+            Some(crate::vim::Mode::Visual)
+        ),
+        vim_visual_lines: match app.editor.vim.as_ref().map(|v| v.mode) {
+            Some(crate::vim::Mode::VisualLine) => {
+                let p = doc.selections.primary();
+                let fl = doc.char_to_line(p.from());
+                let ll = doc.char_to_line(p.to());
+                let start = doc.line_to_char(fl);
+                let end = if ll + 1 < doc.len_lines() {
+                    doc.line_to_char(ll + 1)
+                } else {
+                    doc.len_chars()
+                };
+                Some((start, end))
+            }
+            _ => None,
         },
     };
 
@@ -285,10 +309,20 @@ fn cell_style(
             }
         }
     }
-    let in_sel = ctx
-        .sels
-        .iter()
-        .any(|s| char_off >= s.from() && char_off < s.to());
+    let in_sel = if let Some((ls, le)) = ctx.vim_visual_lines {
+        char_off >= ls && char_off < le
+    } else {
+        let primary = ctx.doc.selections.primary_index();
+        ctx.sels.iter().enumerate().any(|(i, s)| {
+            // Vim charwise Visual is inclusive of the char under the cursor.
+            let to = if ctx.vim_visual_char && i == primary {
+                s.to() + 1
+            } else {
+                s.to()
+            };
+            char_off >= s.from() && char_off < to
+        })
+    };
     if in_sel {
         style = style.bg(ctx.sel_bg);
     }

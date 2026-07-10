@@ -14,6 +14,9 @@ impl App {
         match id {
             "config.reload" => self.reload_config(),
             "view.toggleTheme" => self.toggle_theme(),
+            "vim.enable" => self.set_vim(true),
+            "vim.disable" => self.set_vim(false),
+            "vim.toggle" => self.set_vim(self.editor.vim.is_none()),
             other => {
                 if !self.registry.dispatch_command(other, &mut self.editor) {
                     self.editor.status_message = Some(format!("Unknown command: {other}"));

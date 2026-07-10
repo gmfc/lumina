@@ -106,6 +106,7 @@ mod overlay;
 mod palette;
 mod panel;
 mod search_ui;
+mod vim;
 mod workers;
 
 /// Run `f` on the find state if it's open.

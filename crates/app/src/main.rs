@@ -21,6 +21,7 @@ mod sync;
 mod terminal;
 mod theme;
 mod ui;
+mod vim;
 mod worker;
 
 use std::io;

@@ -75,6 +75,9 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("view.quickOpen", "Go to File…"),
         ("view.gotoLine", "Go to Line…"),
         ("config.reload", "Preferences: Reload Configuration"),
+        ("vim.toggle", "Vim: Toggle Vim Mode"),
+        ("vim.enable", "Vim: Enable Vim Mode"),
+        ("vim.disable", "Vim: Disable Vim Mode"),
         ("app.quit", "Quit"),
     ]
 }
