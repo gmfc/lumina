@@ -18,9 +18,7 @@ impl Plugin for MultiCursorPlugin {
 
     fn contributions(&self) -> Contributions {
         // The plugin owns its own chords now that the keymap folds in registry-contributed
-        // bindings (invariant #3): the default rows left `commands/tables.rs`. `shift+alt+i`
-        // (addCursorsToLineEnds) is *not* here — that command is still app-side (see the
-        // migration spec §5), so its binding stays in the defaults table until it moves too.
+        // bindings (invariant #3): the default rows left `commands/tables.rs`.
         Contributions::builder()
             .command("cursor.addNextMatch", "Multi-cursor: Add Next Match")
             .command(
@@ -29,10 +27,15 @@ impl Plugin for MultiCursorPlugin {
             )
             .command("cursor.addAbove", "Multi-cursor: Add Cursor Above")
             .command("cursor.addBelow", "Multi-cursor: Add Cursor Below")
+            .command(
+                "cursor.addCursorsToLineEnds",
+                "Multi-cursor: Add Cursors to Line Ends",
+            )
             .keybinding("ctrl+d", "cursor.addNextMatch")
             .keybinding("ctrl+f2", "cursor.selectAllMatches")
             .keybinding("ctrl+alt+up", "cursor.addAbove")
             .keybinding("ctrl+alt+down", "cursor.addBelow")
+            .keybinding("shift+alt+i", "cursor.addCursorsToLineEnds")
             .build()
     }
 
@@ -42,6 +45,7 @@ impl Plugin for MultiCursorPlugin {
             "cursor.selectAllMatches" => select_all_matches,
             "cursor.addAbove" => |d: &Document| add_vertical(d, -1),
             "cursor.addBelow" => |d: &Document| add_vertical(d, 1),
+            "cursor.addCursorsToLineEnds" => editor_core::edit::cursors_to_line_ends_sels,
             _ => return false,
         };
         let Some(id) = host.active_doc() else {

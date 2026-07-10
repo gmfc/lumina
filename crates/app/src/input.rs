@@ -38,9 +38,8 @@ pub enum Command {
     SelectAll,
     SelectWord,
     SelectLine,
-    // multi-cursor (add-next-match / select-all / add-above-below now live in the
-    // `multicursor` builtin plugin; only the line-ends variant remains app-side)
-    CursorsToLineEnds,
+    // multi-cursor is entirely the `multicursor` builtin plugin now (add-next-match / select-all
+    // / add-above-below / add-cursors-to-line-ends).
     // clipboard
     Copy,
     Cut,

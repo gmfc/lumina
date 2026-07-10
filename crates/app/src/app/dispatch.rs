@@ -66,10 +66,10 @@ impl App {
                 edit::apply_save_hygiene(d, true, false);
             }),
 
-            // --- multi-cursor ---
-            // add-next-match / select-all / add-above-below are contributed by the `multicursor`
-            // builtin plugin (crates/builtins) and dispatched through the registry.
-            Command::CursorsToLineEnds => self.with_doc(edit::cursors_to_line_ends),
+            // multi-cursor is entirely the `multicursor` builtin plugin (all cursor.* ids
+            // dispatch through the registry).
+
+            // --- clipboard (paste; copy/cut below) ---
             Command::Paste(s) => {
                 let text = if s.is_empty() {
                     self.clipboard.get()
