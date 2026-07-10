@@ -79,8 +79,7 @@ pub enum Command {
     PrevDiagnostic,
     FindReferences,
     DocumentSymbols,
-    NextHunk,
-    PrevHunk,
+    // git change navigation (NextHunk/PrevHunk) is the `git-nav` builtin plugin
     // ui
     ToggleSidebar,
     FocusSidebar,

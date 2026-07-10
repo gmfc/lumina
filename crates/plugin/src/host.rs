@@ -100,6 +100,15 @@ pub trait Host {
     /// List a directory, honoring ignore rules. Capability-gated for external plugins.
     fn read_dir(&self, path: &Path) -> Vec<DirEntry>;
 
+    /// The 0-based line numbers of `doc` that have an uncommitted git change (added / modified /
+    /// or a deletion marker), sorted ascending. Empty when the git gutter is off, the file is
+    /// clean/untracked, or the host doesn't track git — the default returns none, so only a host
+    /// that computes a change map (the app) overrides it. Read-only: it drives change navigation
+    /// (the `git.*` builtin), not mutation.
+    fn changed_lines(&self, _doc: DocId) -> Vec<usize> {
+        Vec::new()
+    }
+
     /// Set a panel's rendered content.
     fn set_panel(&mut self, panel_id: &str, content: PanelContent);
 

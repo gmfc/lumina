@@ -14,6 +14,7 @@
 use editor_plugin::Plugin;
 
 pub mod explorer;
+pub mod git_nav;
 pub mod multicursor;
 
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
@@ -26,11 +27,12 @@ pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
 /// the explorer draws Nerd Font glyphs).
 pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap). Extracted so
-    // far: the explorer and multi-cursor (both reach the editor only through `Host`). Still
-    // hardcoded in `editor-app` pending new `Host` ports: find/replace, palette + quick-open,
-    // project search, lsp, git, terminal, vim.
+    // far: the explorer, multi-cursor, and git-change navigation (all reach the editor only
+    // through `Host`). Still hardcoded in `editor-app` pending new `Host` ports: find/replace,
+    // palette + quick-open, project search, lsp, terminal, vim.
     vec![
         Box::new(explorer::ExplorerPlugin::new(icons)),
         Box::new(multicursor::MultiCursorPlugin),
+        Box::new(git_nav::GitNavPlugin),
     ]
 }
