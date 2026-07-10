@@ -174,13 +174,32 @@ impl App {
         crate::session::save(&ws.root, &session);
     }
 
-    /// Keep the primary cursor within the viewport by adjusting the active doc's scroll.
+    /// Keep the primary cursor within the viewport by adjusting the active doc's scroll,
+    /// vertically (line) and horizontally (display column, for long lines).
     pub(super) fn ensure_cursor_visible(&mut self) {
         let height = self.page_height.max(1);
+        // Text-area width = editor pane minus the line-number gutter. Read from the last
+        // laid-out frame; 0 before the first render disables hscroll for that tick.
+        let text_width = self
+            .editor
+            .active_document()
+            .map(|doc| {
+                self.regions
+                    .editor
+                    .width
+                    .saturating_sub(ui::gutter_width(doc)) as usize
+            })
+            .unwrap_or(0);
         if let Some(doc) = self.editor.active_document_mut() {
             let head = doc.selections.primary().head;
-            let line = doc.char_to_line(head);
+            let (line, col_chars) = doc.char_to_line_col(head);
             doc.view.scroll_to_line(line, height);
+            // Map the caret to a display column (tabs/wide chars expanded) and keep it in view.
+            let text = doc.line_text(line);
+            let body = text.trim_end_matches(['\n', '\r']);
+            let display_col =
+                editor_core::view::char_to_display_col(body, col_chars, doc.tab_width);
+            doc.view.scroll_to_col(display_col, text_width);
         }
     }
 }

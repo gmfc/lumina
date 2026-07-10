@@ -112,6 +112,7 @@ impl App {
             origin_y: r.y,
             gutter: ui::gutter_width(doc),
             scroll_line: doc.view.scroll_line,
+            scroll_col: doc.view.scroll_col,
             tab_width: doc.tab_width,
             height: r.height,
         }

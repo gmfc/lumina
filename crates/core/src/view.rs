@@ -69,6 +69,8 @@ pub struct PaneGeometry {
     pub gutter: u16,
     /// First visible document line.
     pub scroll_line: usize,
+    /// First visible display column (horizontal scroll offset for long lines).
+    pub scroll_col: usize,
     /// Tab stop width.
     pub tab_width: usize,
     /// Visible height in rows (for bounds checks).
@@ -90,7 +92,9 @@ pub fn screen_to_char(doc: &Document, geo: &PaneGeometry, col: u16, row: u16) ->
         return None;
     }
     let text = line_body(doc, line);
-    let char_in_line = display_col_to_char(&text, x as usize, geo.tab_width);
+    // Shift the click into buffer-column space by the horizontal scroll offset.
+    let display_col = x as usize + geo.scroll_col;
+    let char_in_line = display_col_to_char(&text, display_col, geo.tab_width);
     // Clamp to the line's own length (a click past EOL lands at end-of-line).
     let max = text.chars().count();
     Some(doc.line_to_char(line) + char_in_line.min(max))
@@ -109,12 +113,14 @@ pub fn char_to_screen(doc: &Document, geo: &PaneGeometry, char_idx: usize) -> Op
     }
     let text = line_body(doc, line);
     let display_col = char_to_display_col(&text, col_chars, geo.tab_width);
+    // Horizontally scrolled off the left edge → not visible.
+    let visible_col = display_col.checked_sub(geo.scroll_col)?;
     // Saturate rather than truncate/overflow: a caret past column ~65535 (an extremely long
     // line) would otherwise wrap to a bogus small X or panic on overflow in debug builds.
     let x = geo
         .origin_x
         .saturating_add(geo.gutter)
-        .saturating_add(u16::try_from(display_col).unwrap_or(u16::MAX));
+        .saturating_add(u16::try_from(visible_col).unwrap_or(u16::MAX));
     let y = geo.origin_y.saturating_add(y_off as u16);
     Some((x, y))
 }
@@ -145,6 +151,22 @@ impl ViewState {
             self.scroll_line = line.saturating_sub(margin);
         } else if line + margin >= self.scroll_line + height {
             self.scroll_line = (line + margin + 1).saturating_sub(height);
+        }
+    }
+
+    /// Scroll the viewport so display column `col` is visible within a window of `width`
+    /// text cells, keeping a small horizontal scrolloff. The mirror of [`Self::scroll_to_line`]
+    /// for long lines: `scroll_col` returns to 0 as the caret nears the start, and grows as it
+    /// runs past the right edge.
+    pub fn scroll_to_col(&mut self, col: usize, width: usize) {
+        if width == 0 {
+            return;
+        }
+        let margin = 4usize.min(width.saturating_sub(1) / 2);
+        if col < self.scroll_col + margin {
+            self.scroll_col = col.saturating_sub(margin);
+        } else if col + margin >= self.scroll_col + width {
+            self.scroll_col = (col + margin + 1).saturating_sub(width);
         }
     }
 }

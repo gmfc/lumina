@@ -28,6 +28,8 @@ struct EditorCtx<'a> {
     area: Rect,
     text_x: u16,
     gutter: u16,
+    /// Horizontal scroll offset in display columns (long-line hscroll).
+    hscroll: usize,
     first: usize,
     hl: Option<&'a DocHighlighter>,
     theme: &'a Theme,
@@ -60,6 +62,7 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         area,
         text_x: area.x + gutter,
         gutter,
+        hscroll: doc.view.scroll_col,
         first: doc.view.scroll_line,
         hl: active_id.and_then(|id| app.editor.highlighters.get(&id)),
         theme: &app.theme,
@@ -155,26 +158,42 @@ fn render_editor_row(
         .unwrap_or_default();
 
     let mut primary_screen = None;
-    let mut col: u16 = 0;
+    // Text cells available after the gutter (the horizontal viewport).
+    let view_width = ctx.area.width.saturating_sub(ctx.gutter) as usize;
+    // `col` tracks the absolute display column from the line start (tab stops are absolute);
+    // the on-screen position is that column shifted left by the horizontal scroll offset.
+    let mut col: usize = 0;
     for (ci, ch) in line_text.chars().enumerate() {
         let char_off = line_start + ci;
-        let cells = char_cells(ch, col as usize, ctx.doc.tab_width);
-        let sx = ctx.text_x + col;
-        if sx >= ctx.area.x + ctx.area.width {
-            break;
+        let cells = char_cells(ch, col, ctx.doc.tab_width);
+        let end = col + cells;
+        // Wholly left of the viewport (a tab/wide char may straddle the left edge).
+        if end <= ctx.hscroll {
+            col = end;
+            continue;
         }
+        // Cells clipped off the left edge for a char straddling `hscroll`.
+        let skip = ctx.hscroll.saturating_sub(col);
+        let delta = col + skip - ctx.hscroll; // == max(col, hscroll) - hscroll
+        if delta >= view_width {
+            break; // reached the right edge
+        }
+        let sx = ctx.text_x + delta as u16;
         if ctx.doc.selections.primary().head == char_off {
             primary_screen = Some((sx, y));
         }
         let style = cell_style(ctx, &line_diags, &char_styles, ci, char_off);
-        draw_char_cells(buf, sx, y, ch, style, cells);
-        col += cells as u16;
+        draw_char_cells(buf, sx, y, ch, style, cells, skip);
+        col = end;
     }
 
     // Cursor at end-of-line (past last char).
     let eol_off = line_start + ctx.doc.line_len_chars(line_idx);
-    if ctx.doc.selections.primary().head == eol_off {
-        primary_screen = Some((ctx.text_x + col, y));
+    if ctx.doc.selections.primary().head == eol_off && col >= ctx.hscroll {
+        let delta = col - ctx.hscroll;
+        if delta <= view_width {
+            primary_screen = Some((ctx.text_x + delta as u16, y));
+        }
     }
     primary_screen
 }
@@ -285,7 +304,10 @@ fn cell_style(
 }
 
 /// Write `ch` (tabs shown as blanks) at `sx`, filling the trailing cells of a wide glyph
-/// or tab with styled blanks.
+/// or tab with styled blanks. `skip` is the number of leading cells clipped off the left
+/// by horizontal scroll: when non-zero the glyph itself is off-screen, so only its
+/// trailing (blank) cells are drawn — which is exactly right for tabs and acceptable for a
+/// wide char whose first cell is scrolled away.
 fn draw_char_cells(
     buf: &mut ratatui::buffer::Buffer,
     sx: u16,
@@ -293,16 +315,14 @@ fn draw_char_cells(
     ch: char,
     style: Style,
     cells: usize,
+    skip: usize,
 ) {
-    let display = if ch == '\t' { ' ' } else { ch };
-    if let Some(cell) = cell_at(buf, sx, y) {
-        cell.set_char(display);
-        cell.set_style(style);
-    }
-    // Fill remaining cells of a wide char / tab with styled blanks.
-    for k in 1..cells {
+    let visible = cells.saturating_sub(skip);
+    // The glyph occupies the char's first cell; it shows only when nothing is clipped left.
+    let head = if skip == 0 && ch != '\t' { ch } else { ' ' };
+    for k in 0..visible {
         if let Some(cell) = cell_at(buf, sx + k as u16, y) {
-            cell.set_char(' ');
+            cell.set_char(if k == 0 { head } else { ' ' });
             cell.set_style(style);
         }
     }
