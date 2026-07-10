@@ -184,10 +184,22 @@ impl Theme {
     /// they're handled explicitly here — keeping all color policy in the theme while plugins
     /// speak only in semantic keys.
     pub fn decoration_style(&self, key: &str) -> Style {
+        // Diagnostic severity → color, matching the former `util::severity_color`.
+        let sev = |c: Color| Style::default().fg(c);
         match key {
             // The find-match highlight is a background tint; the capture map only carries fg, so
             // it lives here. Matches the former hardcoded `CLR_MATCH`.
             "find.match" => Style::default().bg(Color::Rgb(90, 74, 30)),
+            // Diagnostic underlines (inline spans): severity ink + underline.
+            "lsp.diag.error" => sev(Color::Red).add_modifier(Modifier::UNDERLINED),
+            "lsp.diag.warning" => sev(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+            "lsp.diag.info" => sev(Color::Blue).add_modifier(Modifier::UNDERLINED),
+            "lsp.diag.hint" => sev(Color::DarkGray).add_modifier(Modifier::UNDERLINED),
+            // Diagnostic gutter markers: severity ink, no underline on the glyph.
+            "lsp.diag.mark.error" => sev(Color::Red),
+            "lsp.diag.mark.warning" => sev(Color::Yellow),
+            "lsp.diag.mark.info" => sev(Color::Blue),
+            "lsp.diag.mark.hint" => sev(Color::DarkGray),
             _ => self.style_for(key).unwrap_or_default(),
         }
     }

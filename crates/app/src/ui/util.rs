@@ -4,7 +4,7 @@
 use ratatui::style::{Color, Style};
 use unicode_width::UnicodeWidthChar;
 
-use editor_lsp::{Diagnostic, Severity};
+use editor_lsp::Severity;
 use editor_syntax::HighlightSpan;
 
 use crate::theme::Theme;
@@ -39,48 +39,9 @@ pub(super) fn resolve_line_styles(
     styles
 }
 
-/// Char-range diagnostics (start, end, severity) on `line_idx`, converting LSP UTF-16
-/// columns to char columns against the line's text.
-pub(super) fn diagnostics_on_line(
-    diags: &[Diagnostic],
-    line_idx: usize,
-    line_text: &str,
-) -> Vec<(usize, usize, Severity)> {
-    use editor_lsp::position::utf16_to_char_col;
-    let line = line_idx as u32;
-    diags
-        .iter()
-        .filter(|d| d.line == line)
-        .map(|d| {
-            let start = utf16_to_char_col(line_text, d.start_char16);
-            let end = if d.end_line == d.line {
-                utf16_to_char_col(line_text, d.end_char16)
-            } else {
-                line_text.chars().count()
-            };
-            (start, end.max(start + 1), d.severity)
-        })
-        .collect()
-}
-
-pub(super) fn severity_rank(sev: &Severity) -> u8 {
-    match sev {
-        Severity::Error => 0,
-        Severity::Warning => 1,
-        Severity::Info => 2,
-        Severity::Hint => 3,
-    }
-}
-
-pub(super) fn severity_color(sev: Severity) -> Color {
-    match sev {
-        Severity::Error => Color::Red,
-        Severity::Warning => Color::Yellow,
-        Severity::Info => Color::Blue,
-        Severity::Hint => Color::DarkGray,
-    }
-}
-
+/// The gutter glyph for a diagnostic severity — used by the status line's caret-diagnostic
+/// message. (Inline underline spans + the gutter severity markers are published as an `lsp.diag`
+/// decoration layer; see `app/diagnostics.rs`.)
 pub(super) fn diag_marker(sev: Severity) -> char {
     match sev {
         Severity::Error => 'E',
@@ -141,36 +102,10 @@ pub(super) fn display_len(s: &str) -> usize {
 mod tests {
     use super::*;
 
-    fn diag(line: u32, s: u32, e: u32, sev: Severity) -> Diagnostic {
-        Diagnostic {
-            line,
-            start_char16: s,
-            end_line: line,
-            end_char16: e,
-            severity: sev,
-            message: String::new(),
-        }
-    }
-
     #[test]
-    fn diagnostics_map_to_char_ranges_per_line() {
-        let diags = vec![
-            diag(0, 0, 3, Severity::Error),
-            diag(1, 2, 5, Severity::Warning),
-        ];
-        let l0 = diagnostics_on_line(&diags, 0, "let x");
-        assert_eq!(l0, vec![(0, 3, Severity::Error)]);
-        let l1 = diagnostics_on_line(&diags, 1, "  abc");
-        assert_eq!(l1, vec![(2, 5, Severity::Warning)]);
-        // No diagnostics on line 2.
-        assert!(diagnostics_on_line(&diags, 2, "").is_empty());
-    }
-
-    #[test]
-    fn error_outranks_warning_for_gutter() {
-        let sevs = [Severity::Warning, Severity::Error, Severity::Hint];
-        let min = sevs.iter().copied().min_by_key(severity_rank).unwrap();
-        assert_eq!(min, Severity::Error);
+    fn diag_marker_glyphs() {
         assert_eq!(diag_marker(Severity::Error), 'E');
+        assert_eq!(diag_marker(Severity::Warning), 'W');
+        assert_eq!(diag_marker(Severity::Hint), 'h');
     }
 }

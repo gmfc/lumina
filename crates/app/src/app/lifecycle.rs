@@ -138,6 +138,7 @@ impl App {
         while !self.quit {
             self.editor.update_highlights(self.page_height);
             self.editor.update_bracket_match();
+            self.update_diagnostic_decorations();
             self.update_lsp();
             terminal.draw(|f| ui::draw(f, self))?;
             // Reconcile each PTY's size to the panel region we just laid out.

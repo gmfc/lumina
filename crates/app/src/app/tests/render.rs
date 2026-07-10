@@ -94,7 +94,8 @@ fn renders_editor_with_all_decorations() {
         app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
 
-    // A diagnostic on line 0 (exercises the gutter marker + underline).
+    // A diagnostic on line 0 → published as the `lsp.diag` decoration layer (gutter marker +
+    // underline), the same path the run loop uses before each draw.
     let id = app.editor.workspace.active_doc().unwrap();
     app.editor.diagnostics.insert(
         id,
@@ -107,10 +108,73 @@ fn renders_editor_with_all_decorations() {
             message: String::new(),
         }],
     );
+    app.update_diagnostic_decorations();
 
     // Viewport taller than the 4-line doc → past-EOF tildes render too.
     let text = render_to_string(&mut app, 48, 12);
     assert!(text.contains('~'), "expected past-EOF tildes below the doc");
+    assert!(text.contains('E'), "the diagnostic gutter marker renders");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn diagnostics_publish_as_a_decoration_layer() {
+    // Data-level guard for the diagnostics→decorations conversion (the render path has no color
+    // assertion): an Error on line 0 cols 3..6 and a Warning on line 1 produce two underline
+    // spans + two gutter marks with the right severity keys.
+    let path = temp_file("let x = 1;\nlonger line here\n");
+    let mut app = app_with(&path);
+    let id = app.editor.workspace.active_doc().unwrap();
+    app.editor.diagnostics.insert(
+        id,
+        vec![
+            editor_lsp::Diagnostic {
+                line: 0,
+                start_char16: 3,
+                end_line: 0,
+                end_char16: 6,
+                severity: editor_lsp::Severity::Error,
+                message: String::new(),
+            },
+            editor_lsp::Diagnostic {
+                line: 1,
+                start_char16: 0,
+                end_line: 1,
+                end_char16: 4,
+                severity: editor_lsp::Severity::Warning,
+                message: String::new(),
+            },
+        ],
+    );
+    app.update_diagnostic_decorations();
+    let layer = app.editor.decorations[&id]
+        .get("lsp.diag")
+        .expect("lsp.diag layer published");
+    // Underline spans: line 0 col 3..6 → char offsets (3,6); line 1 col 0..4 → line start (11) + 0..4.
+    assert!(layer
+        .spans
+        .iter()
+        .any(|d| d.range == (3, 6) && d.style == "lsp.diag.error"));
+    assert!(layer.spans.iter().any(|d| d.style == "lsp.diag.warning"));
+    // One gutter mark per affected line, carrying the severity glyph + mark style.
+    assert!(layer
+        .gutter
+        .iter()
+        .any(|m| m.line == 0 && m.glyph == 'E' && m.style == "lsp.diag.mark.error"));
+    assert!(layer
+        .gutter
+        .iter()
+        .any(|m| m.line == 1 && m.glyph == 'W' && m.style == "lsp.diag.mark.warning"));
+
+    // Clearing the diagnostics drops the layer.
+    app.editor.diagnostics.remove(&id);
+    app.update_diagnostic_decorations();
+    assert!(app
+        .editor
+        .decorations
+        .get(&id)
+        .map(|l| !l.contains_key("lsp.diag"))
+        .unwrap_or(true));
     std::fs::remove_file(&path).ok();
 }
 
