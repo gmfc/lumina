@@ -39,19 +39,19 @@ only through `Host`, and the `Command` table shrinks to those primitives.
   explorer, multi-cursor (incl. add-cursors-to-line-ends), git-change navigation, **find/replace**,
   **command palette + quick-open + goto-line**, **project search**, the **light/dark theme toggle**,
   the **LSP request commands** (hover/goto\*/completion/references/symbols/rename — transport +
-  responses stay app-side), and the **terminal-dock commands** (PTY/vt100/render stay app-side).
-- **Self-hosting guard generalized** to a 12-plugin set (`crates/builtins/tests/self_hosting.rs`),
+  responses stay app-side), the **terminal-dock commands** (PTY/vt100/render stay app-side), and
+  the **diagnostics** feature in full (model + rendering: the plugin owns `DocId → LspDiagnostic`,
+  fed by the new `Event::LspDiagnostics`, publishing the `"lsp.diag"` decoration layer + a status
+  item + next/prev-problem nav via `Host::lsp_pos_to_offset`).
+- **Self-hosting guard generalized** to a 13-plugin set (`crates/builtins/tests/self_hosting.rs`),
   asserting each plugin's commands/panels/keybindings and disable-isolation.
 
 **Remaining feature bodies to extract** (the deeply app-coupled cluster — each needs a large new
 port or is a known trap): the **completion widget** (needs the caret-anchored POPUP port + primitive
-LSP completion-item DTOs delivered as events); the **diagnostics model** (the *rendering* is already migrated — the app
-publishes an `"lsp.diag"` decoration layer via `update_diagnostic_decorations`, §6.4 steps 2-3
-done; what remains is moving the model itself into a plugin, which needs primitive LSP diagnostic
-DTOs delivered as events + `Host::lsp_pos_to_offset` + a status-line rewire, since the caret
-message reads `diagnostic_at_caret` directly and `set_status` items aren't rendered yet);
-the **LSP responses** (goto/hover/refs/symbols/rename application + the diagnostics ingestion —
-blocked on the popup port + sync-open-vs-deferred-open reconciliation, §6.5 risk (3)); the
+LSP completion-item DTOs delivered as events; the LSP completion *request* is already the `lsp`
+plugin, but the response opens the app-side widget);
+the **LSP responses** (goto/hover/refs/symbols/rename application —
+blocked on the popup/info port + sync-open-vs-deferred-open reconciliation, §6.5 risk (3)); the
 **terminal PTY/vt100/grid** body (§6.6 RawPTY port); **vim** (the ~1800-line pre-keymap interceptor
 — `capture_key` exists; the interceptor move is §6.7); and **clipboard** copy/cut/paste (the §5
 "trap": needs a core `edit::insert_transaction` that returns both the transaction *and* the
