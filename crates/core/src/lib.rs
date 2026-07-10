@@ -13,6 +13,7 @@ pub mod pairs;
 pub mod selection;
 pub mod transaction;
 pub mod view;
+pub mod vim;
 pub mod workspace;
 
 pub use document::{Document, Encoding, LineEnding, SyntaxEdit};

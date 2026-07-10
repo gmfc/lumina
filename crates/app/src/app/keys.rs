@@ -25,6 +25,12 @@ impl App {
         if self.editor.focus == Focus::Sidebar && self.handle_sidebar_key(key) {
             return;
         }
+        // Vim modal layer (when enabled): consumes normal/visual keys and Esc-to-normal,
+        // but lets Insert-mode text and un-owned Ctrl chords fall through to the keymap.
+        if self.handle_vim_key(key) {
+            self.pending.clear();
+            return;
+        }
 
         // Chord keymap resolution (defaults + config overrides).
         self.pending.push(Chord::from_event(key));

@@ -212,6 +212,16 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         left = format!(" {} {msg}", diag_marker(sev));
     }
 
+    // Vim mode badge (and any pending count/operator) at the far left.
+    if let Some(vim) = &app.editor.vim {
+        let mut badge = format!(" -- {} -- ", vim.mode.label());
+        if let Some(hint) = vim.pending_hint() {
+            badge.push_str(&hint);
+            badge.push(' ');
+        }
+        left = format!("{badge}{}", left.trim_start());
+    }
+
     let bg = Style::default().bg(CLR_ACCENT).fg(Color::Black);
     let pad = (area.width as usize).saturating_sub(display_len(&left) + display_len(&right));
     let line = Line::from(vec![

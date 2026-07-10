@@ -16,6 +16,7 @@ mod render;
 mod render_overlays;
 mod sync;
 mod terminal;
+mod vim;
 mod vscode_shortcuts;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);

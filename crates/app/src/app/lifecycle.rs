@@ -9,6 +9,9 @@ impl App {
         let (root, open_file) = resolve_arg(arg);
         let mut editor = EditorState::new(root);
         let config = crate::config::Config::load();
+        if config.vim {
+            editor.vim = Some(crate::vim::VimState::new());
+        }
 
         // Built-in plugins + any external (script) plugins from the plugins dirs. Both
         // register through the same Registry — the external tier has no special path.
@@ -114,6 +117,12 @@ impl App {
         self.editor.sidebar_width = self.config.sidebar_width;
         self.panel.height = self.config.terminal_height.clamp(3, 60);
         self.keymap = build_keymap(&self.config);
+        // Reconcile the Vim layer with the reloaded config, preserving it if already on.
+        if self.config.vim && self.editor.vim.is_none() {
+            self.editor.vim = Some(crate::vim::VimState::new());
+        } else if !self.config.vim {
+            self.editor.vim = None;
+        }
         self.editor.status_message = Some("Configuration reloaded".into());
     }
 

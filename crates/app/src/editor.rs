@@ -76,6 +76,9 @@ pub struct EditorState {
     pub nav_locations: Vec<editor_lsp::Location>,
     /// Per-document git change map for the gutter (plan §4.1), computed off-thread.
     pub git_hunks: HashMap<DocId, crate::git::LineStatuses>,
+    /// The optional Vim modal-editing layer. `Some` when `vim = true` (or the user
+    /// toggled it on); the renderer reads its mode for the status badge.
+    pub vim: Option<crate::vim::VimState>,
 }
 
 impl EditorState {
@@ -100,6 +103,7 @@ impl EditorState {
             completion: None,
             nav_locations: Vec::new(),
             git_hunks: HashMap::new(),
+            vim: None,
         }
     }
 

@@ -110,6 +110,41 @@ header's `▾`/`▸` control minimizes and restores the dock, `×` closes a tab,
 one. Mouse-wheel over the panel scrolls its history. It is built to grow (split panes, task
 runners, and other bottom-dock contributions can hang off the same panel later).
 
+## Vim mode
+
+Lumina is mouse-first and non-modal by default, but ships an optional **Vim modal-editing
+layer**. Turn it on with `vim = true` under `[settings]`, or toggle it live from the command
+palette (`Vim: Toggle Vim Mode`, id `vim.toggle` / `vim.enable` / `vim.disable`). The active
+mode shows as a `-- NORMAL --` / `-- INSERT --` / `-- VISUAL --` badge in the status bar, along
+with any pending count, register, or operator.
+
+It implements the core of Vim's *operator + motion + text-object* grammar rather than a fixed
+list of shortcuts, so combinations compose:
+
+- **Modes** — Normal, Insert, Visual (charwise) and Visual-Line, plus the `:` command line and
+  `/` `?` search lines.
+- **Motions** — `h j k l`, `w W b B e E ge gE`, `0 ^ $ g_`, `f t F T` with `; ,`, `{ }`, `%`,
+  `gg G {n}G`, `H M L`, `|`, and `Ctrl-D`/`Ctrl-U`/`Ctrl-F`/`Ctrl-B` scrolling.
+- **Operators** — `d c y > < gu gU g~`, doubled for the current line (`dd`, `yy`, `cc`, `>>`),
+  each combining with every motion and text object, and with **counts** that multiply
+  (`2d3w` = delete six words).
+- **Text objects** — `iw aw iW aW`, `i( a( i{ a{ i[ a[ i< a<` (and `b`/`B` aliases), `i" a" i'
+  a' i` a` `, and `ip ap`.
+- **Edits** — `i I a A o O gi s S c C d D x X r ~ J p P`, `u` / `Ctrl-R`, and the **dot command
+  `.`** which repeats the last change (recorded as keystrokes, so `ciwfoo<Esc>` then `.` works).
+- **Registers** — the unnamed register, the yank register `"0`, named `"a`–`"z` (uppercase
+  appends), the system clipboard `"+`/`"*`, and the black hole `"_`.
+- **Visual mode** — motions and text objects extend the (inclusive) selection; `o` swaps ends;
+  operators (`d c y > < u U ~ r J`) act on it.
+- **Ex commands** — `:w :wq :x :q :q! :wa :qa`, `:{number}` to jump to a line, `:noh`, and a
+  literal `:[%]s/old/new/[g]` substitute.
+
+Insert mode is otherwise the normal editor: auto-pairs, auto-indent, completion, and all the
+`Ctrl`-shortcuts above keep working, and `Esc` (or `Ctrl-[`) returns to Normal. Un-owned `Ctrl`
+chords fall through in Normal mode too, so `Ctrl+S`, `Ctrl+P`, `Ctrl+Shift+P`, etc. still do
+their usual thing. Not (yet) implemented: macros (`q`/`@`), marks, jump/change lists, tag
+objects (`it`/`at`), the `=`/`gq` reformat operators, and regex in `:s` (it's literal).
+
 ## Configuration
 
 `~/.config/lumina/config.toml`:
@@ -126,6 +161,7 @@ trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from eve
 insert_final_newline = false      # on save, ensure the file ends with a single newline
 git_gutter = true           # per-line add/modify/delete change bar in the gutter (vs HEAD)
 icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
+vim = false                 # start in Vim modal editing (Normal/Insert/Visual) — see "Vim mode"
 terminal_height = 12        # rows the terminal panel occupies when expanded
 # terminal_shell = "bash"   # override the shell (default: $SHELL / /bin/sh, %ComSpec% on Windows)
 
