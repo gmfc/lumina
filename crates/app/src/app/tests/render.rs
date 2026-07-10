@@ -127,8 +127,9 @@ fn welcome_screen_lists_main_commands_and_banner() {
     let path = temp_file("x");
     let mut app = app_with(&path);
     app.dispatch(Command::CloseTab);
-    // At a roomy width the block banner and the command hints both render.
-    let text = render_to_string(&mut app, 90, 24);
+    // Roomy pane (past the 30-col sidebar): the block banner, the two-column command grid,
+    // and the palette footer all render.
+    let text = render_to_string(&mut app, 120, 30);
     assert!(text.contains("█"), "block-letter LUMINA banner is drawn");
     assert!(
         text.contains("Command Palette"),
@@ -137,6 +138,14 @@ fn welcome_screen_lists_main_commands_and_banner() {
     assert!(
         text.contains("Go to Definition"),
         "surfaces a navigation hint"
+    );
+    // Newer features are surfaced too: the Settings tab and LSP symbol rename.
+    assert!(text.contains("Settings"), "surfaces the Settings tab");
+    assert!(text.contains("Rename Symbol"), "surfaces LSP rename");
+    // The footer points palette-only functionality (Vim, themes) at the command palette.
+    assert!(
+        text.contains("Vim mode") && text.contains("Ctrl+Shift+P"),
+        "footer points Vim/theme functionality at the palette"
     );
     std::fs::remove_file(&path).ok();
 }
