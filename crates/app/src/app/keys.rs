@@ -30,19 +30,8 @@ impl App {
             }
             Resolve::None => self.text_entry_fallback(key),
         }
-
-        // Keep the completion popup in sync with the edit just made, or drop it if a modal
-        // opened on top of it.
-        if self.editor.completion.is_some() {
-            if self.editor.overlay.is_some()
-                || self.editor.picker.is_some()
-                || self.editor.prompt.is_some()
-            {
-                self.editor.completion = None;
-            } else {
-                self.refresh_completion();
-            }
-        }
+        // The completion popup re-syncs to the edit just made through its owner's `on_event`
+        // (broadcast when the edit's DidChange drains); nothing to do here.
     }
 
     /// Give the active focus/overlay handlers first refusal on a key, in priority order.
@@ -56,8 +45,9 @@ impl App {
         if self.editor.focus == Focus::Panel && self.handle_terminal_key(key) {
             return true;
         }
-        // Completion popup: navigation / accept / dismiss keys are consumed here.
-        if self.editor.completion.is_some() && self.completion_key(key) {
+        // Caret popup (completion): its owner consumes navigation / accept / dismiss keys; other
+        // keys fall through to editing, after which the plugin re-syncs on the resulting change.
+        if self.editor.popup.is_some() && self.popup_key(key) {
             return true;
         }
         // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
@@ -120,6 +110,26 @@ impl App {
             self.registry
                 .dispatch_prompt_key(&owner, &prompt_id, pk, &mut self.editor);
             self.drain_workers();
+        }
+    }
+
+    /// Offer a key to the owner of the active caret popup (completion). Returns `true` when the
+    /// owner consumed it (navigation / accept / dismiss); `false` lets it fall through to editing.
+    pub(super) fn popup_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(owner) = self.editor.popup.as_ref().map(|p| p.owner.clone()) else {
+            return false;
+        };
+        let Some(pk) = to_plugin_key(key) else {
+            return false;
+        };
+        if self
+            .registry
+            .dispatch_popup_key(&owner, pk, &mut self.editor)
+        {
+            self.drain_workers();
+            true
+        } else {
+            false
         }
     }
 

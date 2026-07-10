@@ -54,7 +54,7 @@ impl Selection {
 }
 
 /// The selection set. `primary` indexes the selection that drives the viewport.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selections {
     primary: usize,
     ranges: Vec<Selection>,

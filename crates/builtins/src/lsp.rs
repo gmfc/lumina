@@ -56,7 +56,6 @@ impl Plugin for LspPlugin {
             .command("lsp.gotoDefinition", "Go: Go to Definition")
             .command("lsp.gotoImplementation", "Go: Go to Implementation")
             .command("lsp.gotoTypeDefinition", "Go: Go to Type Definition")
-            .command("lsp.completion", "Edit: Trigger Suggest")
             .command("lsp.references", "Go: Find All References")
             .command("lsp.documentSymbols", "Go: Symbols in File…")
             .command("lsp.rename", "Refactor: Rename Symbol")
@@ -66,7 +65,6 @@ impl Plugin for LspPlugin {
             .keybinding("shift+f12", "lsp.references")
             .keybinding("ctrl+shift+o", "lsp.documentSymbols")
             .keybinding("f2", "lsp.rename")
-            .keybinding("ctrl+space", "lsp.completion")
             .build()
     }
 
@@ -79,7 +77,6 @@ impl Plugin for LspPlugin {
                     | "lsp.gotoDefinition"
                     | "lsp.gotoImplementation"
                     | "lsp.gotoTypeDefinition"
-                    | "lsp.completion"
                     | "lsp.references"
                     | "lsp.documentSymbols"
                     | "lsp.rename"
@@ -90,7 +87,6 @@ impl Plugin for LspPlugin {
             "lsp.gotoDefinition" => LspRequestKind::Definition,
             "lsp.gotoImplementation" => LspRequestKind::Implementation,
             "lsp.gotoTypeDefinition" => LspRequestKind::TypeDefinition,
-            "lsp.completion" => LspRequestKind::Completion,
             "lsp.references" => LspRequestKind::References,
             "lsp.documentSymbols" => LspRequestKind::DocumentSymbols,
             "lsp.rename" => {

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use editor_core::{DocId, Selections, Transaction, Workspace};
 
 use crate::decoration::DecorationSet;
-use crate::overlay::Prompt;
+use crate::overlay::{Popup, Prompt};
 use crate::picker::{CommandInfo, PickerRequest};
 
 /// A styled run of text within a panel line. `style` is a semantic key the theme maps to
@@ -140,6 +140,11 @@ pub trait Host {
 
     /// Close the active prompt, if any.
     fn dismiss_prompt(&mut self) {}
+
+    /// Publish (or clear with `None`) the caret-anchored popup — the completion list today. The
+    /// app renders it and, while it's up, routes navigation keys to its owner's
+    /// [`crate::Plugin::on_popup_key`]. Default no-op.
+    fn set_popup(&mut self, _popup: Option<Popup>) {}
 
     /// Every command the palette can run (built-in + contributed), mirrored onto the host so a
     /// palette plugin can enumerate them without reaching the registry (unreachable through

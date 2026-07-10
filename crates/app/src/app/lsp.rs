@@ -74,7 +74,13 @@ impl App {
                 self.editor.overlay = Some(crate::editor::Overlay::Info(text));
             }
             LspEvent::Goto(loc) => self.goto_location(loc),
-            LspEvent::Completion(items) => self.open_completion(items),
+            LspEvent::Completion(items) => {
+                // Broadcast to the `completion` plugin, which anchors + filters into a popup.
+                let items = items.into_iter().map(to_primitive_completion).collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspCompletion(items));
+            }
             LspEvent::Rename(edit) => self.apply_workspace_edit(edit),
             LspEvent::References(locs) => {
                 let entries = locs
@@ -261,6 +267,16 @@ fn to_primitive_diag(d: editor_lsp::Diagnostic) -> editor_plugin::LspDiagnostic 
             S::Hint => P::Hint,
         },
         message: d.message,
+    }
+}
+
+/// Translate an `editor-lsp` completion item into the kernel's primitive `LspCompletionItem`.
+fn to_primitive_completion(it: editor_lsp::CompletionItem) -> editor_plugin::LspCompletionItem {
+    editor_plugin::LspCompletionItem {
+        label: it.label,
+        detail: it.detail,
+        insert_text: it.insert_text,
+        kind: it.kind,
     }
 }
 

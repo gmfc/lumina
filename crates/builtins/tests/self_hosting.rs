@@ -54,6 +54,10 @@ const TERMINAL_COMMAND: &str = "terminal.toggle";
 const DIAGNOSTICS_ID: &str = "diagnostics";
 const DIAGNOSTICS_COMMAND: &str = "lsp.nextDiagnostic";
 
+// The completion widget (owns lsp.completion; over the POPUP + LspCompletion ports).
+const COMPLETION_ID: &str = "completion";
+const COMPLETION_COMMAND: &str = "lsp.completion";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -255,6 +259,27 @@ fn disabling_lsp_removes_only_its_contributions() {
             "disabling lsp wrongly removed unrelated command `{id}`"
         );
     }
+}
+
+#[test]
+fn completion_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == COMPLETION_COMMAND),
+        "completion's lsp.completion missing — is the widget wired as a plugin?"
+    );
+    let reduced = Registry::with_plugins(
+        all_builtins()
+            .into_iter()
+            .filter(|p| p.id() != COMPLETION_ID),
+    );
+    assert!(
+        !reduced.command_ids().any(|id| id == COMPLETION_COMMAND),
+        "lsp.completion still present after disabling completion — it is hardcoded"
+    );
+    // Disabling completion must leave the separate `lsp`/`diagnostics` plugins' commands intact.
+    assert!(reduced.command_ids().any(|id| id == LSP_COMMAND));
+    assert!(reduced.command_ids().any(|id| id == DIAGNOSTICS_COMMAND));
 }
 
 #[test]

@@ -62,6 +62,52 @@ where
     doc.history.record(txn, inverse, before, after, group);
 }
 
+/// Build the [`Transaction`] + resulting [`Selections`] for a per-selection edit *without*
+/// applying it — the pure half of [`edit_selections`]. A plugin that only has
+/// `Host::apply_transaction` + `set_selections` (not `&mut Document`) uses this to reproduce a
+/// multi-selection edit: `let (txn, after) = selection_edit_transaction(doc, f);
+/// host.apply_transaction(id, txn); host.set_selections(id, after);`. `f` maps each selection to
+/// `(range_to_replace, replacement)`, exactly as [`edit_selections`].
+pub fn selection_edit_transaction<F>(doc: &Document, mut f: F) -> (Transaction, Selections)
+where
+    F: FnMut(&Document, Selection) -> (Range<usize>, String),
+{
+    let mut ops: Vec<(Range<usize>, String)> =
+        doc.selections.ranges().iter().map(|s| f(doc, *s)).collect();
+    ops.sort_by_key(|(r, _)| r.start);
+    clamp_non_overlapping(ops.iter_mut().map(|(r, _)| r));
+
+    let changes: Vec<Change> = ops
+        .iter()
+        .map(|(r, text)| {
+            let start = r.start.min(doc.len_chars());
+            let end = r.end.min(doc.len_chars());
+            let removed = if start < end {
+                doc.text.slice(start..end).to_string()
+            } else {
+                String::new()
+            };
+            Change {
+                at: start,
+                removed,
+                inserted: text.clone(),
+            }
+        })
+        .collect();
+    let txn = Transaction::from_changes(changes);
+
+    // Resulting caret after each op: op start shifted by the cumulative delta, plus inserted len.
+    let mut delta: isize = 0;
+    let mut new_sels: Vec<Selection> = Vec::with_capacity(ops.len());
+    for (r, text) in &ops {
+        let start = (r.start as isize + delta) as usize;
+        let ins = text.chars().count();
+        new_sels.push(Selection::caret(start + ins));
+        delta += ins as isize - (r.end - r.start) as isize;
+    }
+    (txn, Selections::from_iter(new_sels))
+}
+
 /// Clamp a start-sorted op list so the ranges are non-overlapping, merging any overlap into the
 /// earlier op. `edit_selections` maps one op per selection, and the selection *set* is normalized
 /// (non-overlapping) — but an op whose range reaches *outside* its own selection can still cover a

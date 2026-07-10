@@ -34,15 +34,21 @@ fn workspace_edit_applies_rename_across_occurrences() {
 }
 
 #[test]
-fn completion_replaces_typed_prefix() {
+fn completion_accept_replaces_typed_prefix() {
+    // Feed one item, accept it, and confirm it replaces the identifier prefix under the caret —
+    // the `completion` plugin's accept path (apply_transaction over the real edit).
     let path = temp_file("pri");
     let mut app = app_with(&path);
     app.dispatch(Command::Move(Motion::DocEnd));
-    app.insert_completion("println!");
+    feed_completion(&mut app, vec![ci("println!", 3)]);
+    assert!(app.editor.popup.is_some());
+    app.on_key(KeyEvent::from(KeyCode::Enter)); // accept
+    assert!(app.editor.popup.is_none());
     assert_eq!(
         app.editor.active_document().unwrap().to_string(),
         "println!"
     );
+    std::fs::remove_file(&path).ok();
 }
 
 #[test]
@@ -50,12 +56,15 @@ fn completion_popup_navigates_and_accepts() {
     let path = temp_file("pr");
     let mut app = app_with(&path);
     app.dispatch(Command::Move(Motion::DocEnd));
-    app.open_completion(vec![ci("print", 3), ci("println", 3), ci("procedure", 3)]);
-    assert!(app.editor.completion.is_some());
-    // Down selects the 2nd item ("println"); Enter accepts and replaces the typed "pr".
+    feed_completion(
+        &mut app,
+        vec![ci("print", 3), ci("println", 3), ci("procedure", 3)],
+    );
+    assert!(app.editor.popup.is_some());
+    // Down selects the 2nd row ("println"); Enter accepts and replaces the typed "pr".
     app.on_key(KeyEvent::from(KeyCode::Down));
     app.on_key(KeyEvent::from(KeyCode::Enter));
-    assert!(app.editor.completion.is_none());
+    assert!(app.editor.popup.is_none());
     assert_eq!(app.editor.active_document().unwrap().to_string(), "println");
     std::fs::remove_file(&path).ok();
 }
@@ -65,16 +74,19 @@ fn completion_filters_as_you_type_then_dismisses() {
     let path = temp_file("p");
     let mut app = app_with(&path);
     app.dispatch(Command::Move(Motion::DocEnd));
-    app.open_completion(vec![ci("print", 3), ci("procedure", 3), ci("foo", 3)]);
-    assert_eq!(app.editor.completion.as_ref().unwrap().filtered.len(), 2); // print, procedure
-    app.on_key(KeyEvent::from(KeyCode::Char('r'))); // "pr"
+    feed_completion(
+        &mut app,
+        vec![ci("print", 3), ci("procedure", 3), ci("foo", 3)],
+    );
+    assert_eq!(popup_rows(&app), 2); // print, procedure (foo doesn't match "p")
+    app.on_key(KeyEvent::from(KeyCode::Char('r'))); // "pr" → a char falls through to editing
     assert_eq!(app.editor.active_document().unwrap().to_string(), "pr");
-    assert_eq!(app.editor.completion.as_ref().unwrap().filtered.len(), 2);
+    assert_eq!(popup_rows(&app), 2);
     app.on_key(KeyEvent::from(KeyCode::Char('i'))); // "pri" → only print
-    assert_eq!(app.editor.completion.as_ref().unwrap().filtered.len(), 1);
+    assert_eq!(popup_rows(&app), 1);
     // A non-identifier char leaves the word and dismisses the popup.
     app.on_key(KeyEvent::from(KeyCode::Char(' ')));
-    assert!(app.editor.completion.is_none());
+    assert!(app.editor.popup.is_none());
     std::fs::remove_file(&path).ok();
 }
 
@@ -204,9 +216,9 @@ fn completion_esc_dismisses_without_editing() {
     let path = temp_file("pr");
     let mut app = app_with(&path);
     app.dispatch(Command::Move(Motion::DocEnd));
-    app.open_completion(vec![ci("print", 3)]);
+    feed_completion(&mut app, vec![ci("print", 3)]);
     app.on_key(KeyEvent::from(KeyCode::Esc));
-    assert!(app.editor.completion.is_none());
+    assert!(app.editor.popup.is_none());
     assert_eq!(app.editor.active_document().unwrap().to_string(), "pr");
     std::fs::remove_file(&path).ok();
 }

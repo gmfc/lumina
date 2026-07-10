@@ -13,6 +13,7 @@
 
 use editor_plugin::Plugin;
 
+pub mod completion;
 pub mod diagnostics;
 pub mod explorer;
 pub mod find;
@@ -36,8 +37,8 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap). Extracted so
     // far: the explorer, multi-cursor, git-change navigation, find/replace, the command palette +
     // quick-open + goto-line, project search, the theme toggle, the LSP request commands,
-    // diagnostics, and the terminal-dock commands (all reach the editor only through `Host`).
-    // Still hardcoded in `editor-app`: the completion widget + LSP response handling (transport +
+    // diagnostics, completion, and the terminal-dock commands (all reach the editor only through
+    // `Host`). Still hardcoded in `editor-app`: the LSP response handling (transport +
     // goto/hover/refs/rename/symbols stay app-side), the terminal PTY/vt100/render machinery, and
     // vim.
     vec![
@@ -50,6 +51,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(theme::ThemePlugin),
         Box::new(lsp::LspPlugin::default()),
         Box::new(diagnostics::DiagnosticsPlugin::default()),
+        Box::new(completion::CompletionPlugin::default()),
         Box::new(terminal::TerminalPlugin),
     ]
 }

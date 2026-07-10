@@ -27,6 +27,17 @@ pub enum LspSeverity {
     Hint,
 }
 
+/// A completion candidate — the primitive twin of `editor_lsp::CompletionItem`, so the completion
+/// plugin owns the item list without depending on `editor-lsp`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspCompletionItem {
+    pub label: String,
+    pub detail: Option<String>,
+    pub insert_text: String,
+    /// LSP `CompletionItemKind` (1..=25), if the server sent one — drives the kind glyph.
+    pub kind: Option<u8>,
+}
+
 /// A diagnostic in (line, UTF-16 char) coordinates — the primitive twin of `editor_lsp::Diagnostic`.
 /// The app converts `editor-lsp` diagnostics into these at the poll boundary and hands them to
 /// plugins as [`crate::Event::LspDiagnostics`]; the plugin resolves the UTF-16 columns to char

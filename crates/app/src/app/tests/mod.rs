@@ -53,13 +53,27 @@ fn mouse(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
     }
 }
 
-fn ci(label: &str, kind: u8) -> editor_lsp::CompletionItem {
-    editor_lsp::CompletionItem {
+fn ci(label: &str, kind: u8) -> editor_plugin::LspCompletionItem {
+    editor_plugin::LspCompletionItem {
         label: label.to_string(),
         detail: None,
         insert_text: label.to_string(),
         kind: Some(kind),
     }
+}
+
+/// Feed completion items to the `completion` plugin the way the LSP poll loop does — broadcast
+/// `Event::LspCompletion` and drain — so the plugin anchors + filters them into `editor.popup`.
+fn feed_completion(app: &mut App, items: Vec<editor_plugin::LspCompletionItem>) {
+    app.editor
+        .pending_events
+        .push(editor_plugin::event::Event::LspCompletion(items));
+    app.drain_workers();
+}
+
+/// Number of rows in the active caret popup (the filtered completion list), or 0 when closed.
+fn popup_rows(app: &App) -> usize {
+    app.editor.popup.as_ref().map(|p| p.rows.len()).unwrap_or(0)
 }
 
 fn diag(line: u32, sc: u32, el: u32, ec: u32, msg: &str) -> editor_plugin::LspDiagnostic {

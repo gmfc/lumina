@@ -13,14 +13,18 @@ use crate::picker::PickerKind;
 use super::gutter_width;
 use super::util::{put_str, CLR_ACCENT, CLR_SEL};
 
-/// The completion popup: a caret-anchored floating list (plan §2.1). Positioned via
-/// `char_to_screen` on the popup anchor, below the caret line (flipped above when it would
-/// overflow the pane), scrolled to keep the selection visible.
+/// The completion popup: a caret-anchored floating list (plan §2.1), a pure function of the
+/// plugin-published `Popup`. Positioned via `char_to_screen` on the popup anchor, below the caret
+/// line (flipped above when it would overflow the pane), scrolled to keep the selection visible.
 pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
-    let Some(comp) = &app.editor.completion else {
+    let Some(popup) = &app.editor.popup else {
         return;
     };
-    if comp.filtered.is_empty() || editor_area.width < 8 || editor_area.height < 2 {
+    // A modal (prompt / picker / confirm) covers the screen — hide the popup under it.
+    if app.editor.prompt.is_some() || app.editor.picker.is_some() || app.editor.overlay.is_some() {
+        return;
+    }
+    if popup.rows.is_empty() || editor_area.width < 8 || editor_area.height < 2 {
         return;
     }
     let Some(doc) = app.editor.active_document() else {
@@ -35,7 +39,7 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
         tab_width: doc.tab_width,
         height: editor_area.height,
     };
-    let Some((ax, ay)) = editor_core::view::char_to_screen(doc, &geo, comp.anchor) else {
+    let Some((ax, ay)) = editor_core::view::char_to_screen(doc, &geo, popup.anchor) else {
         return;
     };
 
@@ -43,22 +47,22 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
     let max_rows = 8usize
         .min(editor_area.height.saturating_sub(1) as usize)
         .max(1);
-    let total = comp.filtered.len();
-    let offset = if comp.selected >= max_rows {
-        comp.selected + 1 - max_rows
+    let total = popup.rows.len();
+    let offset = if popup.selected >= max_rows {
+        popup.selected + 1 - max_rows
     } else {
         0
     };
     let end = (offset + max_rows).min(total);
-    let shown = &comp.filtered[offset..end];
+    let shown = &popup.rows[offset..end];
 
-    // Width from the widest "kind label  detail" row, clamped to the pane.
+    // Width from the widest "glyph label  detail" row, clamped to the pane.
     let mut width = 14usize;
-    for &idx in shown {
-        let it = &comp.items[idx];
+    for row in shown {
         let w = 3
-            + it.label.chars().count()
-            + it.detail
+            + row.label.chars().count()
+            + row
+                .detail
                 .as_ref()
                 .map(|d| 2 + d.chars().count())
                 .unwrap_or(0);
@@ -81,17 +85,15 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
     f.render_widget(Clear, rect);
 
     let buf = f.buffer_mut();
-    for (i, &idx) in shown.iter().enumerate() {
-        let it = &comp.items[idx];
-        let selected = offset + i == comp.selected;
+    for (i, row) in shown.iter().enumerate() {
+        let selected = offset + i == popup.selected;
         let (fg, bg) = if selected {
             (Color::Black, CLR_ACCENT)
         } else {
             (Color::Gray, Color::Rgb(40, 44, 52))
         };
-        let kind = crate::completion::kind_label(it.kind);
-        let mut text = format!("{kind} {}", it.label);
-        if let Some(d) = &it.detail {
+        let mut text = format!("{} {}", row.glyph, row.label);
+        if let Some(d) = &row.detail {
             text.push_str("  ");
             text.push_str(d);
         }
