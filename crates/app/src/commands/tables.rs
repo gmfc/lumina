@@ -34,11 +34,9 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("edit.copy", "Edit: Copy"),
         ("edit.cut", "Edit: Cut"),
         ("edit.paste", "Edit: Paste"),
-        ("cursor.addNextMatch", "Multi-cursor: Add Next Match"),
-        (
-            "cursor.selectAllMatches",
-            "Multi-cursor: Select All Occurrences",
-        ),
+        // Multi-cursor add-next-match / select-all / add-above-below are contributed by the
+        // `multicursor` builtin plugin and shown in the palette via the registry (open_palette
+        // merges registry.commands()); only the line-ends command remains app-side.
         (
             "cursor.addCursorsToLineEnds",
             "Multi-cursor: Add Cursors to Line Ends",
@@ -70,8 +68,6 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("terminal.minimize", "Terminal: Minimize/Restore Panel"),
         ("terminal.next", "Terminal: Next Terminal"),
         ("terminal.prev", "Terminal: Previous Terminal"),
-        ("cursor.addAbove", "Multi-cursor: Add Cursor Above"),
-        ("cursor.addBelow", "Multi-cursor: Add Cursor Below"),
         ("view.quickOpen", "Go to File…"),
         ("view.gotoLine", "Go to Line…"),
         ("view.settings", "Preferences: Open Settings"),

@@ -34,7 +34,7 @@ fn renders_editor_with_all_decorations() {
 
     // Non-empty selection + a secondary caret (exercises selection-bg + secondary-cursor).
     app.editor.active_document_mut().unwrap().set_caret(0);
-    app.dispatch(Command::AddCursorBelow);
+    app.exec_id("cursor.addBelow");
     app.dispatch(Command::SelectWord);
 
     // Active find with matches (exercises the match-highlight path).

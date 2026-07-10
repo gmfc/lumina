@@ -112,7 +112,7 @@ fn multi_cursor_typing_edits_all() {
     let path = temp_file("foo bar foo baz foo");
     let mut app = app_with(&path);
     for _ in 0..3 {
-        app.dispatch(Command::AddCursorAtNextMatch);
+        app.exec_id("cursor.addNextMatch");
     }
     // Replace each selected "foo" by typing.
     app.dispatch(Command::InsertText("X".into()));

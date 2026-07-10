@@ -23,6 +23,12 @@ const EXPLORER_ID: &str = "explorer";
 const EXPLORER_PANEL: &str = "explorer.tree";
 const EXPLORER_COMMAND: &str = "explorer.revealActiveFile";
 
+// The multi-cursor feature is a plugin too (the second feature migrated off the hardcoded
+// dispatch). Guarding a *second* plugin keeps the isolation check below operating on a
+// multi-plugin set, so "disabling one removes exactly its contributions" is a real assertion.
+const MULTICURSOR_ID: &str = "multicursor";
+const MULTICURSOR_COMMAND: &str = "cursor.addNextMatch";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -55,11 +61,45 @@ fn disabling_the_explorer_removes_only_its_contributions() {
         "explorer panel still present after disabling the plugin — it is hardcoded, not a plugin"
     );
 
-    // … and nothing unrelated was disturbed.
+    // … and nothing unrelated was disturbed (multicursor's `cursor.*` commands survive).
     for id in before.iter().filter(|id| !id.starts_with("explorer.")) {
         assert!(
             reduced.command_ids().any(|c| &c == id),
             "disabling the explorer wrongly removed unrelated command `{id}`"
+        );
+    }
+}
+
+#[test]
+fn multicursor_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == MULTICURSOR_COMMAND),
+        "multi-cursor command missing — is it wired as a plugin (not a hardcoded Command arm)?"
+    );
+}
+
+#[test]
+fn disabling_multicursor_removes_only_its_contributions() {
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+
+    let reduced = Registry::with_plugins(
+        all_builtins()
+            .into_iter()
+            .filter(|p| p.id() != MULTICURSOR_ID),
+    );
+
+    // Its `cursor.*` commands are gone …
+    assert!(
+        !reduced.command_ids().any(|id| id == MULTICURSOR_COMMAND),
+        "multi-cursor command still present after disabling — it is hardcoded, not a plugin"
+    );
+    // … and the explorer's contributions are untouched.
+    for id in before.iter().filter(|id| !id.starts_with("cursor.")) {
+        assert!(
+            reduced.command_ids().any(|c| &c == id),
+            "disabling multi-cursor wrongly removed unrelated command `{id}`"
         );
     }
 }

@@ -80,7 +80,7 @@ fn select_all_matches_then_edit_rewrites_all() {
     let mut app = app_with(&path);
     // Bare caret inside the first "foo" selects the word, then all occurrences.
     app.editor.active_document_mut().unwrap().set_caret(1);
-    app.dispatch(Command::SelectAllMatches);
+    app.exec_id("cursor.selectAllMatches");
     assert_eq!(app.editor.active_document().unwrap().selections.len(), 3);
     app.dispatch(Command::InsertText("X".into()));
     assert_eq!(
