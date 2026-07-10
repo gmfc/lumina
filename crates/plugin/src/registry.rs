@@ -60,6 +60,10 @@ pub trait Plugin {
     ) -> bool {
         false
     }
+
+    /// A row of this plugin's picker (`token`) was activated. `item_id` is the chosen row's id.
+    /// The plugin acts through `host` (e.g. `execute` a command or `open_path` a file).
+    fn on_picker_activate(&mut self, _token: &str, _item_id: &str, _host: &mut dyn Host) {}
 }
 
 /// The registry. Owns the live plugins and the aggregated contribution tables.
@@ -225,6 +229,19 @@ impl Registry {
             return p.on_prompt_key(prompt_id, key, host);
         }
         false
+    }
+
+    /// Route a picker-row activation to the plugin that owns the picker (`owner` = its id).
+    pub fn activate_picker(
+        &mut self,
+        owner: &str,
+        token: &str,
+        item_id: &str,
+        host: &mut dyn Host,
+    ) {
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.id() == owner) {
+            p.on_picker_activate(token, item_id, host);
+        }
     }
 
     /// Number of registered plugins.

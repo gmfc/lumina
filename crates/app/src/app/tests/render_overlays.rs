@@ -31,7 +31,7 @@ fn renders_completion_popup() {
 fn renders_command_palette() {
     let dir = temp_dir_with_files();
     let mut app = app_with(&dir);
-    app.open_palette();
+    app.exec_id("view.commandPalette");
     assert!(app.editor.picker.is_some());
     let out = render_to_string(&mut app, 100, 30);
     assert!(out.contains("File: Save"));

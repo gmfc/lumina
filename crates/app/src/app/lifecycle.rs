@@ -23,6 +23,9 @@ impl App {
         plugins.retain(|p| config.is_plugin_enabled(p.id()));
         let mut registry = Registry::with_plugins(plugins);
         registry.activate_all(&mut editor);
+        // Mirror the command set onto EditorState so a palette plugin can enumerate it through
+        // `Host::commands` (the registry is unreachable behind the split-borrow wall).
+        editor.command_catalog = command_catalog(&registry);
 
         if let Some(file) = open_file {
             match files::load(&file) {

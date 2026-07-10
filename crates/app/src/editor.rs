@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use editor_core::{DocId, Document, Selections, Transaction, Workspace};
 use editor_plugin::event::Event;
 use editor_plugin::host::DirEntry;
-use editor_plugin::{DecorationSet, Host, PanelContent, Prompt};
+use editor_plugin::{CommandInfo, DecorationSet, Host, PanelContent, PickerRequest, Prompt};
 
 /// Which region has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +70,10 @@ pub struct EditorState {
     pub prompt: Option<Prompt>,
     /// Active fuzzy picker (command palette / quick open / goto line), if open.
     pub picker: Option<crate::picker::Picker>,
+    /// Snapshot of every command (built-in + contributed) a palette plugin can enumerate through
+    /// `Host::commands`, taken after plugins register. Mirrors the registry across the split-borrow
+    /// wall (the palette plugin sees only `&mut EditorState`).
+    pub command_catalog: Vec<CommandInfo>,
     /// LSP diagnostics per document (from the language server).
     pub diagnostics: HashMap<DocId, Vec<editor_lsp::Diagnostic>>,
     /// Precomputed bracket-match highlight for the active doc: `(bracket, partner)` char
@@ -104,6 +108,7 @@ impl EditorState {
             decorations: HashMap::new(),
             prompt: None,
             picker: None,
+            command_catalog: Vec::new(),
             diagnostics: HashMap::new(),
             bracket_match: None,
             completion: None,
@@ -237,6 +242,50 @@ impl Host for EditorState {
             .unwrap_or_default();
         lines.sort_unstable();
         lines
+    }
+
+    fn commands(&self) -> Vec<CommandInfo> {
+        self.command_catalog.clone()
+    }
+
+    fn project_files(&self) -> Vec<DirEntry> {
+        // Ignore-honoring walk of the project root (files only), capped so a huge tree can't
+        // stall the picker. The app owns this policy so builtins need no `ignore` dependency.
+        let mut out = Vec::new();
+        let walker = ignore::WalkBuilder::new(&self.workspace.root)
+            .hidden(false)
+            .git_ignore(true)
+            .filter_entry(|e| e.file_name() != ".git")
+            .build();
+        for entry in walker.flatten().take(10_000) {
+            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                out.push(DirEntry {
+                    path: entry.path().to_path_buf(),
+                    is_dir: false,
+                });
+            }
+        }
+        out
+    }
+
+    fn open_picker(&mut self, request: PickerRequest) {
+        let to_items = |v: Vec<editor_plugin::PickerItem>| -> Vec<crate::picker::PickerItem> {
+            v.into_iter()
+                .map(|i| crate::picker::PickerItem {
+                    id: i.id,
+                    label: i.label,
+                })
+                .collect()
+        };
+        self.picker = Some(
+            crate::picker::Picker::unified(
+                &request.title,
+                to_items(request.items),
+                to_items(request.commands),
+                request.start_in_commands,
+            )
+            .owned_by(request.owner, request.token),
+        );
     }
 
     fn set_prompt(&mut self, prompt: Prompt) {

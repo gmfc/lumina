@@ -8,6 +8,7 @@ use editor_core::{DocId, Selections, Transaction, Workspace};
 
 use crate::decoration::DecorationSet;
 use crate::overlay::Prompt;
+use crate::picker::{CommandInfo, PickerRequest};
 
 /// A styled run of text within a panel line. `style` is a semantic key the theme maps to
 /// colors (e.g. "dir", "file", "match", "dim").
@@ -128,6 +129,24 @@ pub trait Host {
 
     /// Close the active prompt, if any.
     fn dismiss_prompt(&mut self) {}
+
+    /// Every command the palette can run (built-in + contributed), mirrored onto the host so a
+    /// palette plugin can enumerate them without reaching the registry (unreachable through
+    /// `Host`). Default empty; the app fills it from a snapshot taken after plugins register.
+    fn commands(&self) -> Vec<CommandInfo> {
+        Vec::new()
+    }
+
+    /// The project's files (ignore-honoring walk of the workspace root), for quick-open. Default
+    /// empty; the app owns the `ignore`-crate walk policy so plugins need no filesystem deps.
+    fn project_files(&self) -> Vec<DirEntry> {
+        Vec::new()
+    }
+
+    /// Open the app's generic fuzzy picker from a data-described request. The app builds, filters,
+    /// renders, and captures keys generically, then routes activation to the request's `owner`.
+    /// Default no-op.
+    fn open_picker(&mut self, _request: PickerRequest) {}
 
     /// Set a panel's rendered content.
     fn set_panel(&mut self, panel_id: &str, content: PanelContent);
