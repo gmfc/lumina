@@ -67,10 +67,8 @@ impl App {
             }),
 
             // --- multi-cursor ---
-            Command::AddCursorAtNextMatch => self.add_cursor_next_match(),
-            Command::AddCursorAbove => self.add_cursor_vertical(-1),
-            Command::AddCursorBelow => self.add_cursor_vertical(1),
-            Command::SelectAllMatches => self.select_all_matches(),
+            // add-next-match / select-all / add-above-below are contributed by the `multicursor`
+            // builtin plugin (crates/builtins) and dispatched through the registry.
             Command::CursorsToLineEnds => self.with_doc(edit::cursors_to_line_ends),
             Command::Paste(s) => {
                 let text = if s.is_empty() {

@@ -63,11 +63,8 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "edit.copy" => Command::Copy,
         "edit.cut" => Command::Cut,
         "edit.paste" => Command::Paste(String::new()),
-        // multi-cursor
-        "cursor.addAbove" => Command::AddCursorAbove,
-        "cursor.addBelow" => Command::AddCursorBelow,
-        "cursor.addNextMatch" => Command::AddCursorAtNextMatch,
-        "cursor.selectAllMatches" => Command::SelectAllMatches,
+        // multi-cursor (add-next-match / select-all / add-above-below are contributed by the
+        // `multicursor` builtin plugin and dispatched through the registry, not here)
         "cursor.addCursorsToLineEnds" => Command::CursorsToLineEnds,
         // files / tabs
         "file.save" => Command::Save,

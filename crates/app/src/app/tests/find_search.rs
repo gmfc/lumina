@@ -78,13 +78,13 @@ fn project_search_finds_and_opens() {
 fn ctrl_d_selects_word_then_adds_next_match() {
     let path = temp_file("foo bar foo baz foo");
     let mut app = app_with(&path);
-    app.dispatch(Command::AddCursorAtNextMatch); // select "foo" under cursor
+    app.exec_id("cursor.addNextMatch"); // select "foo" under cursor
     assert_eq!(app.editor.active_document().unwrap().selections.len(), 1);
     let sel = app.editor.active_document().unwrap().selections.primary();
     assert_eq!((sel.from(), sel.to()), (0, 3));
-    app.dispatch(Command::AddCursorAtNextMatch); // add next "foo"
+    app.exec_id("cursor.addNextMatch"); // add next "foo"
     assert_eq!(app.editor.active_document().unwrap().selections.len(), 2);
-    app.dispatch(Command::AddCursorAtNextMatch); // third "foo"
+    app.exec_id("cursor.addNextMatch"); // third "foo"
     assert_eq!(app.editor.active_document().unwrap().selections.len(), 3);
     std::fs::remove_file(&path).ok();
 }
@@ -94,7 +94,7 @@ fn add_cursor_below_creates_two_carets() {
     let path = temp_file("aaa\nbbb\nccc");
     let mut app = app_with(&path);
     app.editor.active_document_mut().unwrap().set_caret(1); // col 1 line 0
-    app.dispatch(Command::AddCursorBelow);
+    app.exec_id("cursor.addBelow");
     let doc = app.editor.active_document().unwrap();
     assert_eq!(doc.selections.len(), 2);
     // Second caret is on line 1 at the same column.

@@ -14,6 +14,7 @@
 use editor_plugin::Plugin;
 
 pub mod explorer;
+pub mod multicursor;
 
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
 /// config can filter the list to disable any of them (the litmus test for self-hosting).
@@ -24,8 +25,12 @@ pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
 /// Like [`all_builtins`], but with runtime options threaded in from user config (e.g. whether
 /// the explorer draws Nerd Font glyphs).
 pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
-    // Only the explorer is a plugin today. find/replace, palette + quick-open, search + sync, and
-    // lsp were planned as plugins (plan §6A) but still live in `editor-app` as hardcoded commands
-    // — each needs new `Host` ports first. See the migration roadmap in `docs/AUDIT.md`.
-    vec![Box::new(explorer::ExplorerPlugin::new(icons))]
+    // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap). Extracted so
+    // far: the explorer and multi-cursor (both reach the editor only through `Host`). Still
+    // hardcoded in `editor-app` pending new `Host` ports: find/replace, palette + quick-open,
+    // project search, lsp, git, terminal, vim.
+    vec![
+        Box::new(explorer::ExplorerPlugin::new(icons)),
+        Box::new(multicursor::MultiCursorPlugin),
+    ]
 }
