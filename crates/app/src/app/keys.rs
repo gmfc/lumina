@@ -78,6 +78,15 @@ impl App {
             self.pending.clear();
             return true;
         }
+        // Registry-contributed raw-key capturers (vim/terminal once they migrate to plugins) get
+        // the last refusal before chord resolution. A no-op today: no built-in plugin overrides
+        // `Plugin::capture_key`, so this preserves behavior until a capturer exists.
+        if let Some(pk) = to_plugin_key(key) {
+            if self.registry.capture_key(pk, &mut self.editor) {
+                self.pending.clear();
+                return true;
+            }
+        }
         false
     }
 
@@ -173,6 +182,43 @@ impl App {
             }
         }
     }
+}
+
+/// Translate a crossterm key event into the kernel's crossterm-free [`editor_plugin::Key`] so a
+/// raw-key-capturing plugin never sees a terminal type. Returns `None` for keys the editor never
+/// binds (media keys, caps-lock, …). The character keeps its delivered case — crossterm already
+/// folds shift into the char — so a modal layer can tell `d` from `D`; `shift` is reported only
+/// for the named keys, mirroring [`Chord::from_event`].
+fn to_plugin_key(key: crossterm::event::KeyEvent) -> Option<editor_plugin::Key> {
+    use crossterm::event::{KeyCode as Ct, KeyModifiers};
+    use editor_plugin::KeyCode as Pk;
+    let (code, is_char) = match key.code {
+        Ct::Char(c) => (Pk::Char(c), true),
+        Ct::Enter => (Pk::Enter, false),
+        Ct::Tab => (Pk::Tab, false),
+        Ct::BackTab => (Pk::BackTab, false),
+        Ct::Esc => (Pk::Esc, false),
+        Ct::Backspace => (Pk::Backspace, false),
+        Ct::Delete => (Pk::Delete, false),
+        Ct::Insert => (Pk::Insert, false),
+        Ct::Up => (Pk::Up, false),
+        Ct::Down => (Pk::Down, false),
+        Ct::Left => (Pk::Left, false),
+        Ct::Right => (Pk::Right, false),
+        Ct::Home => (Pk::Home, false),
+        Ct::End => (Pk::End, false),
+        Ct::PageUp => (Pk::PageUp, false),
+        Ct::PageDown => (Pk::PageDown, false),
+        Ct::F(n) => (Pk::F(n), false),
+        _ => return None,
+    };
+    Some(editor_plugin::Key {
+        code,
+        ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+        alt: key.modifiers.contains(KeyModifiers::ALT),
+        // Case already lives in the char; only report shift for the named keys.
+        shift: !is_char && key.modifiers.contains(KeyModifiers::SHIFT),
+    })
 }
 
 /// Human label for a pending chord prefix (shown in the status bar).

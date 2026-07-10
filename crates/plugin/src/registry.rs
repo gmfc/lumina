@@ -40,6 +40,14 @@ pub trait Plugin {
 
     /// A row in one of this plugin's panels was activated (clicked / Enter).
     fn on_panel_activate(&mut self, _panel_id: &str, _payload: &str, _host: &mut dyn Host) {}
+
+    /// Pre-empt a raw key before chord resolution. A modal layer (vim) or a focused terminal
+    /// returns `true` to consume the key; the default returns `false` so an ordinary plugin is
+    /// never offered raw input. Powerful — a plugin that returns `true` swallows the keystroke —
+    /// so for external guests this is gated behind a `keys:raw` capability.
+    fn capture_key(&mut self, _key: crate::input::Key, _host: &mut dyn Host) -> bool {
+        false
+    }
 }
 
 /// The registry. Owns the live plugins and the aggregated contribution tables.
@@ -179,6 +187,19 @@ impl Registry {
         }
     }
 
+    /// Offer a raw key to plugins that intercept input (vim, a focused terminal) before chord
+    /// resolution, in load order. Returns `true` as soon as one consumes it. A no-op until a
+    /// plugin overrides [`Plugin::capture_key`], so wiring this into the app's key path is
+    /// behavior-preserving on its own.
+    pub fn capture_key(&mut self, key: crate::input::Key, host: &mut dyn Host) -> bool {
+        for p in &mut self.plugins {
+            if p.capture_key(key, host) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Number of registered plugins.
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
@@ -209,5 +230,63 @@ mod tests {
         assert!(reg.command_ids().any(|id| id == "dummy.hello"));
         assert!(reg.panel_ids().any(|id| id == "dummy.panel"));
         assert_eq!(reg.plugin_count(), 1);
+    }
+
+    /// A minimal in-memory [`Host`] for routing tests that need no real editor state.
+    struct NoopHost {
+        ws: editor_core::Workspace,
+    }
+    impl NoopHost {
+        fn new() -> NoopHost {
+            NoopHost {
+                ws: editor_core::Workspace::new(std::path::PathBuf::from(".")),
+            }
+        }
+    }
+    impl Host for NoopHost {
+        fn workspace(&self) -> &editor_core::Workspace {
+            &self.ws
+        }
+        fn apply_transaction(&mut self, _doc: editor_core::DocId, _txn: editor_core::Transaction) {}
+        fn set_selections(&mut self, _doc: editor_core::DocId, _sel: editor_core::Selections) {}
+        fn open_path(&mut self, _path: &std::path::Path) {}
+        fn read_dir(&self, _path: &std::path::Path) -> Vec<crate::host::DirEntry> {
+            Vec::new()
+        }
+        fn set_panel(&mut self, _panel_id: &str, _content: crate::host::PanelContent) {}
+        fn set_status(&mut self, _item_id: &str, _text: String) {}
+        fn notify(&mut self, _message: String) {}
+        fn execute(&mut self, _command_id: &str) {}
+    }
+
+    /// Consumes exactly one chord (`ctrl+d`), recording that it saw it.
+    struct Capturer {
+        saw: bool,
+    }
+    impl Plugin for Capturer {
+        fn id(&self) -> &str {
+            "capturer"
+        }
+        fn capture_key(&mut self, key: crate::input::Key, _host: &mut dyn Host) -> bool {
+            self.saw = true;
+            key.ctrl && key.code == crate::input::KeyCode::Char('d')
+        }
+    }
+
+    #[test]
+    fn capture_key_offers_the_key_and_stops_at_the_first_consumer() {
+        let mut reg = Registry::with_plugins([
+            Box::new(Capturer { saw: false }) as Box<dyn Plugin>,
+            Box::new(Dummy),
+        ]);
+        let mut host = NoopHost::new();
+        // A plain plugin never captures (Dummy uses the default false impl).
+        let mut only_dummy = Registry::with_plugins([Box::new(Dummy) as Box<dyn Plugin>]);
+        assert!(!only_dummy.capture_key(crate::input::Key::char('d').with_ctrl(), &mut host));
+
+        // The capturer consumes ctrl+d …
+        assert!(reg.capture_key(crate::input::Key::char('d').with_ctrl(), &mut host));
+        // … but declines an unrelated key, so it falls through (returns false).
+        assert!(!reg.capture_key(crate::input::Key::char('x'), &mut host));
     }
 }
