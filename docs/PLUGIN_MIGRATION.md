@@ -22,15 +22,38 @@ only through `Host`, and the `Command` table shrinks to those primitives.
 - **Invariant #1/#2 hardened at the type level** — `Document.text` is `pub(crate)` behind
   `rope()`; `set_text*` narrowed; `reload_from_str` clears stale undo history;
   `set_selections` normalizes at the boundary; `edit_selections_sel` overlap-clamped.
-- **Two features extracted as genuine plugins:** multi-cursor (`crates/builtins/src/multicursor.rs`,
-  zero new Host surface) and git-change navigation (`crates/builtins/src/git_nav.rs`, via the new
-  `Host::changed_lines`). Explorer was already a plugin.
 - **Registry-first dispatch** — `exec_id` (`crates/app/src/app/overlay.rs`) resolves through the
   registry before the `Command` table (invariant #4's primary-path requirement).
-- **Self-hosting guard generalized** to a multi-plugin set (`crates/builtins/tests/self_hosting.rs`).
+- **The Host port catalogue is built** (§4): registry-keybinding wiring in `build_keymap`; the
+  `Plugin::capture_key` hook + primitive `editor_plugin::input::{Key, KeyCode}`; the DECORATIONS
+  port (`set_decorations`/`clear_decorations` + `Decoration`/`GutterMark`/`DecorationSet`) with a
+  generic decoration painter in the renderer; the PROMPT port
+  (`overlay::{Prompt, PromptField, PromptToggle, PromptPlacement}` + `set_prompt`/`dismiss_prompt`
+  + `Plugin::on_prompt_key`/`Registry::dispatch_prompt_key`, rendered by `render_prompt`); the
+  PICKER + command-enumeration port (`picker::{CommandInfo, PickerItem, PickerRequest}` +
+  `open_picker`/`commands`/`project_files` + `on_picker_activate`/`Registry::activate_picker`); the
+  BACKGROUND-JOBS port (`Event::JobComplete` + `spawn_job` + `open_path_at`); the appearance
+  effect (`toggle_theme`); the LSP-request effect-queue (`lsp::LspRequestKind` + `lsp_request`
+  + `lsp_enabled`); and the terminal-dock effect-queue (`terminal::TerminalOp` + `terminal_op`).
+- **Features extracted as genuine plugins** (all reach the editor only through `Host`):
+  explorer, multi-cursor (incl. add-cursors-to-line-ends), git-change navigation, **find/replace**,
+  **command palette + quick-open + goto-line**, **project search**, the **light/dark theme toggle**,
+  the **LSP request commands** (hover/goto\*/completion/references/symbols/rename — transport +
+  responses stay app-side), and the **terminal-dock commands** (PTY/vt100/render stay app-side).
+- **Self-hosting guard generalized** to a 12-plugin set (`crates/builtins/tests/self_hosting.rs`),
+  asserting each plugin's commands/panels/keybindings and disable-isolation.
 
-**Remaining features to extract:** find/replace (+ rename input), command palette / quick-open /
-goto-line, project search, completion, diagnostics, LSP, terminal, vim. Each is a dossier in §6.
+**Remaining feature bodies to extract** (the deeply app-coupled cluster — each needs a large new
+port or is a known trap): the **completion widget** (needs the caret-anchored POPUP port + primitive
+LSP completion-item DTOs delivered as events); the **diagnostics model** (needs primitive LSP
+diagnostic DTOs as events, then publishes decorations — §6.4 steps 2-3 sketch the render side);
+the **LSP responses** (goto/hover/refs/symbols/rename application + the diagnostics ingestion —
+blocked on the popup port + sync-open-vs-deferred-open reconciliation, §6.5 risk (3)); the
+**terminal PTY/vt100/grid** body (§6.6 RawPTY port); **vim** (the ~1800-line pre-keymap interceptor
+— `capture_key` exists; the interceptor move is §6.7); and **clipboard** copy/cut/paste (the §5
+"trap": needs a core `edit::insert_transaction` that returns both the transaction *and* the
+re-derived selections, since `Host::apply_transaction` records history with the pre-edit selection
+set). See the per-feature dossiers in §6.
 
 ---
 
