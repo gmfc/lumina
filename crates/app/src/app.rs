@@ -81,7 +81,6 @@ pub struct App {
     settings_doc: Option<editor_core::DocId>,
 }
 
-mod completion;
 mod cursors;
 mod dispatch;
 mod file_ops;

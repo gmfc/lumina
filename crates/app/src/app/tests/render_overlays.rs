@@ -4,23 +4,26 @@
 
 use super::*;
 
-/// The completion popup draws, including an item that carries a `detail` label.
+/// The completion popup draws (via the plugin-published `Popup`), including a `detail` label.
 #[test]
 fn renders_completion_popup() {
     let path = temp_file("pr\nprintln\n");
     let mut app = app_with(&path);
     app.dispatch(Command::Move(Motion::DocEnd));
-    app.open_completion(vec![
-        editor_lsp::CompletionItem {
-            label: "print".into(),
-            detail: Some("macro".into()),
-            insert_text: "print".into(),
-            kind: Some(3),
-        },
-        ci("println", 3),
-        ci("procedure", 3),
-    ]);
-    assert!(app.editor.completion.is_some());
+    feed_completion(
+        &mut app,
+        vec![
+            editor_plugin::LspCompletionItem {
+                label: "print".into(),
+                detail: Some("macro".into()),
+                insert_text: "print".into(),
+                kind: Some(3),
+            },
+            ci("println", 3),
+            ci("procedure", 3),
+        ],
+    );
+    assert!(app.editor.popup.is_some());
     let out = render_to_string(&mut app, 100, 24);
     assert!(out.contains("print"));
     std::fs::remove_file(&path).ok();

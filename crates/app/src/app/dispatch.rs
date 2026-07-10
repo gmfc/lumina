@@ -138,10 +138,29 @@ impl App {
         self.drain_workers();
     }
 
-    /// Run `f` on the active document if there is one.
+    /// Run `f` on the active document if there is one, then notify plugins of what changed.
+    ///
+    /// This is the app-side edit chokepoint (typing, motions, the editing primitives). Like
+    /// [`Host::apply_transaction`], it emits so reactive plugins (completion, diagnostics) re-sync:
+    /// a bumped `revision` means the text changed ([`Event::DidChange`]); otherwise a moved
+    /// selection means a pure caret move ([`Event::DidChangeCursor`]). Emitted events drain with
+    /// the rest at the end of `dispatch`.
     pub(super) fn with_doc<F: FnOnce(&mut Document)>(&mut self, f: F) {
-        if let Some(d) = self.editor.active_document_mut() {
-            f(d);
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let Some(d) = self.editor.workspace.documents.get_mut(id) else {
+            return;
+        };
+        let (rev_before, sel_before) = (d.revision, d.selections.clone());
+        f(d);
+        let text_changed = d.revision != rev_before;
+        let cursor_moved = d.selections != sel_before;
+        if text_changed {
+            self.editor.emit(editor_plugin::event::Event::DidChange(id));
+        } else if cursor_moved {
+            self.editor
+                .emit(editor_plugin::event::Event::DidChangeCursor(id));
         }
     }
 }

@@ -64,6 +64,14 @@ pub trait Plugin {
     /// A row of this plugin's picker (`token`) was activated. `item_id` is the chosen row's id.
     /// The plugin acts through `host` (e.g. `execute` a command or `open_path` a file).
     fn on_picker_activate(&mut self, _token: &str, _item_id: &str, _host: &mut dyn Host) {}
+
+    /// Handle a key while this plugin's caret popup ([`crate::overlay::Popup`]) is up. Return
+    /// `true` to consume it (navigation / accept / dismiss); `false` lets the key fall through to
+    /// normal editing, after which the plugin re-syncs on the resulting `DidChange`. Default
+    /// `false`.
+    fn on_popup_key(&mut self, _key: crate::input::Key, _host: &mut dyn Host) -> bool {
+        false
+    }
 }
 
 /// The registry. Owns the live plugins and the aggregated contribution tables.
@@ -242,6 +250,20 @@ impl Registry {
         if let Some(p) = self.plugins.iter_mut().find(|p| p.id() == owner) {
             p.on_picker_activate(token, item_id, host);
         }
+    }
+
+    /// Route a key to the plugin that owns the active caret popup (`owner` = its id). Returns
+    /// `true` if that plugin consumed it (so the app skips chord resolution).
+    pub fn dispatch_popup_key(
+        &mut self,
+        owner: &str,
+        key: crate::input::Key,
+        host: &mut dyn Host,
+    ) -> bool {
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.id() == owner) {
+            return p.on_popup_key(key, host);
+        }
+        false
     }
 
     /// Number of registered plugins.

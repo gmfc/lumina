@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use editor_core::{DocId, Document, Selections, Transaction, Workspace};
 use editor_plugin::event::Event;
 use editor_plugin::host::DirEntry;
-use editor_plugin::{CommandInfo, DecorationSet, Host, PanelContent, PickerRequest, Prompt};
+use editor_plugin::{CommandInfo, DecorationSet, Host, PanelContent, PickerRequest, Popup, Prompt};
 
 /// Which region has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,8 +84,9 @@ pub struct EditorState {
     /// Precomputed bracket-match highlight for the active doc: `(bracket, partner)` char
     /// offsets, refreshed after cursor moves so the pure renderer just reads it (plan §1.3).
     pub bracket_match: Option<(usize, usize)>,
-    /// Active caret-anchored completion popup, if any (plan §2.1).
-    pub completion: Option<crate::completion::CompletionState>,
+    /// Active caret-anchored popup (the completion list), published by a plugin and rendered
+    /// generically. `Some` while a popup is up; the app routes nav keys to its owner.
+    pub popup: Option<Popup>,
     /// Locations backing the current `Locations` picker (references / symbols, plan §2.3).
     pub nav_locations: Vec<editor_lsp::Location>,
     /// Per-document git change map for the gutter (plan §4.1), computed off-thread.
@@ -120,7 +121,7 @@ impl EditorState {
             picker: None,
             command_catalog: Vec::new(),
             bracket_match: None,
-            completion: None,
+            popup: None,
             nav_locations: Vec::new(),
             git_hunks: HashMap::new(),
             vim: None,
@@ -320,6 +321,10 @@ impl Host for EditorState {
 
     fn dismiss_prompt(&mut self) {
         self.prompt = None;
+    }
+
+    fn set_popup(&mut self, popup: Option<Popup>) {
+        self.popup = popup;
     }
 
     fn set_decorations(&mut self, doc: DocId, layer: &str, decos: DecorationSet) {
