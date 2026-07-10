@@ -45,8 +45,11 @@ only through `Host`, and the `Command` table shrinks to those primitives.
 
 **Remaining feature bodies to extract** (the deeply app-coupled cluster — each needs a large new
 port or is a known trap): the **completion widget** (needs the caret-anchored POPUP port + primitive
-LSP completion-item DTOs delivered as events); the **diagnostics model** (needs primitive LSP
-diagnostic DTOs as events, then publishes decorations — §6.4 steps 2-3 sketch the render side);
+LSP completion-item DTOs delivered as events); the **diagnostics model** (the *rendering* is already migrated — the app
+publishes an `"lsp.diag"` decoration layer via `update_diagnostic_decorations`, §6.4 steps 2-3
+done; what remains is moving the model itself into a plugin, which needs primitive LSP diagnostic
+DTOs delivered as events + `Host::lsp_pos_to_offset` + a status-line rewire, since the caret
+message reads `diagnostic_at_caret` directly and `set_status` items aren't rendered yet);
 the **LSP responses** (goto/hover/refs/symbols/rename application + the diagnostics ingestion —
 blocked on the popup port + sync-open-vs-deferred-open reconciliation, §6.5 risk (3)); the
 **terminal PTY/vt100/grid** body (§6.6 RawPTY port); **vim** (the ~1800-line pre-keymap interceptor
