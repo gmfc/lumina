@@ -183,6 +183,13 @@ pub trait Host {
         false
     }
 
+    /// Convert an LSP `(line, utf16_char)` position in `doc` to a char offset — the one piece of
+    /// UTF-16↔char mapping a diagnostics/goto plugin needs, kept app-side so the conversion table
+    /// stays out of the kernel. Default `0`.
+    fn lsp_pos_to_offset(&self, _doc: DocId, _line: u32, _character: u32) -> usize {
+        0
+    }
+
     /// Perform a terminal-dock lifecycle action. The app owns the PTY/vt100/render machinery; the
     /// plugin only expresses intent, applied on the next drain (effect-queue). Default no-op.
     fn terminal_op(&mut self, _op: crate::terminal::TerminalOp) {}

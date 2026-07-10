@@ -62,15 +62,32 @@ fn ci(label: &str, kind: u8) -> editor_lsp::CompletionItem {
     }
 }
 
-fn diag(line: u32, sc: u32, el: u32, ec: u32, msg: &str) -> editor_lsp::Diagnostic {
-    editor_lsp::Diagnostic {
+fn diag(line: u32, sc: u32, el: u32, ec: u32, msg: &str) -> editor_plugin::LspDiagnostic {
+    editor_plugin::LspDiagnostic {
         line,
         start_char16: sc,
         end_line: el,
         end_char16: ec,
-        severity: editor_lsp::Severity::Error,
+        severity: editor_plugin::LspSeverity::Error,
         message: msg.to_string(),
     }
+}
+
+/// Feed primitive diagnostics to the `diagnostics` plugin the way the LSP poll loop does —
+/// broadcast `Event::LspDiagnostics` and drain — so the plugin stores them and republishes its
+/// decorations + status item.
+fn feed_diagnostics(
+    app: &mut App,
+    doc: editor_core::DocId,
+    diags: Vec<editor_plugin::LspDiagnostic>,
+) {
+    app.editor
+        .pending_events
+        .push(editor_plugin::event::Event::LspDiagnostics {
+            doc: Some(doc),
+            diagnostics: diags,
+        });
+    app.drain_workers();
 }
 
 /// Create a project dir containing a `.lumina/plugins/<id>` plugin and a file to open.

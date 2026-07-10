@@ -94,21 +94,10 @@ fn renders_editor_with_all_decorations() {
         app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
 
-    // A diagnostic on line 0 → published as the `lsp.diag` decoration layer (gutter marker +
-    // underline), the same path the run loop uses before each draw.
+    // A diagnostic on line 0 → the `diagnostics` plugin publishes the `lsp.diag` decoration layer
+    // (gutter marker + underline).
     let id = app.editor.workspace.active_doc().unwrap();
-    app.editor.diagnostics.insert(
-        id,
-        vec![editor_lsp::Diagnostic {
-            line: 0,
-            start_char16: 3,
-            end_line: 0,
-            end_char16: 6,
-            severity: editor_lsp::Severity::Error,
-            message: String::new(),
-        }],
-    );
-    app.update_diagnostic_decorations();
+    feed_diagnostics(&mut app, id, vec![diag(0, 3, 0, 6, "")]);
 
     // Viewport taller than the 4-line doc → past-EOF tildes render too.
     let text = render_to_string(&mut app, 48, 12);
@@ -119,34 +108,34 @@ fn renders_editor_with_all_decorations() {
 
 #[test]
 fn diagnostics_publish_as_a_decoration_layer() {
-    // Data-level guard for the diagnostics→decorations conversion (the render path has no color
-    // assertion): an Error on line 0 cols 3..6 and a Warning on line 1 produce two underline
+    // Data-level guard for the `diagnostics` plugin's decoration build (the render path has no
+    // color assertion): an Error on line 0 cols 3..6 and a Warning on line 1 produce two underline
     // spans + two gutter marks with the right severity keys.
     let path = temp_file("let x = 1;\nlonger line here\n");
     let mut app = app_with(&path);
     let id = app.editor.workspace.active_doc().unwrap();
-    app.editor.diagnostics.insert(
+    feed_diagnostics(
+        &mut app,
         id,
         vec![
-            editor_lsp::Diagnostic {
+            editor_plugin::LspDiagnostic {
                 line: 0,
                 start_char16: 3,
                 end_line: 0,
                 end_char16: 6,
-                severity: editor_lsp::Severity::Error,
+                severity: editor_plugin::LspSeverity::Error,
                 message: String::new(),
             },
-            editor_lsp::Diagnostic {
+            editor_plugin::LspDiagnostic {
                 line: 1,
                 start_char16: 0,
                 end_line: 1,
                 end_char16: 4,
-                severity: editor_lsp::Severity::Warning,
+                severity: editor_plugin::LspSeverity::Warning,
                 message: String::new(),
             },
         ],
     );
-    app.update_diagnostic_decorations();
     let layer = app.editor.decorations[&id]
         .get("lsp.diag")
         .expect("lsp.diag layer published");
@@ -166,9 +155,8 @@ fn diagnostics_publish_as_a_decoration_layer() {
         .iter()
         .any(|m| m.line == 1 && m.glyph == 'W' && m.style == "lsp.diag.mark.warning"));
 
-    // Clearing the diagnostics drops the layer.
-    app.editor.diagnostics.remove(&id);
-    app.update_diagnostic_decorations();
+    // An empty diagnostics push drops the layer.
+    feed_diagnostics(&mut app, id, vec![]);
     assert!(app
         .editor
         .decorations

@@ -83,7 +83,6 @@ pub struct App {
 
 mod completion;
 mod cursors;
-mod diagnostics;
 mod dispatch;
 mod file_ops;
 mod git;

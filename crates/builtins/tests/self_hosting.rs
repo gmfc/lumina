@@ -50,6 +50,10 @@ const LSP_COMMAND: &str = "lsp.gotoDefinition";
 const TERMINAL_ID: &str = "terminal";
 const TERMINAL_COMMAND: &str = "terminal.toggle";
 
+// Diagnostics (owns the model; over the LspDiagnostics event + decorations + status ports).
+const DIAGNOSTICS_ID: &str = "diagnostics";
+const DIAGNOSTICS_COMMAND: &str = "lsp.nextDiagnostic";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -251,6 +255,27 @@ fn disabling_lsp_removes_only_its_contributions() {
             "disabling lsp wrongly removed unrelated command `{id}`"
         );
     }
+}
+
+#[test]
+fn diagnostics_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == DIAGNOSTICS_COMMAND),
+        "diagnostic-nav command missing — is the diagnostics model wired as a plugin?"
+    );
+    // The `diagnostics` plugin owns the model but contributes no panel; disabling it must remove
+    // its commands and leave the `lsp` plugin's request commands intact.
+    let reduced = Registry::with_plugins(
+        all_builtins()
+            .into_iter()
+            .filter(|p| p.id() != DIAGNOSTICS_ID),
+    );
+    assert!(!reduced.command_ids().any(|id| id == DIAGNOSTICS_COMMAND));
+    assert!(
+        reduced.command_ids().any(|id| id == LSP_COMMAND),
+        "disabling diagnostics must not remove the separate `lsp` plugin's commands"
+    );
 }
 
 #[test]

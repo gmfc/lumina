@@ -24,4 +24,11 @@ pub enum Event {
     /// plugin's correlation id (e.g. carrying a generation so stale results drop); `payload`
     /// is the job's serialized result, decoded by the owning plugin.
     JobComplete { id: String, payload: Vec<u8> },
+    /// The language server published diagnostics for `doc` (translated from `editor-lsp` at the
+    /// app boundary into primitive [`crate::LspDiagnostic`]s). `None` doc = an update for a URI
+    /// with no open document.
+    LspDiagnostics {
+        doc: Option<DocId>,
+        diagnostics: Vec<crate::lsp::LspDiagnostic>,
+    },
 }

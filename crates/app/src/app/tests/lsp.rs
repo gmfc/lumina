@@ -165,48 +165,37 @@ fn lsp_error_event_is_shown_on_status_bar() {
 
 #[test]
 fn diagnostic_nav_and_caret_message() {
+    // Drives the `diagnostics` plugin: diagnostics arrive via the LspDiagnostics event, nav goes
+    // through exec_id, and the caret message is read off the plugin-published status item.
     let path = temp_file("aaa\nbbb\nccc\n");
     let mut app = app_with(&path);
     let id = app.editor.workspace.active_doc().unwrap();
-    app.editor.diagnostics.insert(
+    let head = |app: &App| {
+        app.editor
+            .active_document()
+            .unwrap()
+            .selections
+            .primary()
+            .head
+    };
+    let caret_msg = |app: &App| app.editor.status_items.get("lsp.diag").cloned();
+
+    feed_diagnostics(
+        &mut app,
         id,
         vec![diag(0, 0, 0, 1, "first"), diag(2, 0, 2, 1, "third")],
     );
-    // Caret at 0 covers the first diagnostic; its message renders at the caret.
-    assert_eq!(app.diagnostic_at_caret().map(|(_, m)| m), Some("first"));
-    // Next jumps to the line-3 diagnostic (offset 8).
-    app.dispatch(Command::NextDiagnostic);
-    assert_eq!(
-        app.editor
-            .active_document()
-            .unwrap()
-            .selections
-            .primary()
-            .head,
-        8
-    );
-    assert_eq!(app.diagnostic_at_caret().map(|(_, m)| m), Some("third"));
+    // Caret at 0 covers the first diagnostic; the plugin publishes its glyph + message.
+    assert_eq!(caret_msg(&app).as_deref(), Some("E first"));
+    // Next jumps to the line-3 diagnostic (offset 8) and updates the caret message.
+    app.exec_id("lsp.nextDiagnostic");
+    assert_eq!(head(&app), 8);
+    assert_eq!(caret_msg(&app).as_deref(), Some("E third"));
     // Next past the last wraps to the first; Prev from there wraps to the last.
-    app.dispatch(Command::NextDiagnostic);
-    assert_eq!(
-        app.editor
-            .active_document()
-            .unwrap()
-            .selections
-            .primary()
-            .head,
-        0
-    );
-    app.dispatch(Command::PrevDiagnostic);
-    assert_eq!(
-        app.editor
-            .active_document()
-            .unwrap()
-            .selections
-            .primary()
-            .head,
-        8
-    );
+    app.exec_id("lsp.nextDiagnostic");
+    assert_eq!(head(&app), 0);
+    app.exec_id("lsp.prevDiagnostic");
+    assert_eq!(head(&app), 8);
     std::fs::remove_file(&path).ok();
 }
 

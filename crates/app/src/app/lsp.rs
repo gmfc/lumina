@@ -57,11 +57,18 @@ impl App {
         use crate::lsp::LspEvent;
         match event {
             LspEvent::Diagnostics(update) => {
-                if let Some(path) = crate::lsp::path_from_uri(&update.uri) {
-                    if let Some(id) = self.editor.workspace.find_by_path(&path) {
-                        self.editor.diagnostics.insert(id, update.diagnostics);
-                    }
-                }
+                // Translate to primitive diagnostics and broadcast to the `diagnostics` plugin,
+                // which owns the model (transport stays here).
+                let doc = crate::lsp::path_from_uri(&update.uri)
+                    .and_then(|path| self.editor.workspace.find_by_path(&path));
+                let diagnostics = update
+                    .diagnostics
+                    .into_iter()
+                    .map(to_primitive_diag)
+                    .collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspDiagnostics { doc, diagnostics });
             }
             LspEvent::Hover(text) => {
                 self.editor.overlay = Some(crate::editor::Overlay::Info(text));
@@ -234,6 +241,26 @@ impl App {
         if let Some((path, lang)) = info {
             self.lsp.request_document_symbols(&path, &lang);
         }
+    }
+}
+
+/// Translate an `editor-lsp` diagnostic into the kernel's primitive `LspDiagnostic` (so the
+/// `diagnostics` plugin owns the model without depending on `editor-lsp`).
+fn to_primitive_diag(d: editor_lsp::Diagnostic) -> editor_plugin::LspDiagnostic {
+    use editor_lsp::Severity as S;
+    use editor_plugin::LspSeverity as P;
+    editor_plugin::LspDiagnostic {
+        line: d.line,
+        start_char16: d.start_char16,
+        end_line: d.end_line,
+        end_char16: d.end_char16,
+        severity: match d.severity {
+            S::Error => P::Error,
+            S::Warning => P::Warning,
+            S::Info => P::Info,
+            S::Hint => P::Hint,
+        },
+        message: d.message,
     }
 }
 
