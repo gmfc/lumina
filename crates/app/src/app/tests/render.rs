@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn published_decoration_layer_paints_and_reverts() {
+    use editor_plugin::{Decoration, DecorationSet, Host};
+    use ratatui::style::Color;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    // A .txt buffer (no syntax highlighting), so the only background tint can come from the
+    // decoration layer we publish — an unambiguous signal.
+    let path = temp_file("hello world");
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    let id = app.editor.workspace.active_doc().unwrap();
+
+    let find_bg = Color::Rgb(90, 74, 30);
+    let has_find_bg = |app: &mut App| -> bool {
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|c| c.symbol() == "h" && c.bg == find_bg)
+    };
+
+    // Nothing published yet: no cell carries the find background.
+    assert!(
+        !has_find_bg(&mut app),
+        "no find bg before a layer is published"
+    );
+
+    // Publish a find-match highlight over "hello" (chars 0..5) through the Host port.
+    app.editor.set_decorations(
+        id,
+        "find.match",
+        DecorationSet::spans(vec![Decoration::new((0, 5), "find.match")]),
+    );
+    assert!(
+        has_find_bg(&mut app),
+        "the 'h' cell should carry the find-match background once the layer is published"
+    );
+
+    // Clearing the layer reverts the render to no tint (proves clear_decorations wipes it).
+    app.editor.clear_decorations(id, "find.match");
+    assert!(
+        !has_find_bg(&mut app),
+        "clearing the layer must remove the decoration from the render"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn rust_file_gets_syntax_highlighting() {
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
     let mut path = std::env::temp_dir();
