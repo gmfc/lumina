@@ -91,6 +91,25 @@ fn select_all_matches_then_edit_rewrites_all() {
 }
 
 #[test]
+fn registry_contributed_chord_reaches_the_plugin() {
+    // Regression guard for the keymap-wiring fix: `ctrl+d` is contributed by the `multicursor`
+    // plugin (not the defaults table), so this only resolves if build_keymap folds in
+    // registry.keybindings(). Pressing it must reach the plugin via the real chord→id→registry
+    // path and select the word under the caret.
+    let path = temp_file("foo foo");
+    let mut app = app_with(&path);
+    app.editor.active_document_mut().unwrap().set_caret(1); // inside the first "foo"
+    key(&mut app, KeyCode::Char('d'), KeyModifiers::CONTROL);
+    let sel = app.editor.active_document().unwrap().selections.primary();
+    assert_eq!(
+        (sel.from(), sel.to()),
+        (0, 3),
+        "ctrl+d should resolve through the plugin-contributed keybinding to cursor.addNextMatch"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn cursors_to_line_ends_from_keys() {
     let path = temp_file("aa\nbbb");
     let mut app = app_with(&path);

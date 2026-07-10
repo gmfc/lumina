@@ -25,7 +25,7 @@ fn config_remaps_key() {
     app.config
         .keybindings
         .push(("ctrl+s".into(), "edit.selectAll".into()));
-    app.keymap = build_keymap(&app.config);
+    app.keymap = build_keymap(&app.config, &app.registry);
     app.dispatch(Command::InsertText("abc".into()));
     app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
     let sel = app.editor.active_document().unwrap().selections.primary();

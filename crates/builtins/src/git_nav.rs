@@ -18,9 +18,13 @@ impl Plugin for GitNavPlugin {
     }
 
     fn contributions(&self) -> Contributions {
+        // Chords travel with the plugin now that the keymap folds in registry-contributed
+        // bindings (invariant #3); the `alt+j`/`alt+k` rows left `commands/tables.rs`.
         Contributions::builder()
             .command("git.nextHunk", "Go: Next Change")
             .command("git.prevHunk", "Go: Previous Change")
+            .keybinding("alt+j", "git.nextHunk")
+            .keybinding("alt+k", "git.prevHunk")
             .build()
     }
 

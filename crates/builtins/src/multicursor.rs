@@ -17,6 +17,10 @@ impl Plugin for MultiCursorPlugin {
     }
 
     fn contributions(&self) -> Contributions {
+        // The plugin owns its own chords now that the keymap folds in registry-contributed
+        // bindings (invariant #3): the default rows left `commands/tables.rs`. `shift+alt+i`
+        // (addCursorsToLineEnds) is *not* here — that command is still app-side (see the
+        // migration spec §5), so its binding stays in the defaults table until it moves too.
         Contributions::builder()
             .command("cursor.addNextMatch", "Multi-cursor: Add Next Match")
             .command(
@@ -25,6 +29,10 @@ impl Plugin for MultiCursorPlugin {
             )
             .command("cursor.addAbove", "Multi-cursor: Add Cursor Above")
             .command("cursor.addBelow", "Multi-cursor: Add Cursor Below")
+            .keybinding("ctrl+d", "cursor.addNextMatch")
+            .keybinding("ctrl+f2", "cursor.selectAllMatches")
+            .keybinding("ctrl+alt+up", "cursor.addAbove")
+            .keybinding("ctrl+alt+down", "cursor.addBelow")
             .build()
     }
 

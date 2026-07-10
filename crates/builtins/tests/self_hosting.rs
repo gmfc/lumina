@@ -103,3 +103,34 @@ fn disabling_multicursor_removes_only_its_contributions() {
         );
     }
 }
+
+/// A migrated plugin owns its keybindings too, not just its commands: the chord travels with
+/// the plugin (via `Contributions::keybinding`) so `build_keymap` folds it into the keymap and
+/// disabling the plugin unbinds the chord. Guards the keymap-wiring fix for invariant #3.
+#[test]
+fn migrated_plugins_contribute_their_keybindings() {
+    let full = Registry::with_plugins(all_builtins());
+    let bound = |reg: &Registry, chord: &str, command: &str| {
+        reg.keybindings()
+            .iter()
+            .any(|kb| kb.chord == chord && kb.command == command)
+    };
+    assert!(
+        bound(&full, "ctrl+d", "cursor.addNextMatch"),
+        "multi-cursor's ctrl+d must be contributed through the registry, not the defaults table"
+    );
+    assert!(
+        bound(&full, "alt+j", "git.nextHunk"),
+        "git-nav's alt+j must be contributed through the registry, not the defaults table"
+    );
+
+    let no_multicursor = Registry::with_plugins(
+        all_builtins()
+            .into_iter()
+            .filter(|p| p.id() != MULTICURSOR_ID),
+    );
+    assert!(
+        !bound(&no_multicursor, "ctrl+d", "cursor.addNextMatch"),
+        "disabling multi-cursor must unbind its chord — otherwise the binding is hardcoded"
+    );
+}

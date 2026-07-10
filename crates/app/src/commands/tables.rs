@@ -113,7 +113,10 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+p", "view.quickOpen"),
         ("ctrl+g", "view.gotoLine"),
         ("ctrl+,", "view.settings"),
-        ("ctrl+d", "cursor.addNextMatch"),
+        // NOTE: `cursor.addNextMatch` (ctrl+d), `cursor.selectAllMatches` (ctrl+f2), and
+        // `cursor.addAbove`/`addBelow` (ctrl+alt+up/down) are contributed by the `multicursor`
+        // plugin; `git.nextHunk`/`git.prevHunk` (alt+j/alt+k) by `git-nav`. The keymap folds in
+        // registry keybindings (build_keymap), so those chords live with their plugins now.
         ("ctrl+tab", "tab.next"),
         ("ctrl+shift+tab", "tab.prev"),
         ("ctrl+1", "tab.goto1"),
@@ -166,16 +169,11 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+shift+enter", "edit.insertLineAbove"),
         ("ctrl+k ctrl+x", "edit.trimTrailingWhitespace"),
         ("ctrl+\\", "cursor.jumpToBracket"),
-        ("ctrl+alt+up", "cursor.addAbove"),
-        ("ctrl+alt+down", "cursor.addBelow"),
-        ("ctrl+f2", "cursor.selectAllMatches"),
         ("shift+alt+i", "cursor.addCursorsToLineEnds"),
         ("f3", "search.findNext"),
         ("shift+f3", "search.findPrev"),
         ("f8", "lsp.nextDiagnostic"),
         ("shift+f8", "lsp.prevDiagnostic"),
-        ("alt+j", "git.nextHunk"),
-        ("alt+k", "git.prevHunk"),
         ("f12", "lsp.gotoDefinition"),
         ("ctrl+f12", "lsp.gotoImplementation"),
         ("shift+f12", "lsp.references"),
