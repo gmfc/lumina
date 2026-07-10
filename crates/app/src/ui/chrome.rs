@@ -71,18 +71,21 @@ const BANNER: &[&str] = &[
 /// The commands surfaced on the empty-state screen: `(command id, label, fallback keys)`. The
 /// key shown is looked up live from the active keymap so config remaps are reflected; the
 /// fallback stands in only when nothing is bound. Every one is also in the command palette.
+/// Only commands with a real default key belong here; palette-only actions (Vim mode, theme
+/// switching) are pointed at from the footer instead, since they have no chord to show.
 const WELCOME_COMMANDS: &[(&str, &str, &str)] = &[
-    ("view.quickOpen", "Open File", "Ctrl+P"),
     ("view.commandPalette", "Command Palette", "Ctrl+Shift+P"),
+    ("view.quickOpen", "Open File", "Ctrl+P"),
     ("file.new", "New File", "Ctrl+N"),
     ("file.save", "Save", "Ctrl+S"),
     ("search.find", "Find", "Ctrl+F"),
     ("edit.toggleComment", "Toggle Comment", "Ctrl+/"),
-    ("view.toggleSidebar", "Toggle Sidebar", "Ctrl+B"),
-    ("terminal.toggle", "Toggle Terminal", "Ctrl+`"),
-    ("cursor.addNextMatch", "Add Cursor / Next Match", "Ctrl+D"),
     ("lsp.gotoDefinition", "Go to Definition", "F12"),
+    ("lsp.rename", "Rename Symbol", "F2"),
+    ("cursor.addNextMatch", "Add Cursor / Next Match", "Ctrl+D"),
     ("view.gotoLine", "Go to Line", "Ctrl+G"),
+    ("view.settings", "Settings", "Ctrl+,"),
+    ("terminal.toggle", "Toggle Terminal", "Ctrl+`"),
     ("app.quit", "Quit", "Ctrl+Q"),
 ];
 
@@ -156,6 +159,24 @@ pub(super) fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
             spans.extend(cell(entry));
         }
         rows.push(Line::from(spans));
+    }
+
+    // A dim footer pointing at the command palette — the home of the actions with no default
+    // key (Vim mode, theme switching) and everything else. Dropped rather than clipped when it
+    // won't fit the pane's width or its remaining height, so the command grid stays intact.
+    let palette_key = app
+        .keymap
+        .binding_label("view.commandPalette")
+        .unwrap_or_else(|| "Ctrl+Shift+P".to_string());
+    let footer = format!("Vim mode · themes · all commands — {palette_key}");
+    let fits_width = display_len(&footer) <= area.width as usize;
+    let fits_height = rows.len() + 2 <= area.height as usize;
+    if fits_width && fits_height {
+        rows.push(Line::from(""));
+        rows.push(Line::from(TSpan::styled(
+            footer,
+            Style::default().fg(Color::DarkGray),
+        )));
     }
 
     // Center the block vertically, and each row horizontally, within the pane.
