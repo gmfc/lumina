@@ -134,8 +134,6 @@ impl App {
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
             Command::FocusSidebar => self.editor.focus = Focus::Sidebar,
             Command::FocusEditor => self.editor.focus = Focus::Editor,
-            Command::Palette => self.open_palette(),
-            Command::QuickOpen => self.open_quick_open(),
             Command::GotoLine => self.open_goto_line(),
 
             // --- terminal panel ---

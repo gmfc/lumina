@@ -18,7 +18,7 @@ use crate::editor::{EditorState, Focus};
 use crate::files;
 use crate::input::Command;
 use crate::keymap::{Chord, Keymap};
-use crate::picker::{Picker, PickerItem, PickerKind};
+use crate::picker::{Picker, PickerKind};
 use crate::ui::{self, Regions};
 
 /// Tracks click cadence for double/triple-click detection.
@@ -125,6 +125,24 @@ pub(crate) fn lsp_pos_to_char(doc: &Document, line: u32, char16: u32) -> usize {
 /// True if screen cell `(col, row)` falls within `rect`.
 fn in_rect(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
+
+/// Snapshot every command a palette can run — the still-app-side `palette_entries` rows plus
+/// every registry-contributed command — into a flat `CommandInfo` list. A palette plugin reads
+/// this through `Host::commands`, mirroring the registry across the split-borrow wall (it sees
+/// only `&mut EditorState`). Rebuilt whenever the plugin set changes (i.e. at construction).
+fn command_catalog(registry: &Registry) -> Vec<editor_plugin::CommandInfo> {
+    let mut cat: Vec<editor_plugin::CommandInfo> = crate::commands::palette_entries()
+        .iter()
+        .map(|(id, title)| editor_plugin::CommandInfo::new(*id, *title))
+        .collect();
+    for spec in registry.commands() {
+        cat.push(editor_plugin::CommandInfo::new(
+            spec.id.clone(),
+            spec.title.clone(),
+        ));
+    }
+    cat
 }
 
 /// Build the keymap from three tiers, later tiers overriding earlier ones:

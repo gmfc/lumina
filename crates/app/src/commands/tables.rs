@@ -64,7 +64,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("terminal.minimize", "Terminal: Minimize/Restore Panel"),
         ("terminal.next", "Terminal: Next Terminal"),
         ("terminal.prev", "Terminal: Previous Terminal"),
-        ("view.quickOpen", "Go to File…"),
+        // view.commandPalette / view.quickOpen titles come from the `palette` plugin.
         ("view.gotoLine", "Go to Line…"),
         ("view.settings", "Preferences: Open Settings"),
         ("config.reload", "Preferences: Reload Configuration"),
@@ -106,8 +106,7 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         // ctrl+f/ctrl+h (find/replace) + f3/shift+f3 (next/prev) are contributed by the `find`
         // plugin; only project search's chord is app-side.
         ("ctrl+shift+f", "search.project"),
-        ("ctrl+shift+p", "view.commandPalette"),
-        ("ctrl+p", "view.quickOpen"),
+        // ctrl+shift+p (palette) + ctrl+p (quick-open) are contributed by the `palette` plugin.
         ("ctrl+g", "view.gotoLine"),
         ("ctrl+,", "view.settings"),
         // NOTE: `cursor.addNextMatch` (ctrl+d), `cursor.selectAllMatches` (ctrl+f2), and

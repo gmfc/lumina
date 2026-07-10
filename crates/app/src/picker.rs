@@ -32,6 +32,11 @@ pub struct Picker {
     /// Indices into the *active* source (`items` or `commands`) passing the filter, best first.
     pub filtered: Vec<usize>,
     pub selected: usize,
+    /// When a plugin opened this picker (via `Host::open_picker`), the owning plugin id + the
+    /// request token, so the app routes activation back to it. `None` for app-owned pickers
+    /// (the LSP locations list).
+    pub owner: Option<String>,
+    pub token: Option<String>,
 }
 
 impl Picker {
@@ -44,6 +49,8 @@ impl Picker {
             commands: Vec::new(),
             filtered: Vec::new(),
             selected: 0,
+            owner: None,
+            token: None,
         };
         p.refilter();
         p
@@ -69,9 +76,19 @@ impl Picker {
             commands,
             filtered: Vec::new(),
             selected: 0,
+            owner: None,
+            token: None,
         };
         p.refilter();
         p
+    }
+
+    /// Tag this picker with the plugin that owns it (id + request token), so the app routes
+    /// activation back through `Registry::activate_picker`.
+    pub fn owned_by(mut self, owner: impl Into<String>, token: impl Into<String>) -> Picker {
+        self.owner = Some(owner.into());
+        self.token = Some(token.into());
+        self
     }
 
     /// True when the `>` command mode is active (unified picker, query starts with `>`).

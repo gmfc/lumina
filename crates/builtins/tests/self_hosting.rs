@@ -33,6 +33,10 @@ const MULTICURSOR_COMMAND: &str = "cursor.addNextMatch";
 const FIND_ID: &str = "find";
 const FIND_COMMAND: &str = "search.find";
 
+// The command palette + quick-open (over the picker + command-enumeration ports).
+const PALETTE_ID: &str = "palette";
+const PALETTE_COMMAND: &str = "view.commandPalette";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -134,6 +138,36 @@ fn disabling_find_removes_only_its_contributions() {
         assert!(
             reduced.command_ids().any(|c| &c == id),
             "disabling find wrongly removed unrelated command `{id}`"
+        );
+    }
+}
+
+#[test]
+fn palette_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == PALETTE_COMMAND),
+        "command-palette missing — is the palette wired as a plugin (not an app Command arm)?"
+    );
+}
+
+#[test]
+fn disabling_palette_removes_only_its_contributions() {
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+
+    let reduced =
+        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != PALETTE_ID));
+
+    assert!(
+        !reduced.command_ids().any(|id| id == PALETTE_COMMAND),
+        "palette command still present after disabling — it is hardcoded, not a plugin"
+    );
+    // Nothing unrelated removed (the app's `view.gotoLine` isn't a palette contribution).
+    for id in before.iter().filter(|id| !id.starts_with("view.")) {
+        assert!(
+            reduced.command_ids().any(|c| &c == id),
+            "disabling palette wrongly removed unrelated command `{id}`"
         );
     }
 }

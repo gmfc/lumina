@@ -5,58 +5,8 @@
 use super::*;
 
 impl App {
-    /// Open the unified picker directly in command mode (the `>` command palette).
-    pub(super) fn open_palette(&mut self) {
-        self.open_unified_picker(true);
-    }
-
-    /// Open the unified picker in file mode (quick-open). Typing `>` switches to commands.
-    pub(super) fn open_quick_open(&mut self) {
-        self.open_unified_picker(false);
-    }
-
-    /// Build the unified quick-open / command palette: project files (ignore-walked) plus every
-    /// built-in and plugin-contributed command. `command_mode` pre-selects the `>` command view.
-    fn open_unified_picker(&mut self, command_mode: bool) {
-        let root = self.editor.workspace.root.clone();
-        let mut files = Vec::new();
-        let walker = ignore::WalkBuilder::new(&root)
-            .hidden(false)
-            .git_ignore(true)
-            .filter_entry(|e| e.file_name() != ".git")
-            .build();
-        for entry in walker.flatten().take(10_000) {
-            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                let path = entry.path();
-                let label = path
-                    .strip_prefix(&root)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .into_owned();
-                files.push(PickerItem {
-                    id: path.to_string_lossy().into_owned(),
-                    label,
-                });
-            }
-        }
-
-        let mut commands: Vec<PickerItem> = crate::commands::palette_entries()
-            .iter()
-            .map(|(id, title)| PickerItem {
-                id: id.to_string(),
-                label: title.to_string(),
-            })
-            .collect();
-        for spec in self.registry.commands() {
-            commands.push(PickerItem {
-                id: spec.id.clone(),
-                label: spec.title.clone(),
-            });
-        }
-
-        self.editor.picker = Some(Picker::unified("Go to File", files, commands, command_mode));
-    }
-
+    /// Open the Go-to-Line prompt (still an app command; the palette + quick-open are the
+    /// `palette` plugin now, opening the same generic picker via `Host::open_picker`).
     pub(super) fn open_goto_line(&mut self) {
         self.editor.picker = Some(Picker::new(PickerKind::GotoLine, "Go to Line", Vec::new()));
     }
@@ -87,20 +37,22 @@ impl App {
         let Some(picker) = self.editor.picker.take() else {
             return;
         };
-        // The `>` command mode overrides the base kind for the unified picker.
-        if picker.command_mode() {
-            if let Some(item) = picker.selected_item() {
-                let id = item.id.clone();
-                self.exec_id(&id);
+        // A plugin-owned picker (quick-open / command palette): route the chosen row back to the
+        // owning plugin, which decides command-vs-file.
+        if picker.owner.is_some() {
+            if let Some(id) = picker.selected_item().map(|i| i.id.clone()) {
+                let owner = picker.owner.clone().unwrap();
+                let token = picker.token.clone().unwrap_or_default();
+                self.registry
+                    .activate_picker(&owner, &token, &id, &mut self.editor);
+                self.drain_workers();
             }
             return;
         }
+        // App-owned pickers (goto-line prompt, LSP locations list).
         match picker.kind {
             PickerKind::File => {
-                if let Some(item) = picker.selected_item() {
-                    let path = std::path::PathBuf::from(&item.id);
-                    self.open_path(&path);
-                }
+                // File pickers are plugin-owned now; nothing to do for an app-owned one.
             }
             PickerKind::GotoLine => {
                 if let Ok(line) = picker.query.trim().parse::<usize>() {

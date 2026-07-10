@@ -66,8 +66,8 @@ fn modal_keys_route_to_active_modal() {
     app.on_key(KeyEvent::from(KeyCode::Char('h')));
     app.on_key(KeyEvent::from(KeyCode::Esc));
     assert!(app.editor.prompt.is_none(), "Esc closes the find prompt");
-    // picker
-    app.open_palette();
+    // picker (the `palette` plugin opens the generic picker)
+    app.exec_id("view.commandPalette");
     assert!(app.editor.picker.is_some());
     app.on_key(KeyEvent::from(KeyCode::Esc));
     // search

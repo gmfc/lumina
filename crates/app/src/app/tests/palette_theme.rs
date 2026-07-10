@@ -4,7 +4,7 @@ use super::*;
 fn palette_lists_builtin_and_plugin_commands() {
     let dir = temp_dir_with_files();
     let mut app = app_with(&dir);
-    app.open_palette();
+    app.exec_id("view.commandPalette");
     let picker = app.editor.picker.as_ref().unwrap();
     // The palette opens in command mode (`>`), so the active source is the command list.
     assert!(picker.command_mode());
