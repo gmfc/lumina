@@ -19,7 +19,7 @@ impl App {
             }
             return;
         }
-        let chars: Vec<char> = doc.text.chars().collect();
+        let chars: Vec<char> = doc.rope().chars().collect();
         let needle: Vec<char> = chars[primary.from()..primary.to()].to_vec();
         if needle.is_empty() {
             return;
@@ -91,7 +91,7 @@ impl App {
         if from >= to {
             return;
         }
-        let chars: Vec<char> = doc.text.chars().collect();
+        let chars: Vec<char> = doc.rope().chars().collect();
         let needle = &chars[from..to];
         let (n, m) = (chars.len(), needle.len());
         let mut sels: Vec<Selection> = Vec::new();
@@ -142,7 +142,7 @@ impl App {
         if sel.is_empty() {
             None
         } else {
-            Some(doc.text.slice(sel.from()..sel.to()).to_string())
+            Some(doc.rope().slice(sel.from()..sel.to()).to_string())
         }
     }
 }

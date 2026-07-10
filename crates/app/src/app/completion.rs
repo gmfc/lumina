@@ -17,14 +17,14 @@ impl App {
         let head = doc.selections.primary().head;
         let mut anchor = head;
         while anchor > 0 {
-            let ch = doc.text.char(anchor - 1);
+            let ch = doc.rope().char(anchor - 1);
             if ch.is_alphanumeric() || ch == '_' {
                 anchor -= 1;
             } else {
                 break;
             }
         }
-        let prefix = doc.text.slice(anchor..head).to_string();
+        let prefix = doc.rope().slice(anchor..head).to_string();
         let state = crate::completion::CompletionState::new(items, anchor, prefix);
         if !state.is_empty() {
             self.editor.completion = Some(state);
@@ -80,7 +80,7 @@ impl App {
             if head < anchor {
                 return None;
             }
-            let p = doc.text.slice(anchor..head).to_string();
+            let p = doc.rope().slice(anchor..head).to_string();
             if p.chars().any(|c| !(c.is_alphanumeric() || c == '_')) {
                 return None;
             }
@@ -107,7 +107,7 @@ impl App {
             // Walk back over identifier chars to find the prefix to replace.
             let mut start = head;
             while start > 0 {
-                let ch = d.text.char(start - 1);
+                let ch = d.rope().char(start - 1);
                 if ch.is_alphanumeric() || ch == '_' {
                     start -= 1;
                 } else {

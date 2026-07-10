@@ -177,7 +177,7 @@ impl App {
                     let (lo, hi) = (start.min(end), start.max(end));
                     editor_core::transaction::Change {
                         at: lo,
-                        removed: doc.text.slice(lo..hi).to_string(),
+                        removed: doc.rope().slice(lo..hi).to_string(),
                         inserted: te.new_text.clone(),
                     }
                 })

@@ -83,15 +83,19 @@ impl Document {
     }
 
     /// Replace the whole buffer (external reload path). Invalidates incremental syntax state.
-    pub fn set_text(&mut self, rope: Rope) {
+    /// `pub(crate)`: a whole-buffer replace has no transaction/inverse, so it must not be an
+    /// escape hatch for other crates (invariant #1). The sanctioned external-reload entry point is
+    /// [`Document::reload_from_str`], which also clears the now-stale undo history.
+    pub(crate) fn set_text(&mut self, rope: Rope) {
         self.text = rope;
         self.revision = self.revision.wrapping_add(1);
         self.syntax_edits.clear();
         self.syntax_edits_valid = false;
     }
 
-    /// Replace the whole buffer from a string, normalizing CRLF to internal LF.
-    pub fn set_text_str(&mut self, s: &str) {
+    /// Replace the whole buffer from a string, normalizing CRLF to internal LF. `pub(crate)`; see
+    /// [`Document::set_text`] — callers outside `core` use [`Document::reload_from_str`].
+    pub(crate) fn set_text_str(&mut self, s: &str) {
         let normalized = s.replace("\r\n", "\n");
         self.set_text(Rope::from_str(&normalized));
     }

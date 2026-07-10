@@ -64,7 +64,7 @@ impl App {
             let sel = doc.selections.primary();
             fs.origin = sel.from();
             if !sel.is_empty() {
-                fs.query = doc.text.slice(sel.from()..sel.to()).to_string();
+                fs.query = doc.rope().slice(sel.from()..sel.to()).to_string();
             }
         }
         self.editor.find = Some(fs);
@@ -85,7 +85,7 @@ impl App {
         let Some(doc) = self.editor.workspace.documents.get(id) else {
             return;
         };
-        let text = doc.text.to_string();
+        let text = doc.rope().to_string();
         if let Some(find) = &mut self.editor.find {
             let origin = find.origin;
             find.recompute(&text, origin);
@@ -101,7 +101,7 @@ impl App {
             let Some(doc) = self.editor.workspace.documents.get(id) else {
                 return;
             };
-            doc.text.to_string()
+            doc.rope().to_string()
         };
         if let Some(find) = &mut self.editor.find {
             let origin = find.origin;
@@ -138,7 +138,7 @@ impl App {
             if s > e || e > doc.len_chars() {
                 return;
             }
-            doc.text.slice(s..e).to_string()
+            doc.rope().slice(s..e).to_string()
         };
         let repl = self
             .editor
@@ -182,7 +182,7 @@ impl App {
                 if s > e || e > len {
                     continue;
                 }
-                let matched = doc.text.slice(s..e).to_string();
+                let matched = doc.rope().slice(s..e).to_string();
                 let inserted = self
                     .editor
                     .find

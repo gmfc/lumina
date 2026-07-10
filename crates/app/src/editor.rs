@@ -142,7 +142,7 @@ impl EditorState {
                     doc.revision,
                     first,
                     last,
-                    doc.text.clone(),
+                    doc.rope().clone(),
                     edits,
                     edits_valid,
                 ))
@@ -194,7 +194,9 @@ impl Host for EditorState {
 
     fn set_selections(&mut self, doc: DocId, selections: Selections) {
         if let Some(d) = self.workspace.documents.get_mut(doc) {
-            d.selections = selections;
+            // Normalize at the port boundary: a plugin may hand us a set built with single+push,
+            // and downstream edit code relies on it being sorted/non-overlapping (invariant #2).
+            d.set_selections(selections);
         }
         self.emit(Event::DidChangeCursor(doc));
     }

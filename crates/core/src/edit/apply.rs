@@ -20,7 +20,7 @@ where
     let mut ops: Vec<(Range<usize>, String)> =
         doc.selections.ranges().iter().map(|s| f(doc, *s)).collect();
     ops.sort_by_key(|(r, _)| r.start);
-    clamp_non_overlapping(&mut ops);
+    clamp_non_overlapping(ops.iter_mut().map(|(r, _)| r));
 
     let changes: Vec<Change> = ops
         .iter()
@@ -71,9 +71,13 @@ where
 /// double-removes and the inverse underflows — silent buffer + undo corruption. Pulling each
 /// range's start up to the previous range's end turns the overlap into one contiguous deletion,
 /// which is exactly the intended union for the delete-style ops that can reach.
-fn clamp_non_overlapping(ops: &mut [(Range<usize>, String)]) {
+///
+/// Takes an iterator of `&mut Range` (not a concrete op tuple) so both [`edit_selections`] and
+/// [`edit_selections_sel`] — whose op tuples differ — share the one guard. For an already
+/// non-overlapping (normalized) op list it is a no-op.
+fn clamp_non_overlapping<'a>(ranges: impl Iterator<Item = &'a mut Range<usize>>) {
     let mut running_end = 0usize;
-    for (r, _) in ops.iter_mut() {
+    for r in ranges {
         if r.start < running_end {
             r.start = running_end.min(r.end);
         }
@@ -95,6 +99,10 @@ where
     let mut ops: Vec<(Range<usize>, String, (usize, usize))> =
         doc.selections.ranges().iter().map(|s| f(doc, *s)).collect();
     ops.sort_by_key(|(r, _, _)| r.start);
+    // Defend against overlapping op ranges exactly as `edit_selections` does — a no-op for the
+    // normalized set this normally runs on, but it keeps `Transaction` changes non-overlapping if
+    // an unnormalized set ever reaches here (invariant #2 defense-in-depth).
+    clamp_non_overlapping(ops.iter_mut().map(|(r, _, _)| r));
 
     // Skip no-op ops (e.g. a "type over" that inserts and removes nothing) so a pure cursor
     // step never marks the buffer dirty or lands on the undo stack.
