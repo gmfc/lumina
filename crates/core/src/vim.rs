@@ -149,39 +149,29 @@ pub fn find_char(doc: &Document, pos: usize, target: char, kind: FindKind) -> Op
         t.trim_end_matches(['\n', '\r']).chars().collect()
     };
     let col = pos - line_start;
-    match kind {
-        FindKind::Find | FindKind::Till => {
-            // Search strictly after the cursor.
-            let mut j = col + 1;
-            while j < body.len() {
-                if body[j] == target {
-                    return Some(match kind {
-                        FindKind::Find => line_start + j,
-                        // `t` stops one before; if already adjacent, don't move onto the cursor.
-                        _ => line_start + j.saturating_sub(1),
-                    });
-                }
-                j += 1;
-            }
-            None
-        }
-        FindKind::FindBack | FindKind::TillBack => {
-            if col == 0 {
-                return None;
-            }
-            let mut j = col; // exclusive scan below starts at j-1
-            while j > 0 {
-                j -= 1;
-                if body[j] == target {
-                    return Some(match kind {
-                        FindKind::FindBack => line_start + j,
-                        _ => line_start + j + 1,
-                    });
-                }
-            }
-            None
-        }
-    }
+    // The index (within `body`) of the nearest `target` in the search direction.
+    let found = match kind {
+        FindKind::Find | FindKind::Till => body
+            .iter()
+            .enumerate()
+            .skip(col + 1)
+            .find(|(_, &c)| c == target)
+            .map(|(j, _)| j),
+        FindKind::FindBack | FindKind::TillBack => body
+            .iter()
+            .enumerate()
+            .take(col)
+            .rev()
+            .find(|(_, &c)| c == target)
+            .map(|(j, _)| j),
+    }?;
+    // Adjust for `t`/`T`, which stop one short of the target.
+    let landing = match kind {
+        FindKind::Find | FindKind::FindBack => found,
+        FindKind::Till => found.saturating_sub(1),
+        FindKind::TillBack => found + 1,
+    };
+    Some(line_start + landing)
 }
 
 /// True when line `line` is blank (empty or whitespace-only) — a paragraph boundary.

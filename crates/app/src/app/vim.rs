@@ -1637,46 +1637,17 @@ impl App {
         if old.is_empty() {
             return;
         }
-        let flags = parts.next().unwrap_or("");
-        let global = flags.contains('g');
+        let global = parts.next().unwrap_or("").contains('g');
         let (old, new) = (old.to_string(), new.to_string());
         self.with_doc(|d| {
-            if whole {
-                let src = d.text.to_string();
-                let out = if global {
-                    src.replace(&old, &new)
-                } else {
-                    src.replacen(&old, &new, 1)
-                };
-                if out != src {
-                    d.selections.set_single(Selection::new(0, d.len_chars()));
-                    edit::edit_selections(
-                        d,
-                        |_x, s| (s.span(), out.clone()),
-                        editor_core::GroupBreak::Force,
-                    );
-                    d.set_caret(0);
-                }
+            let (start, end) = if whole {
+                (0, d.len_chars())
             } else {
                 let line = d.char_to_line(d.selections.primary().head);
                 let ls = d.line_to_char(line);
-                let le = ls + d.line_len_chars(line);
-                let src = d.text.slice(ls..le).to_string();
-                let out = if global {
-                    src.replace(&old, &new)
-                } else {
-                    src.replacen(&old, &new, 1)
-                };
-                if out != src {
-                    d.selections.set_single(Selection::new(ls, le));
-                    edit::edit_selections(
-                        d,
-                        |_x, s| (s.span(), out.clone()),
-                        editor_core::GroupBreak::Force,
-                    );
-                    d.set_caret(ls);
-                }
-            }
+                (ls, ls + d.line_len_chars(line))
+            };
+            substitute_span(d, start, end, &old, &new, global);
         });
     }
 
@@ -1792,6 +1763,34 @@ fn nth(doc: &Document, start: usize, count: usize, f: impl Fn(&Document, usize) 
 /// True when `cmd` looks like a substitute command (`s/…` or `%s/…`).
 fn is_substitute(cmd: &str) -> bool {
     cmd.starts_with("s/") || cmd.starts_with("%s/")
+}
+
+/// Literal find/replace of `old`→`new` within `doc`'s `[start, end)` span (all
+/// occurrences when `global`, else the first), applied as one transaction.
+fn substitute_span(
+    doc: &mut Document,
+    start: usize,
+    end: usize,
+    old: &str,
+    new: &str,
+    global: bool,
+) {
+    let src = doc.text.slice(start..end).to_string();
+    let out = if global {
+        src.replace(old, new)
+    } else {
+        src.replacen(old, new, 1)
+    };
+    if out == src {
+        return;
+    }
+    doc.selections.set_single(Selection::new(start, end));
+    edit::edit_selections(
+        doc,
+        |_x, s| (s.span(), out.clone()),
+        editor_core::GroupBreak::Force,
+    );
+    doc.set_caret(start);
 }
 
 /// Naive literal substring search over `chars` for `pat`, wrapping around the

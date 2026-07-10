@@ -85,39 +85,56 @@ fn enclosing_pair(doc: &Document, pos: usize, open: char, close: char) -> Option
     if n == 0 {
         return None;
     }
-    // Scan left for the enclosing opener. A closer to our left (that isn't the
-    // cursor char) opens a nested pair we must skip.
+    let open_idx = scan_open_left(doc, pos.min(n - 1), pos, open, close)?;
+    let close_idx = scan_close_right(doc, open_idx, n, open, close)?;
+    Some((open_idx, close_idx))
+}
+
+/// Scan left from `from` for the enclosing opener. A closer to our left (that isn't
+/// the cursor char at `pos`) opens a nested pair we must skip over.
+fn scan_open_left(
+    doc: &Document,
+    from: usize,
+    pos: usize,
+    open: char,
+    close: char,
+) -> Option<usize> {
     let mut depth = 0i32;
-    let mut i = pos.min(n - 1) as isize;
-    let open_idx = loop {
-        if i < 0 {
-            return None;
-        }
+    let mut i = from as isize;
+    while i >= 0 {
         let c = doc.text.char(i as usize);
         if c == open && (open != close || depth == 0) {
             if depth == 0 {
-                break i as usize;
+                return Some(i as usize);
             }
             depth -= 1;
         } else if c == close && i as usize != pos {
             depth += 1;
         }
         i -= 1;
-    };
-    // Scan right for the matching closer.
+    }
+    None
+}
+
+/// Scan right from just past `open_idx` for its matching closer.
+fn scan_close_right(
+    doc: &Document,
+    open_idx: usize,
+    n: usize,
+    open: char,
+    close: char,
+) -> Option<usize> {
     let mut depth = 0i32;
-    let mut j = open_idx + 1;
-    while j < n {
+    for j in (open_idx + 1)..n {
         let c = doc.text.char(j);
         if c == open {
             depth += 1;
         } else if c == close {
             if depth == 0 {
-                return Some((open_idx, j));
+                return Some(j);
             }
             depth -= 1;
         }
-        j += 1;
     }
     None
 }
@@ -183,26 +200,9 @@ fn paragraph_object(doc: &Document, pos: usize, around: bool) -> (usize, usize) 
     let n_lines = doc.len_lines();
     let line = doc.char_to_line(pos);
     let blank = is_blank_line(doc, line);
-
-    let mut first = line;
-    while first > 0 && is_blank_line(doc, first - 1) == blank {
-        first -= 1;
-    }
-    let mut last = line;
-    while last + 1 < n_lines && is_blank_line(doc, last + 1) == blank {
-        last += 1;
-    }
+    let (mut first, mut last) = same_blankness_run(doc, line, blank, n_lines);
     if around && !blank {
-        let before = last;
-        while last + 1 < n_lines && is_blank_line(doc, last + 1) {
-            last += 1;
-        }
-        if last == before {
-            // No trailing blanks: take the leading ones instead.
-            while first > 0 && is_blank_line(doc, first - 1) {
-                first -= 1;
-            }
-        }
+        (first, last) = extend_over_blanks(doc, first, last, n_lines);
     }
     let start = doc.line_to_char(first);
     let end = if last + 1 < n_lines {
@@ -211,4 +211,35 @@ fn paragraph_object(doc: &Document, pos: usize, around: bool) -> (usize, usize) 
         doc.len_chars()
     };
     (start, end)
+}
+
+/// The `[first, last]` run of lines around `line` that share its blank-ness.
+fn same_blankness_run(doc: &Document, line: usize, blank: bool, n_lines: usize) -> (usize, usize) {
+    let mut first = line;
+    while first > 0 && is_blank_line(doc, first - 1) == blank {
+        first -= 1;
+    }
+    let mut last = line;
+    while last + 1 < n_lines && is_blank_line(doc, last + 1) == blank {
+        last += 1;
+    }
+    (first, last)
+}
+
+/// Grow a non-blank paragraph over the following blank lines (Vim's `ap`), or, when
+/// there are none, over the preceding blank lines.
+fn extend_over_blanks(doc: &Document, first: usize, last: usize, n_lines: usize) -> (usize, usize) {
+    let mut last = last;
+    let before = last;
+    while last + 1 < n_lines && is_blank_line(doc, last + 1) {
+        last += 1;
+    }
+    if last != before {
+        return (first, last);
+    }
+    let mut first = first;
+    while first > 0 && is_blank_line(doc, first - 1) {
+        first -= 1;
+    }
+    (first, last)
 }
