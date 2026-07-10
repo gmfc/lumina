@@ -1,16 +1,12 @@
-//! Fuzzy pickers (command palette / quick-open / goto-line) and their activation.
+//! The generic fuzzy-picker key handling + activation. The palette / quick-open (and now
+//! goto-line, as a prompt) are the `palette` plugin; the LSP locations list is the last
+//! app-owned picker.
 //!
 //! Part of the [`crate::app`] module; these are `impl App` blocks split out by concern.
 
 use super::*;
 
 impl App {
-    /// Open the Go-to-Line prompt (still an app command; the palette + quick-open are the
-    /// `palette` plugin now, opening the same generic picker via `Host::open_picker`).
-    pub(super) fn open_goto_line(&mut self) {
-        self.editor.picker = Some(Picker::new(PickerKind::GotoLine, "Go to Line", Vec::new()));
-    }
-
     pub(super) fn picker_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
         let Some(picker) = &mut self.editor.picker else {
@@ -49,15 +45,11 @@ impl App {
             }
             return;
         }
-        // App-owned pickers (goto-line prompt, LSP locations list).
+        // The last app-owned picker kind: the LSP locations list. (File pickers are plugin-owned;
+        // goto-line is a generic prompt now.)
         match picker.kind {
             PickerKind::File => {
                 // File pickers are plugin-owned now; nothing to do for an app-owned one.
-            }
-            PickerKind::GotoLine => {
-                if let Ok(line) = picker.query.trim().parse::<usize>() {
-                    self.goto_line(line.saturating_sub(1));
-                }
             }
             PickerKind::Locations => {
                 if let Some(loc) = picker

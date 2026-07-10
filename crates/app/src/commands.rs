@@ -103,8 +103,7 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "view.toggleSidebar" => Command::ToggleSidebar,
         "view.focusSidebar" => Command::FocusSidebar,
         "view.focusEditor" => Command::FocusEditor,
-        // view.commandPalette / view.quickOpen are the `palette` plugin; goto-line stays app-side.
-        "view.gotoLine" => Command::GotoLine,
+        // view.commandPalette / view.quickOpen / view.gotoLine are the `palette` plugin now.
         // terminal panel
         "terminal.toggle" => Command::ToggleTerminal,
         "terminal.new" => Command::NewTerminal,

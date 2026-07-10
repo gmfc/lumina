@@ -64,8 +64,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("terminal.minimize", "Terminal: Minimize/Restore Panel"),
         ("terminal.next", "Terminal: Next Terminal"),
         ("terminal.prev", "Terminal: Previous Terminal"),
-        // view.commandPalette / view.quickOpen titles come from the `palette` plugin.
-        ("view.gotoLine", "Go to Line…"),
+        // view.commandPalette / view.quickOpen / view.gotoLine titles come from the `palette` plugin.
         ("view.settings", "Preferences: Open Settings"),
         ("config.reload", "Preferences: Reload Configuration"),
         ("vim.toggle", "Vim: Toggle Vim Mode"),
@@ -106,8 +105,8 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         // ctrl+f/ctrl+h (find/replace) + f3/shift+f3 (next/prev) are contributed by the `find`
         // plugin; only project search's chord is app-side.
         ("ctrl+shift+f", "search.project"),
-        // ctrl+shift+p (palette) + ctrl+p (quick-open) are contributed by the `palette` plugin.
-        ("ctrl+g", "view.gotoLine"),
+        // ctrl+shift+p (palette) + ctrl+p (quick-open) + ctrl+g (goto-line) are contributed by
+        // the `palette` plugin.
         ("ctrl+,", "view.settings"),
         // NOTE: `cursor.addNextMatch` (ctrl+d), `cursor.selectAllMatches` (ctrl+f2), and
         // `cursor.addAbove`/`addBelow` (ctrl+alt+up/down) are contributed by the `multicursor`
