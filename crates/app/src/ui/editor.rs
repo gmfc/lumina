@@ -8,7 +8,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::Frame;
 
 use editor_core::Document;
-use editor_lsp::{Diagnostic, Severity};
 use editor_plugin::{Decoration, GutterMark};
 use editor_syntax::DocHighlighter;
 
@@ -17,10 +16,7 @@ use crate::editor::Focus;
 use crate::theme::Theme;
 
 use super::gutter_width;
-use super::util::{
-    cell_at, char_cells, diag_marker, diagnostics_on_line, put_str, resolve_line_styles,
-    severity_color, severity_rank, CLR_BG,
-};
+use super::util::{cell_at, char_cells, put_str, resolve_line_styles, CLR_BG};
 
 /// Read-only state threaded through the per-line / per-cell editor renderers, so the
 /// helpers take one context argument instead of a dozen positional ones.
@@ -37,12 +33,12 @@ struct EditorCtx<'a> {
     sel_bg: Color,
     gutter_fg: Color,
     /// Published decoration spans for the active doc, flattened across layers in deterministic
-    /// (layer-name) order. Painted over syntax. Find matches now arrive here (the `find` plugin
-    /// publishes a "find.match" layer), as will diagnostics/etc. as they migrate.
+    /// (layer-name) order. Painted over syntax. Find matches (the `find` plugin's "find.match"
+    /// layer) and diagnostics (the app's "lsp.diag" layer) both arrive here.
     deco_spans: Vec<&'a Decoration>,
-    /// Published gutter marks for the active doc, flattened across layers (same order).
+    /// Published gutter marks for the active doc, flattened across layers (same order): the git
+    /// change-bar is separate, but diagnostic severity markers arrive here.
     deco_gutter: Vec<&'a GutterMark>,
-    diags: &'a [Diagnostic],
     sels: &'a [editor_core::Selection],
     /// `(bracket, partner)` char offsets to highlight, precomputed in `EditorState`.
     bracket_match: Option<(usize, usize)>,
@@ -103,11 +99,6 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         gutter_fg: app.theme.gutter_fg,
         deco_spans,
         deco_gutter,
-        // LSP diagnostics for the active document.
-        diags: active_id
-            .and_then(|id| app.editor.diagnostics.get(&id))
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]),
         // Selection spans, precomputed for quick membership tests.
         sels: doc.selections.ranges(),
         bracket_match: app.editor.bracket_match,
@@ -191,14 +182,10 @@ fn render_editor_row(
     let line_text = ctx.doc.line_text(line_idx);
     let line_text = line_text.trim_end_matches(['\n', '\r']);
 
-    // Diagnostics on this line → per-char severity + a gutter marker.
-    let line_diags = diagnostics_on_line(ctx.diags, line_idx, line_text);
-    draw_diag_marker(buf, ctx.area.x, y, &line_diags);
-
     // Git change-bar in the gutter's separator column, just left of the text (plan §4.1).
     draw_git_bar(buf, ctx, line_idx, y);
 
-    // Published gutter marks (from decoration layers), drawn in the leftmost gutter column.
+    // Published gutter marks (diagnostics severity glyphs, …) in the leftmost gutter column.
     draw_deco_gutter(buf, ctx, line_idx, y);
 
     // Resolve syntax colors per char (shortest span wins for overlaps).
@@ -232,7 +219,7 @@ fn render_editor_row(
         if ctx.doc.selections.primary().head == char_off {
             primary_screen = Some((sx, y));
         }
-        let style = cell_style(ctx, &line_diags, &char_styles, ci, char_off);
+        let style = cell_style(ctx, &char_styles, ci, char_off);
         draw_char_cells(buf, sx, y, ch, style, cells, skip);
         col = end;
     }
@@ -297,21 +284,6 @@ fn draw_eof_tilde(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16) {
     }
 }
 
-/// Draw the gutter marker for the highest-severity diagnostic on the line, if any.
-fn draw_diag_marker(
-    buf: &mut ratatui::buffer::Buffer,
-    x: u16,
-    y: u16,
-    line_diags: &[(usize, usize, Severity)],
-) {
-    if let Some(sev) = line_diags.iter().map(|d| d.2).min_by_key(severity_rank) {
-        if let Some(cell) = cell_at(buf, x, y) {
-            cell.set_char(diag_marker(sev));
-            cell.set_style(Style::default().fg(severity_color(sev)));
-        }
-    }
-}
-
 /// Whether the char at `char_off` falls inside a selection. In Vim linewise Visual
 /// mode the whole spanned line range is tinted; in charwise Visual the primary
 /// selection is inclusive of the char under the cursor.
@@ -331,34 +303,21 @@ fn is_selected(ctx: &EditorCtx, char_off: usize) -> bool {
 }
 
 /// Compose the style for one character cell: syntax base, then published decoration layers
-/// (find-match, …), diagnostic underline, bracket emphasis, selection background, and
+/// (find-match, lsp.diag underline, …), bracket emphasis, selection background, and
 /// secondary-cursor inversion, in that order.
-fn cell_style(
-    ctx: &EditorCtx,
-    line_diags: &[(usize, usize, Severity)],
-    char_styles: &[Option<Style>],
-    ci: usize,
-    char_off: usize,
-) -> Style {
+fn cell_style(ctx: &EditorCtx, char_styles: &[Option<Style>], ci: usize, char_off: usize) -> Style {
     // Base = syntax color; then selection bg; then secondary-cursor inversion.
     let mut style = char_styles
         .get(ci)
         .copied()
         .flatten()
         .unwrap_or_else(|| Style::default().bg(CLR_BG));
-    // Published decoration layers (find matches today; diagnostics/etc. as they migrate). Painted
-    // over syntax and under the bespoke highlights that still live below and the selection tint.
-    // Deterministic layer order.
+    // Published decoration layers (find matches + diagnostics + …). Painted over syntax and under
+    // the bespoke bracket/selection tints below. Deterministic layer order.
     for d in &ctx.deco_spans {
         if char_off >= d.range.0 && char_off < d.range.1 {
             style = style.patch(ctx.theme.decoration_style(&d.style));
         }
-    }
-    // Underline diagnostic ranges in their severity color.
-    if let Some(&(_, _, sev)) = line_diags.iter().find(|&&(s, e, _)| ci >= s && ci < e) {
-        style = style
-            .fg(severity_color(sev))
-            .add_modifier(Modifier::UNDERLINED);
     }
     // Bracket-match emphasis (plan §1.3): the caret's bracket + its partner. Applied before
     // the selection background so a selected bracket still shows the selection tint.
