@@ -272,6 +272,24 @@ fn draw_diag_marker(
     }
 }
 
+/// Whether the char at `char_off` falls inside a selection. In Vim linewise Visual
+/// mode the whole spanned line range is tinted; in charwise Visual the primary
+/// selection is inclusive of the char under the cursor.
+fn is_selected(ctx: &EditorCtx, char_off: usize) -> bool {
+    if let Some((ls, le)) = ctx.vim_visual_lines {
+        return char_off >= ls && char_off < le;
+    }
+    let primary = ctx.doc.selections.primary_index();
+    ctx.sels.iter().enumerate().any(|(i, s)| {
+        let to = if ctx.vim_visual_char && i == primary {
+            s.to() + 1
+        } else {
+            s.to()
+        };
+        char_off >= s.from() && char_off < to
+    })
+}
+
 /// Compose the style for one character cell: syntax base, then find-match, diagnostic
 /// underline, selection background, and secondary-cursor inversion, in that order.
 fn cell_style(
@@ -309,21 +327,7 @@ fn cell_style(
             }
         }
     }
-    let in_sel = if let Some((ls, le)) = ctx.vim_visual_lines {
-        char_off >= ls && char_off < le
-    } else {
-        let primary = ctx.doc.selections.primary_index();
-        ctx.sels.iter().enumerate().any(|(i, s)| {
-            // Vim charwise Visual is inclusive of the char under the cursor.
-            let to = if ctx.vim_visual_char && i == primary {
-                s.to() + 1
-            } else {
-                s.to()
-            };
-            char_off >= s.from() && char_off < to
-        })
-    };
-    if in_sel {
+    if is_selected(ctx, char_off) {
         style = style.bg(ctx.sel_bg);
     }
     let is_secondary_cursor = ctx
