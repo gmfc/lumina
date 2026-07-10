@@ -100,19 +100,7 @@ impl App {
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),
 
-            // --- search ---
-            Command::FindOpen => self.open_find(false),
-            Command::ReplaceOpen => self.open_find(true),
-            Command::FindNext => {
-                toggle_and(&mut self.editor.find, |f| f.select_next());
-                self.focus_current_match();
-            }
-            Command::FindPrev => {
-                toggle_and(&mut self.editor.find, |f| f.select_prev());
-                self.focus_current_match();
-            }
-            Command::ReplaceCurrent => self.replace_current(),
-            Command::ReplaceAll => self.replace_all(),
+            // --- search (find/replace is the `find` plugin; only project search is app-side) ---
             Command::ProjectSearch => self.open_search(),
 
             // --- clipboard ---

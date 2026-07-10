@@ -60,11 +60,12 @@ fn external_plugin_draws_a_panel() {
 fn modal_keys_route_to_active_modal() {
     let path = temp_file("hello world");
     let mut app = app_with(&path);
-    // find
-    app.dispatch(Command::FindOpen);
-    assert!(app.editor.find.is_some());
+    // find (the `find` plugin's prompt is the active modal)
+    app.exec_id("search.find");
+    assert!(app.editor.prompt.is_some());
     app.on_key(KeyEvent::from(KeyCode::Char('h')));
     app.on_key(KeyEvent::from(KeyCode::Esc));
+    assert!(app.editor.prompt.is_none(), "Esc closes the find prompt");
     // picker
     app.open_palette();
     assert!(app.editor.picker.is_some());

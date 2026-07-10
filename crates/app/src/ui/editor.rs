@@ -19,7 +19,7 @@ use crate::theme::Theme;
 use super::gutter_width;
 use super::util::{
     cell_at, char_cells, diag_marker, diagnostics_on_line, put_str, resolve_line_styles,
-    severity_color, severity_rank, CLR_BG, CLR_MATCH,
+    severity_color, severity_rank, CLR_BG,
 };
 
 /// Read-only state threaded through the per-line / per-cell editor renderers, so the
@@ -36,9 +36,9 @@ struct EditorCtx<'a> {
     theme: &'a Theme,
     sel_bg: Color,
     gutter_fg: Color,
-    find_matches: &'a [(usize, usize)],
     /// Published decoration spans for the active doc, flattened across layers in deterministic
-    /// (layer-name) order. Painted over syntax; empty until a plugin publishes a layer.
+    /// (layer-name) order. Painted over syntax. Find matches now arrive here (the `find` plugin
+    /// publishes a "find.match" layer), as will diagnostics/etc. as they migrate.
     deco_spans: Vec<&'a Decoration>,
     /// Published gutter marks for the active doc, flattened across layers (same order).
     deco_gutter: Vec<&'a GutterMark>,
@@ -101,13 +101,6 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         theme: &app.theme,
         sel_bg: app.theme.selection_bg,
         gutter_fg: app.theme.gutter_fg,
-        // Find matches to highlight (the current one is also the primary selection).
-        find_matches: app
-            .editor
-            .find
-            .as_ref()
-            .map(|find| find.matches.as_slice())
-            .unwrap_or(&[]),
         deco_spans,
         deco_gutter,
         // LSP diagnostics for the active document.
@@ -337,8 +330,9 @@ fn is_selected(ctx: &EditorCtx, char_off: usize) -> bool {
     })
 }
 
-/// Compose the style for one character cell: syntax base, then find-match, diagnostic
-/// underline, selection background, and secondary-cursor inversion, in that order.
+/// Compose the style for one character cell: syntax base, then published decoration layers
+/// (find-match, …), diagnostic underline, bracket emphasis, selection background, and
+/// secondary-cursor inversion, in that order.
 fn cell_style(
     ctx: &EditorCtx,
     line_diags: &[(usize, usize, Severity)],
@@ -352,20 +346,13 @@ fn cell_style(
         .copied()
         .flatten()
         .unwrap_or_else(|| Style::default().bg(CLR_BG));
-    // Published decoration layers (find/diagnostics/… as features migrate to plugins). Painted
-    // over syntax and under the bespoke highlights that still live below, so a migrated layer
-    // lands in the same visual slot the hardcoded path used. Deterministic layer order.
+    // Published decoration layers (find matches today; diagnostics/etc. as they migrate). Painted
+    // over syntax and under the bespoke highlights that still live below and the selection tint.
+    // Deterministic layer order.
     for d in &ctx.deco_spans {
         if char_off >= d.range.0 && char_off < d.range.1 {
             style = style.patch(ctx.theme.decoration_style(&d.style));
         }
-    }
-    let in_match = ctx
-        .find_matches
-        .iter()
-        .any(|&(s, e)| char_off >= s && char_off < e);
-    if in_match {
-        style = style.bg(CLR_MATCH);
     }
     // Underline diagnostic ranges in their severity color.
     if let Some(&(_, _, sev)) = line_diags.iter().find(|&&(s, e, _)| ci >= s && ci < e) {

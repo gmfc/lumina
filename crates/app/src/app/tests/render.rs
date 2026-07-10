@@ -88,10 +88,10 @@ fn renders_editor_with_all_decorations() {
     app.exec_id("cursor.addBelow");
     app.dispatch(Command::SelectWord);
 
-    // Active find with matches (exercises the match-highlight path).
-    app.dispatch(Command::FindOpen);
+    // Active find with matches (exercises the match-highlight decoration path).
+    app.exec_id("search.find");
     for c in "foo".chars() {
-        app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
 
     // A diagnostic on line 0 (exercises the gutter marker + underline).

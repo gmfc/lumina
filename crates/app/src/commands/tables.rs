@@ -42,11 +42,8 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
             "Multi-cursor: Add Cursors to Line Ends",
         ),
         ("cursor.jumpToBracket", "Go: Jump to Matching Bracket"),
-        ("search.find", "Find"),
-        ("search.replace", "Replace"),
-        ("search.findNext", "Find: Next Match"),
-        ("search.findPrev", "Find: Previous Match"),
-        ("search.replaceAll", "Replace: All"),
+        // search.find / search.replace / search.findNext|Prev / search.replaceAll titles come
+        // from the `find` plugin via the registry; only project search is app-side.
         ("search.project", "Search: Find in Files"),
         ("lsp.hover", "Go: Show Hover"),
         ("lsp.gotoDefinition", "Go: Go to Definition"),
@@ -106,8 +103,8 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+c", "edit.copy"),
         ("ctrl+x", "edit.cut"),
         ("ctrl+v", "edit.paste"),
-        ("ctrl+f", "search.find"),
-        ("ctrl+h", "search.replace"),
+        // ctrl+f/ctrl+h (find/replace) + f3/shift+f3 (next/prev) are contributed by the `find`
+        // plugin; only project search's chord is app-side.
         ("ctrl+shift+f", "search.project"),
         ("ctrl+shift+p", "view.commandPalette"),
         ("ctrl+p", "view.quickOpen"),
@@ -170,8 +167,6 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+k ctrl+x", "edit.trimTrailingWhitespace"),
         ("ctrl+\\", "cursor.jumpToBracket"),
         ("shift+alt+i", "cursor.addCursorsToLineEnds"),
-        ("f3", "search.findNext"),
-        ("shift+f3", "search.findPrev"),
         ("f8", "lsp.nextDiagnostic"),
         ("shift+f8", "lsp.prevDiagnostic"),
         ("f12", "lsp.gotoDefinition"),

@@ -1,22 +1,36 @@
 use super::*;
 
+/// Number of `find.match` decoration spans the `find` plugin has published for the active doc.
+fn find_span_count(app: &App) -> usize {
+    let Some(id) = app.editor.workspace.active_doc() else {
+        return 0;
+    };
+    app.editor
+        .decorations
+        .get(&id)
+        .and_then(|layers| layers.get("find.match"))
+        .map(|set| set.spans.len())
+        .unwrap_or(0)
+}
+
 #[test]
 fn find_highlights_and_cycles() {
+    // Drives the real registry + prompt-key path: exec_id opens the `find` plugin's widget, keys
+    // route through on_key -> the plugin's on_prompt_key, and results are read off the published
+    // decoration layer + the selection (the current match is the primary selection).
     let path = temp_file("foo bar foo baz foo");
     let mut app = app_with(&path);
-    app.dispatch(Command::FindOpen);
+    app.exec_id("search.find");
     for c in "foo".chars() {
-        app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
-    let find = app.editor.find.as_ref().unwrap();
-    assert_eq!(find.matches.len(), 3);
-    // Cursor started at 0 -> current match is the first.
-    assert_eq!(find.current_match(), Some((0, 3)));
-    app.find_key(KeyEvent::from(KeyCode::Enter)); // next
-    assert_eq!(
-        app.editor.find.as_ref().unwrap().current_match(),
-        Some((8, 11))
-    );
+    assert_eq!(find_span_count(&app), 3, "three matches highlighted");
+    // Cursor started at 0 -> current match is the first, and it's the primary selection.
+    let sel = app.editor.active_document().unwrap().selections.primary();
+    assert_eq!((sel.from(), sel.to()), (0, 3));
+    app.on_key(KeyEvent::from(KeyCode::Enter)); // next match
+    let sel = app.editor.active_document().unwrap().selections.primary();
+    assert_eq!((sel.from(), sel.to()), (8, 11));
     std::fs::remove_file(&path).ok();
 }
 
@@ -24,21 +38,21 @@ fn find_highlights_and_cycles() {
 fn replace_all_is_one_undo() {
     let path = temp_file("cat cat cat");
     let mut app = app_with(&path);
-    app.dispatch(Command::ReplaceOpen);
+    app.exec_id("search.replace");
     for c in "cat".chars() {
-        app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
-    app.find_key(KeyEvent::from(KeyCode::Tab)); // focus replace field
+    app.on_key(KeyEvent::from(KeyCode::Tab)); // focus replace field
     for c in "dog".chars() {
-        app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
-    app.replace_all();
+    app.exec_id("search.replaceAll");
     assert_eq!(
         app.editor.active_document().unwrap().to_string(),
         "dog dog dog"
     );
     // One undo reverts the whole replace-all.
-    app.editor.find = None;
+    app.on_key(KeyEvent::from(KeyCode::Esc)); // close find
     app.dispatch(Command::Undo);
     assert_eq!(
         app.editor.active_document().unwrap().to_string(),

@@ -12,7 +12,6 @@ use crate::theme::Theme;
 pub(super) const CLR_BG: Color = Color::Reset;
 pub(super) const CLR_SEL: Color = Color::Rgb(50, 60, 90);
 pub(super) const CLR_ACCENT: Color = Color::Rgb(90, 130, 210);
-pub(super) const CLR_MATCH: Color = Color::Rgb(90, 74, 30);
 
 /// Resolve syntax spans into a per-char style vector; for overlapping spans the **shortest**
 /// (most specific) wins. On a length *tie*, the later span wins, matching tree-sitter's

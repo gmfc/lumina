@@ -85,12 +85,7 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "tab.goto7" => Command::GotoTab(6),
         "tab.goto8" => Command::GotoTab(7),
         "tab.goto9" => Command::GotoTab(8),
-        // search
-        "search.find" => Command::FindOpen,
-        "search.replace" => Command::ReplaceOpen,
-        "search.findNext" => Command::FindNext,
-        "search.findPrev" => Command::FindPrev,
-        "search.replaceAll" => Command::ReplaceAll,
+        // search (find/replace `search.*` are the `find` plugin now; only project search remains)
         "search.project" => Command::ProjectSearch,
         // language server
         "lsp.hover" => Command::Hover,
