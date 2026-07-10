@@ -416,10 +416,17 @@ impl App {
                 true
             }
             Prefix::Replace => {
-                match key.code {
-                    KeyCode::Char(c) => self.vim_replace_char(c),
-                    KeyCode::Enter => self.vim_replace_char('\n'),
-                    _ => self.vim_mut().clear_pending(),
+                let ch = match key.code {
+                    KeyCode::Char(c) => Some(c),
+                    KeyCode::Enter => Some('\n'),
+                    _ => None,
+                };
+                match ch {
+                    Some(c) if matches!(self.vim().mode, Mode::Visual | Mode::VisualLine) => {
+                        self.vim_visual_replace(c)
+                    }
+                    Some(c) => self.vim_replace_char(c),
+                    None => self.vim_mut().clear_pending(),
                 }
                 true
             }
@@ -772,6 +779,23 @@ impl App {
         if start >= end {
             return;
         }
+        // A linewise delete that reaches end-of-buffer must also consume the
+        // preceding newline, so deleting the last line leaves no empty line behind
+        // (matching Vim's `dd`/`dG`).
+        let start = if linewise {
+            self.editor
+                .active_document()
+                .map(|d| {
+                    if end >= d.len_chars() && start > 0 && d.text.char(start - 1) == '\n' {
+                        start - 1
+                    } else {
+                        start
+                    }
+                })
+                .unwrap_or(start)
+        } else {
+            start
+        };
         self.with_doc(|d| {
             d.selections.set_single(Selection::new(start, end));
             edit::edit_selections(
@@ -1420,7 +1444,20 @@ impl App {
             KeyCode::Char('~') => self.vim_visual_operator(Operator::ToggleCase),
             KeyCode::Char('r') => self.vim_mut().prefix = Some(Prefix::Replace),
             KeyCode::Char('J') => {
+                // Join every selected line, from the first line of the selection.
+                let lines = self
+                    .editor
+                    .active_document()
+                    .map(|d| {
+                        let s = d.selections.primary();
+                        let fl = d.char_to_line(s.from());
+                        let ll = d.char_to_line(s.to());
+                        (d.line_to_char(fl), (ll - fl) + 1)
+                    })
+                    .unwrap_or((0, 1));
                 self.vim_mut().mode = Mode::Normal;
+                self.vim_mut().count = Some(lines.1.max(2));
+                self.with_doc(|d| d.set_caret(lines.0));
                 self.vim_join_lines();
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -1454,6 +1491,41 @@ impl App {
                 edit::move_selections(d, m, page, true);
             }
         });
+    }
+
+    /// Visual-mode `r`: replace every selected char with `ch`, then return to Normal.
+    fn vim_visual_replace(&mut self, ch: char) {
+        let (start, end) = match self.editor.active_document() {
+            Some(d) => {
+                let s = d.selections.primary();
+                (s.from(), (s.to() + 1).min(d.len_chars()))
+            }
+            None => return,
+        };
+        self.vim_mut().mode = Mode::Normal;
+        if start >= end {
+            self.vim_mut().clear_pending();
+            return;
+        }
+        let out: String = match self.editor.active_document() {
+            Some(d) => d
+                .text
+                .slice(start..end)
+                .chars()
+                .map(|c| if c == '\n' { '\n' } else { ch })
+                .collect(),
+            None => return,
+        };
+        self.with_doc(|d| {
+            d.selections.set_single(Selection::new(start, end));
+            edit::edit_selections(
+                d,
+                |_x, s| (s.span(), out.clone()),
+                editor_core::GroupBreak::Force,
+            );
+            d.set_caret(start);
+        });
+        self.vim_mut().clear_pending();
     }
 
     /// Apply `op` to the current visual selection, then return to Normal.

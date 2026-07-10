@@ -205,6 +205,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_vim_setting() {
+        assert!(!Config::default().vim);
+        let cfg = Config::from_toml_str("[settings]\nvim = true").unwrap();
+        assert!(cfg.vim);
+        let cfg = Config::from_toml_str("[settings]\nvim = false").unwrap();
+        assert!(!cfg.vim);
+    }
+
+    #[test]
     fn parses_terminal_settings() {
         let src = r#"
             [settings]
