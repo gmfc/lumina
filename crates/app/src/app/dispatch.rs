@@ -127,21 +127,8 @@ impl App {
             Command::FocusSidebar => self.editor.focus = Focus::Sidebar,
             Command::FocusEditor => self.editor.focus = Focus::Editor,
 
-            // --- terminal panel ---
-            Command::ToggleTerminal => self.toggle_terminal(),
-            Command::NewTerminal => self.new_terminal(),
-            Command::CloseTerminal => self.close_terminal(),
-            Command::MinimizeTerminal => self.minimize_terminal(),
-            Command::NextTerminal => {
-                if self.panel.open {
-                    self.panel.next();
-                }
-            }
-            Command::PrevTerminal => {
-                if self.panel.open {
-                    self.panel.prev();
-                }
-            }
+            // terminal-dock commands are the `terminal` builtin plugin, dispatched through the
+            // registry; the app applies the queued `TerminalOp`s to the PTY panel on drain.
 
             // A plugin-contributed command referenced by id.
             Command::Run(id) => {

@@ -5,6 +5,27 @@
 use super::*;
 
 impl App {
+    /// Apply a plugin-queued terminal lifecycle action to the (app-owned) PTY panel.
+    pub(super) fn apply_terminal_op(&mut self, op: editor_plugin::TerminalOp) {
+        use editor_plugin::TerminalOp as T;
+        match op {
+            T::Toggle => self.toggle_terminal(),
+            T::New => self.new_terminal(),
+            T::Close => self.close_terminal(),
+            T::Minimize => self.minimize_terminal(),
+            T::Next => {
+                if self.panel.open {
+                    self.panel.next();
+                }
+            }
+            T::Prev => {
+                if self.panel.open {
+                    self.panel.prev();
+                }
+            }
+        }
+    }
+
     /// Toggle the dock: open + focus when closed or minimized, else close it.
     pub(super) fn toggle_terminal(&mut self) {
         if self.panel.open && !self.panel.minimized {

@@ -95,13 +95,7 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "view.focusSidebar" => Command::FocusSidebar,
         "view.focusEditor" => Command::FocusEditor,
         // view.commandPalette / view.quickOpen / view.gotoLine are the `palette` plugin now.
-        // terminal panel
-        "terminal.toggle" => Command::ToggleTerminal,
-        "terminal.new" => Command::NewTerminal,
-        "terminal.close" => Command::CloseTerminal,
-        "terminal.minimize" => Command::MinimizeTerminal,
-        "terminal.next" => Command::NextTerminal,
-        "terminal.prev" => Command::PrevTerminal,
+        // terminal.* commands are the `terminal` builtin plugin now (registry-routed).
         "app.quit" => Command::Quit,
         _ => return None,
     };

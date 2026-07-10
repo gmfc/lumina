@@ -58,7 +58,7 @@ fn terminal_end_to_end_drive() {
 
     // First frame lays out the (closed) panel; toggling then spawns + focuses the shell.
     let _ = render_to_string(&mut app, 120, 40);
-    app.dispatch(Command::ToggleTerminal);
+    app.exec_id("terminal.toggle");
     if app.panel.terminals.is_empty() {
         return; // no usable PTY on this runner — skip rather than fail.
     }
@@ -105,11 +105,11 @@ fn terminal_end_to_end_drive() {
     assert!(app.panel.active_terminal().unwrap().at_live());
 
     // A second tab, then cycle and switch by clicking the header.
-    app.dispatch(Command::NewTerminal);
+    app.exec_id("terminal.new");
     assert_eq!(app.panel.terminals.len(), 2);
-    app.dispatch(Command::PrevTerminal);
+    app.exec_id("terminal.prev");
     assert_eq!(app.panel.active, 0);
-    app.dispatch(Command::NextTerminal);
+    app.exec_id("terminal.next");
     assert_eq!(app.panel.active, 1);
     let header = app.regions.panel_header.expect("header region");
     app.on_mouse(mouse(
@@ -120,9 +120,9 @@ fn terminal_end_to_end_drive() {
     assert_eq!(app.editor.focus, Focus::Panel);
 
     // Close tabs until the dock collapses and focus returns to the editor.
-    app.dispatch(Command::CloseTerminal);
+    app.exec_id("terminal.close");
     assert_eq!(app.panel.terminals.len(), 1);
-    app.dispatch(Command::CloseTerminal);
+    app.exec_id("terminal.close");
     assert!(!app.panel.open);
     assert_eq!(app.editor.focus, Focus::Editor);
     std::fs::remove_dir_all(&dir).ok();
@@ -135,7 +135,7 @@ fn toggle_terminal_close_branch_without_spawn() {
     let mut app = app_with(&path);
     app.panel.open = true;
     app.editor.focus = Focus::Panel;
-    app.dispatch(Command::ToggleTerminal);
+    app.exec_id("terminal.toggle");
     assert!(!app.panel.open);
     assert_eq!(app.editor.focus, Focus::Editor);
     std::fs::remove_file(&path).ok();
@@ -146,8 +146,8 @@ fn terminal_commands_and_routing_are_inert_without_a_panel() {
     let path = temp_file("hello");
     let mut app = app_with(&path);
     // next/prev are guarded no-ops while the dock is closed.
-    app.dispatch(Command::NextTerminal);
-    app.dispatch(Command::PrevTerminal);
+    app.exec_id("terminal.next");
+    app.exec_id("terminal.prev");
     assert!(!app.panel.open && app.panel.active == 0);
 
     // A wheel scroll not over the panel routes to the editor.
