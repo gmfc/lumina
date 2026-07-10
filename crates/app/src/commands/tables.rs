@@ -38,10 +38,8 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         // from the `multicursor` plugin via the registry.
         ("cursor.jumpToBracket", "Go: Jump to Matching Bracket"),
         // All search.* titles (find/replace + project search) come from their plugins.
-        // lsp.hover / goto* / completion / rename / references / documentSymbols titles come from
-        // the `lsp` plugin; only diagnostic-nav titles are app-side.
-        ("lsp.nextDiagnostic", "Go: Next Problem"),
-        ("lsp.prevDiagnostic", "Go: Previous Problem"),
+        // All lsp.* titles come from plugins: hover/goto*/completion/rename/references/symbols from
+        // `lsp`, nextDiagnostic/prevDiagnostic from `diagnostics`.
         // git.nextHunk / git.prevHunk titles come from the `git-nav` plugin via the registry
         ("view.toggleSidebar", "View: Toggle Sidebar"),
         // view.toggleTheme title comes from the `theme` plugin; terminal.* from the `terminal` plugin.
@@ -142,9 +140,8 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+k ctrl+x", "edit.trimTrailingWhitespace"),
         ("ctrl+\\", "cursor.jumpToBracket"),
         // shift+alt+i (addCursorsToLineEnds) is contributed by the `multicursor` plugin.
-        ("f8", "lsp.nextDiagnostic"),
-        ("shift+f8", "lsp.prevDiagnostic"),
+        // f8/shift+f8 (diagnostic nav) are contributed by the `diagnostics` plugin;
         // f12/ctrl+f12/shift+f12/ctrl+shift+o/f2/ctrl+space/ctrl+k ctrl+i (goto* / references /
-        // symbols / rename / completion / hover) are contributed by the `lsp` plugin.
+        // symbols / rename / completion / hover) by the `lsp` plugin.
     ]
 }

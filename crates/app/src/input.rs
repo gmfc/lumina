@@ -60,11 +60,8 @@ pub enum Command {
     PrevTab,
     GotoTab(usize),
     // search — find/replace + project search are builtin plugins now.
-    // language server: the request-issuing commands (hover / goto* / completion / references /
-    // symbols / rename) are the `lsp` builtin plugin now; diagnostic navigation stays app-side.
-    NextDiagnostic,
-    PrevDiagnostic,
-    // git change navigation (NextHunk/PrevHunk) is the `git-nav` builtin plugin
+    // language server: request commands are the `lsp` plugin; diagnostic navigation is the
+    // `diagnostics` plugin. git change navigation (NextHunk/PrevHunk) is the `git-nav` plugin.
     // ui
     ToggleSidebar,
     FocusSidebar,

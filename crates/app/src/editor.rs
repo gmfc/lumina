@@ -81,8 +81,6 @@ pub struct EditorState {
     /// `Host::commands`, taken after plugins register. Mirrors the registry across the split-borrow
     /// wall (the palette plugin sees only `&mut EditorState`).
     pub command_catalog: Vec<CommandInfo>,
-    /// LSP diagnostics per document (from the language server).
-    pub diagnostics: HashMap<DocId, Vec<editor_lsp::Diagnostic>>,
     /// Precomputed bracket-match highlight for the active doc: `(bracket, partner)` char
     /// offsets, refreshed after cursor moves so the pure renderer just reads it (plan §1.3).
     pub bracket_match: Option<(usize, usize)>,
@@ -121,7 +119,6 @@ impl EditorState {
             prompt: None,
             picker: None,
             command_catalog: Vec::new(),
-            diagnostics: HashMap::new(),
             bracket_match: None,
             completion: None,
             nav_locations: Vec::new(),
@@ -368,6 +365,14 @@ impl Host for EditorState {
 
     fn lsp_enabled(&self) -> bool {
         self.lsp_enabled
+    }
+
+    fn lsp_pos_to_offset(&self, doc: DocId, line: u32, character: u32) -> usize {
+        self.workspace
+            .documents
+            .get(doc)
+            .map(|d| crate::app::lsp_pos_to_char(d, line, character))
+            .unwrap_or(0)
     }
 
     fn terminal_op(&mut self, op: editor_plugin::TerminalOp) {

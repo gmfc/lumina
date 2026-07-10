@@ -85,10 +85,8 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "tab.goto8" => Command::GotoTab(7),
         "tab.goto9" => Command::GotoTab(8),
         // search.* (find/replace + project search) are builtin plugins now.
-        // language server: hover / goto* / completion / rename / references / documentSymbols
-        // are the `lsp` plugin (registry-routed); only diagnostic nav stays app-side.
-        "lsp.nextDiagnostic" => Command::NextDiagnostic,
-        "lsp.prevDiagnostic" => Command::PrevDiagnostic,
+        // language server: request commands are the `lsp` plugin; diagnostic navigation is the
+        // `diagnostics` plugin — both registry-routed, so no arms here.
         // git.nextHunk / git.prevHunk are contributed by the `git-nav` builtin plugin
         // ui
         "view.toggleSidebar" => Command::ToggleSidebar,

@@ -113,12 +113,8 @@ impl App {
                 }
             }
 
-            // --- language server ---
-            // Request-issuing LSP commands (hover / goto* / completion / references / symbols /
-            // rename) are the `lsp` builtin plugin, dispatched through the registry; only diagnostic
-            // navigation (which reads the app-owned diagnostics map) stays here.
-            Command::NextDiagnostic => self.goto_diagnostic(1),
-            Command::PrevDiagnostic => self.goto_diagnostic(-1),
+            // language server: the request-issuing commands are the `lsp` plugin and diagnostic
+            // navigation is the `diagnostics` plugin — both dispatched through the registry.
             // git change navigation (git.nextHunk/git.prevHunk) is the `git-nav` builtin plugin,
             // dispatched through the registry.
 

@@ -4,7 +4,6 @@
 use ratatui::style::{Color, Style};
 use unicode_width::UnicodeWidthChar;
 
-use editor_lsp::Severity;
 use editor_syntax::HighlightSpan;
 
 use crate::theme::Theme;
@@ -37,18 +36,6 @@ pub(super) fn resolve_line_styles(
         }
     }
     styles
-}
-
-/// The gutter glyph for a diagnostic severity — used by the status line's caret-diagnostic
-/// message. (Inline underline spans + the gutter severity markers are published as an `lsp.diag`
-/// decoration layer; see `app/diagnostics.rs`.)
-pub(super) fn diag_marker(sev: Severity) -> char {
-    match sev {
-        Severity::Error => 'E',
-        Severity::Warning => 'W',
-        Severity::Info => 'i',
-        Severity::Hint => 'h',
-    }
 }
 
 pub(super) fn char_cells(ch: char, col: usize, tab_width: usize) -> usize {
@@ -103,9 +90,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn diag_marker_glyphs() {
-        assert_eq!(diag_marker(Severity::Error), 'E');
-        assert_eq!(diag_marker(Severity::Warning), 'W');
-        assert_eq!(diag_marker(Severity::Hint), 'h');
+    fn display_len_counts_wide_chars() {
+        assert_eq!(display_len("ab"), 2);
+        assert_eq!(display_len("世界"), 4); // two wide (2-cell) chars
     }
 }

@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use crate::app::App;
 
-use super::util::{diag_marker, display_len, CLR_ACCENT};
+use super::util::{display_len, CLR_ACCENT};
 
 pub(super) fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let ws = &app.editor.workspace;
@@ -239,11 +239,17 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
 
     if let Some(msg) = &app.editor.status_message {
         left = format!(" {msg}");
-    } else if let Some((sev, msg)) = app.diagnostic_at_caret() {
-        // The diagnostic under the caret, single-lined and truncated to fit (plan §2.2).
+    } else if let Some(item) = app
+        .editor
+        .status_items
+        .get("lsp.diag")
+        .filter(|s| !s.is_empty())
+    {
+        // The caret diagnostic, published by the `diagnostics` plugin (glyph + message), single-
+        // lined and truncated to fit (plan §2.2).
         let avail = (area.width as usize).saturating_sub(display_len(&right) + 4);
-        let msg: String = msg.replace('\n', " ").chars().take(avail).collect();
-        left = format!(" {} {msg}", diag_marker(sev));
+        let msg: String = item.replace('\n', " ").chars().take(avail).collect();
+        left = format!(" {msg}");
     }
 
     // Vim mode badge (and any pending count/operator) at the far left.

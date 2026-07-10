@@ -10,7 +10,7 @@ impl App {
     pub(super) fn forget_doc(&mut self, id: editor_core::DocId) {
         self.editor.highlighters.remove(&id);
         self.editor.decorations.remove(&id);
-        self.editor.diagnostics.remove(&id);
+        // The `diagnostics` plugin prunes its own model on tab change (DidChangeActive).
         self.editor.git_hunks.remove(&id);
         self.lsp_sent_revision.remove(&id);
     }

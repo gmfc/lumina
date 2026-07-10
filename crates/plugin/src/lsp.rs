@@ -16,3 +16,27 @@ pub enum LspRequestKind {
     DocumentSymbols,
     Rename(String),
 }
+
+/// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own
+/// diagnostics without depending on `editor-lsp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspSeverity {
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+/// A diagnostic in (line, UTF-16 char) coordinates — the primitive twin of `editor_lsp::Diagnostic`.
+/// The app converts `editor-lsp` diagnostics into these at the poll boundary and hands them to
+/// plugins as [`crate::Event::LspDiagnostics`]; the plugin resolves the UTF-16 columns to char
+/// offsets through [`crate::Host::lsp_pos_to_offset`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspDiagnostic {
+    pub line: u32,
+    pub start_char16: u32,
+    pub end_line: u32,
+    pub end_char16: u32,
+    pub severity: LspSeverity,
+    pub message: String,
+}
