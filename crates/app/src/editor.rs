@@ -223,6 +223,16 @@ impl Host for EditorState {
         entries
     }
 
+    fn changed_lines(&self, doc: DocId) -> Vec<usize> {
+        let mut lines: Vec<usize> = self
+            .git_hunks
+            .get(&doc)
+            .map(|m| m.keys().copied().collect())
+            .unwrap_or_default();
+        lines.sort_unstable();
+        lines
+    }
+
     fn set_panel(&mut self, panel_id: &str, content: PanelContent) {
         self.panels.insert(panel_id.to_string(), content);
     }

@@ -92,13 +92,14 @@ fn hunk_navigation_cycles_over_change_starts() {
         let d = a.editor.active_document().unwrap();
         d.char_to_line(d.selections.primary().head)
     };
-    app.dispatch(Command::NextHunk);
+    // Driven through the registry: git navigation is the `git-nav` builtin plugin.
+    app.exec_id("git.nextHunk");
     assert_eq!(line(&app), 1);
-    app.dispatch(Command::NextHunk);
+    app.exec_id("git.nextHunk");
     assert_eq!(line(&app), 5);
-    app.dispatch(Command::NextHunk); // wraps to the first hunk
+    app.exec_id("git.nextHunk"); // wraps to the first hunk
     assert_eq!(line(&app), 1);
-    app.dispatch(Command::PrevHunk); // wraps to the last hunk
+    app.exec_id("git.prevHunk"); // wraps to the last hunk
     assert_eq!(line(&app), 5);
     std::fs::remove_file(&path).ok();
 }

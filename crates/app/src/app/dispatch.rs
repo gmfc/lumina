@@ -139,8 +139,8 @@ impl App {
             Command::PrevDiagnostic => self.goto_diagnostic(-1),
             Command::FindReferences => self.lsp_request(LspRequest::References),
             Command::DocumentSymbols => self.request_document_symbols(),
-            Command::NextHunk => self.goto_hunk(1),
-            Command::PrevHunk => self.goto_hunk(-1),
+            // git change navigation (git.nextHunk/git.prevHunk) is the `git-nav` builtin plugin,
+            // dispatched through the registry.
 
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,

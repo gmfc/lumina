@@ -103,8 +103,7 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "lsp.prevDiagnostic" => Command::PrevDiagnostic,
         "lsp.references" => Command::FindReferences,
         "lsp.documentSymbols" => Command::DocumentSymbols,
-        "git.nextHunk" => Command::NextHunk,
-        "git.prevHunk" => Command::PrevHunk,
+        // git.nextHunk / git.prevHunk are contributed by the `git-nav` builtin plugin
         // ui
         "view.toggleSidebar" => Command::ToggleSidebar,
         "view.focusSidebar" => Command::FocusSidebar,
