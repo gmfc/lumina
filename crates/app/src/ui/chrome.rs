@@ -89,13 +89,59 @@ const WELCOME_COMMANDS: &[(&str, &str, &str)] = &[
     ("app.quit", "Quit", "Ctrl+Q"),
 ];
 
+/// Build the command-hint rows: two columns when the pane is wide enough, else one so nothing
+/// is clipped. Keys are accented and labels dim, and every cell is padded to a shared width so
+/// the rows' left edges line up once each row is centered.
+fn command_hint_rows(
+    commands: &[(String, &'static str)],
+    width: u16,
+    accent: Style,
+) -> Vec<Line<'static>> {
+    let key_col = commands
+        .iter()
+        .map(|(k, _)| display_len(k))
+        .max()
+        .unwrap_or(0);
+    let label_col = commands
+        .iter()
+        .map(|(_, l)| display_len(l))
+        .max()
+        .unwrap_or(0);
+    let cell_w = key_col + 2 + label_col;
+    let two_col = (2 * cell_w + 3) <= width as usize;
+    let cell = |(keys, label): &(String, &'static str)| {
+        let kpad = " ".repeat(key_col - display_len(keys));
+        vec![
+            TSpan::styled(keys.clone(), accent),
+            TSpan::raw(format!("{kpad}  ")),
+            TSpan::styled(
+                format!("{label:<w$}", w = label_col),
+                Style::default().fg(Color::Gray),
+            ),
+        ]
+    };
+    let per_row = if two_col { 2 } else { 1 };
+    let mut rows = Vec::new();
+    for pair in commands.chunks(per_row) {
+        let mut spans = Vec::new();
+        for (i, entry) in pair.iter().enumerate() {
+            if i > 0 {
+                spans.push(TSpan::raw("   "));
+            }
+            spans.extend(cell(entry));
+        }
+        rows.push(Line::from(spans));
+    }
+    rows
+}
+
 pub(super) fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
     let accent = Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD);
     let mut rows: Vec<Line> = Vec::new();
 
     // Resolve each command's current key from the live keymap (falling back to the default),
     // so a user's `[keys]` config overrides show through here too.
-    let commands: Vec<(String, &str)> = WELCOME_COMMANDS
+    let commands: Vec<(String, &'static str)> = WELCOME_COMMANDS
         .iter()
         .map(|(id, label, fallback)| {
             let keys = app
@@ -122,44 +168,8 @@ pub(super) fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
     )));
     rows.push(Line::from(""));
 
-    // Command hints. Keys accented, labels dim, aligned on a grid. Two columns when the pane
-    // is wide enough, otherwise a single column so nothing is clipped.
-    let key_col = commands
-        .iter()
-        .map(|(k, _)| display_len(k))
-        .max()
-        .unwrap_or(0);
-    let label_col = commands
-        .iter()
-        .map(|(_, l)| display_len(l))
-        .max()
-        .unwrap_or(0);
-    let cell_w = key_col + 2 + label_col;
-    let two_col = (2 * cell_w + 3) <= area.width as usize;
-    // Every cell is padded to the same width, so all command rows share a width and their
-    // left edges align once each row is centered.
-    let cell = |(keys, label): &(String, &str)| {
-        let kpad = " ".repeat(key_col - display_len(keys));
-        vec![
-            TSpan::styled(keys.clone(), accent),
-            TSpan::raw(format!("{kpad}  ")),
-            TSpan::styled(
-                format!("{label:<w$}", w = label_col),
-                Style::default().fg(Color::Gray),
-            ),
-        ]
-    };
-    let per_row = if two_col { 2 } else { 1 };
-    for pair in commands.chunks(per_row) {
-        let mut spans = Vec::new();
-        for (i, entry) in pair.iter().enumerate() {
-            if i > 0 {
-                spans.push(TSpan::raw("   "));
-            }
-            spans.extend(cell(entry));
-        }
-        rows.push(Line::from(spans));
-    }
+    // Command hints, as a one- or two-column grid depending on the pane width.
+    rows.extend(command_hint_rows(&commands, area.width, accent));
 
     // A dim footer pointing at the command palette — the home of the actions with no default
     // key (Vim mode, theme switching) and everything else. Dropped rather than clipped when it
