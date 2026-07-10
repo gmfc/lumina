@@ -5,8 +5,16 @@
 use super::*;
 
 impl App {
-    /// Execute a command id: built-in editor command, app-level action, or plugin command.
+    /// Execute a command id. Resolution order puts the **plugin system first** (invariant #4:
+    /// every action flows through one path, and a plugin can own or override an id): first the
+    /// registry (built-in feature plugins like explorer / multi-cursor / git-nav, plus external
+    /// plugins), then the app's built-in editing primitives (motions, edits, files, tabs, search,
+    /// lsp — the `Command` table), then the handful of app-level actions that are neither.
     pub(super) fn exec_id(&mut self, id: &str) {
+        if self.registry.dispatch_command(id, &mut self.editor) {
+            self.drain_workers();
+            return;
+        }
         if let Some(cmd) = crate::commands::command_for_id(id) {
             self.dispatch(cmd);
             return;
@@ -19,11 +27,7 @@ impl App {
             "vim.toggle" => self.set_vim(self.editor.vim.is_none()),
             "view.settings" => self.open_settings(),
             other => {
-                if !self.registry.dispatch_command(other, &mut self.editor) {
-                    self.editor.status_message = Some(format!("Unknown command: {other}"));
-                } else {
-                    self.drain_workers();
-                }
+                self.editor.status_message = Some(format!("Unknown command: {other}"));
             }
         }
     }
