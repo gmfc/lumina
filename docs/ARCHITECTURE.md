@@ -53,6 +53,14 @@ The one-line creed (from the README): *everything is a command; a document holds
 a set of selections; features are plugins; render is a pure function of state;
 all buffer mutation goes through the transaction API.*
 
+> **Reality check (2026 audit — see [`AUDIT.md`](AUDIT.md)).** Invariants #1, #2, #5–#9 hold
+> today. Invariants **#3 and #4 are currently aspirational**: only the *explorer* is a genuine
+> plugin, and built-in commands are dispatched by a hardcoded table (`commands.rs` →
+> `dispatch()`) rather than through the registry — so the "same path for built-ins and third
+> parties" the invariants describe is the target, not the present. `AUDIT.md` has the gap
+> analysis and an ordered migration roadmap that widens `Host` and moves each feature into
+> `editor-builtins` as a plugin.
+
 ---
 
 ## 2. Workspace & Dependency Direction
@@ -197,7 +205,7 @@ pub trait Host {
     fn apply_transaction(&mut self, doc: DocId, txn: Transaction);   // invariant #1
     fn set_selections(&mut self, doc: DocId, selections: Selections);
     fn open_path(&mut self, path: &Path);
-    fn read_dir(&self, path: &Path) -> Vec<DirEntry>;               // capability-gated
+    fn read_dir(&self, path: &Path) -> Vec<DirEntry>;               // native-only helper (see below)
     fn set_panel(&mut self, panel_id: &str, content: PanelContent);
     fn notify(&mut self, message: String);
     fn execute(&mut self, command_id: &str);                        // command composition (#4)
@@ -208,14 +216,23 @@ pub trait Plugin { /* declares Contributions, handles events */ }
 
 - **The app implements `Host`.** Business features (`editor-builtins`) depend on
   the `Host` *trait*, never on the app. That's why the explorer is a plugin and
-  not a hardcoded panel (invariant #3).
-- **`read_dir` is the capability seam.** Plugins don't touch `std::fs`; they ask
-  the host, which enforces `fs:read` grants for external guests. Deny-by-default.
+  not a hardcoded panel (invariant #3). The trait is intentionally small — but
+  today it is small because it is *incomplete*: it cannot yet express find,
+  pickers, LSP, decorations, terminal, or git, which is why those features are not
+  plugins yet (see [`AUDIT.md`](AUDIT.md) — widening `Host` is the roadmap's spine).
+- **The capability seam is the guest action boundary.** An external guest never
+  touches `std::fs` or the editor directly: it returns a list of *actions*, and the
+  host applies only those its manifest was granted — the `has_cap` gate in each
+  runtime's dispatch. The grantable capabilities are `edit`, `ui`, `fs:read`, and
+  `commands:run`; an ungranted action is silently dropped (deny-by-default).
+  (`Host::read_dir` itself is an internal, native-only helper the explorer uses to
+  list directories honoring ignore rules — not the external capability gate.)
 - **Two substrates, one API.** Rhai scripts and WebAssembly guests both drive the
   same `Registry`/`Host`. WASM guests run with **no host imports**, fuel-metered
   against runaway loops (plan §11) on `wasmi`. There is no privileged path — the
-  self-hosting test asserts that disabling a plugin removes exactly its
-  contributions and nothing else.
+  self-hosting test asserts that disabling the explorer removes exactly its
+  contributions and nothing else (it guards invariant #3 for the one feature that
+  is a plugin today; generalize it as more features migrate).
 
 Static vs dynamic dispatch: the registry stores `Vec<Box<dyn Plugin>>` (a
 heterogeneous collection — dynamic dispatch is the correct tool there). Hot,
