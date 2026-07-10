@@ -26,7 +26,7 @@ impl ScriptPlugin {
             let sel_text = if sel.is_empty() {
                 String::new()
             } else {
-                doc.text.slice(sel.from()..sel.to()).to_string()
+                doc.rope().slice(sel.from()..sel.to()).to_string()
             };
             ctx.insert("cursor_line".into(), (line as i64).into());
             ctx.insert("cursor_col".into(), (col as i64).into());

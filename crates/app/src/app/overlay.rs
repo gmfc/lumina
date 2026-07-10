@@ -132,7 +132,7 @@ impl App {
             .map(|d| {
                 let head = d.selections.primary().head;
                 let (s, e) = motion::word_at(d, head);
-                d.text.slice(s..e).to_string()
+                d.rope().slice(s..e).to_string()
             })
             .unwrap_or_default();
         self.editor.overlay = Some(crate::editor::Overlay::RenameInput {

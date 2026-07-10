@@ -19,7 +19,11 @@ pub use types::{DiskFingerprint, Encoding, LineEnding, SyntaxEdit};
 
 /// An open buffer.
 pub struct Document {
-    pub text: Rope,
+    /// The rope. `pub(crate)` so invariant #1 is enforced by the type system, not convention:
+    /// nothing outside `core` can poke the rope directly — external readers go through
+    /// [`Document::rope`] and its accessors, and the only writer is [`crate::transaction`] via
+    /// the `apply_raw_*` chokepoint (see [`mutate`]).
+    pub(crate) text: Rope,
     pub path: Option<PathBuf>,
     pub selections: Selections,
     pub history: History,
@@ -74,6 +78,14 @@ impl Document {
             syntax_edits: Vec::new(),
             syntax_edits_valid: true,
         }
+    }
+
+    /// Read-only access to the underlying rope. This is the *only* way code outside `core`
+    /// touches the buffer text (invariant #1): it hands out `&Rope` for reads — `slice`, `char`,
+    /// `chars`, `len_*` — but never `&mut`, so the rope can only be mutated through a
+    /// [`crate::transaction::Transaction`].
+    pub fn rope(&self) -> &Rope {
+        &self.text
     }
 
     /// Total number of chars (the rope's natural index unit).
@@ -134,9 +146,22 @@ impl Document {
         char_idx.min(self.len_chars())
     }
 
-    /// Overwrite the current selection set.
+    /// Overwrite the current selection set. Normalizes at the boundary (invariant #2:
+    /// parse-don't-validate), so downstream edit code can rely on the set being sorted and
+    /// non-overlapping without re-checking — even when a caller built it with `single` + `push`.
     pub fn set_selections(&mut self, sel: Selections) {
-        self.selections = sel;
+        self.selections = sel.normalized();
+    }
+
+    /// Replace the whole buffer as an external reload (the file changed on disk under a clean
+    /// buffer). The new content is authoritative, so the prior undo history — recorded against
+    /// the *old* text — is discarded: a transaction's offsets no longer describe this buffer, and
+    /// replaying one on undo would restore wrong text (invariant #1). Callers set
+    /// selections/dirty/disk afterward. This is the sanctioned whole-buffer replace; the raw
+    /// `set_text*` helpers stay `pub(crate)`.
+    pub fn reload_from_str(&mut self, s: &str) {
+        self.set_text_str(s);
+        self.history = History::default();
     }
 
     /// Convenience: collapse to a single caret at `pos`.

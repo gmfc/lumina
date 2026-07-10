@@ -46,7 +46,7 @@ fn auto_pairs_multi_cursor_dispatch() {
     assert_eq!(doc.selections.len(), 3);
     for s in doc.selections.ranges() {
         assert!(s.is_empty(), "caret stays a caret");
-        assert_eq!(doc.text.char(s.head), ')', "caret sits before the closer");
+        assert_eq!(doc.rope().char(s.head), ')', "caret sits before the closer");
     }
     std::fs::remove_file(&path).ok();
 }

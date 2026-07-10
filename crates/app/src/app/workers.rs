@@ -155,7 +155,9 @@ impl App {
             .map(|&h| crate::sync::map_offset(&old_text, &new_text, h))
             .collect();
 
-        doc.set_text_str(&new_text);
+        // Whole-buffer reload: replaces the text and discards the now-stale undo history (its
+        // transactions were recorded against the old offsets — see Document::reload_from_str).
+        doc.reload_from_str(&new_text);
         doc.encoding = encoding;
         let clamped: Vec<editor_core::Selection> = mapped
             .iter()

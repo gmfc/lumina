@@ -656,7 +656,7 @@ impl App {
         let line = doc.char_to_line(pos);
         let end = doc.line_to_char(line) + doc.line_len_chars(line);
         for i in pos..end {
-            if matches!(doc.text.char(i), '(' | ')' | '[' | ']' | '{' | '}') {
+            if matches!(doc.rope().char(i), '(' | ')' | '[' | ']' | '{' | '}') {
                 return motion::matching_bracket(doc, i);
             }
         }
@@ -740,7 +740,7 @@ impl App {
             Some(d) => {
                 let (s, e) = (start.min(d.len_chars()), end.min(d.len_chars()));
                 if s < e {
-                    d.text.slice(s..e).to_string()
+                    d.rope().slice(s..e).to_string()
                 } else {
                     String::new()
                 }
@@ -787,7 +787,7 @@ impl App {
             self.editor
                 .active_document()
                 .map(|d| {
-                    if end >= d.len_chars() && start > 0 && d.text.char(start - 1) == '\n' {
+                    if end >= d.len_chars() && start > 0 && d.rope().char(start - 1) == '\n' {
                         start - 1
                     } else {
                         start
@@ -854,7 +854,7 @@ impl App {
         let out: String = match self.editor.active_document() {
             Some(d) => {
                 let (s, e) = (start.min(d.len_chars()), end.min(d.len_chars()));
-                d.text
+                d.rope()
                     .slice(s..e)
                     .chars()
                     .flat_map(|c| f(c).chars().collect::<Vec<_>>())
@@ -1020,7 +1020,7 @@ impl App {
                 let content_end = d.line_to_char(line) + d.line_len_chars(line);
                 let end = (head + count).min(content_end);
                 let text = if head < end {
-                    d.text.slice(head..end).to_string()
+                    d.rope().slice(head..end).to_string()
                 } else {
                     String::new()
                 };
@@ -1089,7 +1089,7 @@ impl App {
             let text = self
                 .editor
                 .active_document()
-                .map(|d| d.text.slice(start..end).to_string())
+                .map(|d| d.rope().slice(start..end).to_string())
                 .unwrap_or_default();
             self.vim_store_register(reg, text, false, false);
             self.vim_delete_range(start, end, false);
@@ -1510,7 +1510,7 @@ impl App {
         }
         let out: String = match self.editor.active_document() {
             Some(d) => d
-                .text
+                .rope()
                 .slice(start..end)
                 .chars()
                 .map(|c| if c == '\n' { '\n' } else { ch })
@@ -1697,7 +1697,7 @@ impl App {
     fn vim_do_search(&mut self, forward: bool, pat: &str, from_next: bool) {
         let found = match self.editor.active_document() {
             Some(d) => {
-                let chars: Vec<char> = d.text.chars().collect();
+                let chars: Vec<char> = d.rope().chars().collect();
                 let pat: Vec<char> = pat.chars().collect();
                 let head = d.selections.primary().head;
                 let start = if from_next {
@@ -1732,7 +1732,7 @@ impl App {
         let word = self.editor.active_document().map(|d| {
             let head = d.selections.primary().head;
             let (s, e) = motion::word_at(d, head);
-            d.text.slice(s..e).to_string()
+            d.rope().slice(s..e).to_string()
         });
         if let Some(word) = word {
             if !word.trim().is_empty() {
@@ -1776,7 +1776,7 @@ fn substitute_span(
     new: &str,
     global: bool,
 ) {
-    let src = doc.text.slice(start..end).to_string();
+    let src = doc.rope().slice(start..end).to_string();
     let out = if global {
         src.replace(old, new)
     } else {

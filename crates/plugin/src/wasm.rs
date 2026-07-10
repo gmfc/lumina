@@ -161,7 +161,7 @@ impl WasmPlugin {
             let sel_text = if sel.is_empty() {
                 String::new()
             } else {
-                doc.text.slice(sel.from()..sel.to()).to_string()
+                doc.rope().slice(sel.from()..sel.to()).to_string()
             };
             json!({
                 "cursor_line": line,
