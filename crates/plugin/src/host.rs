@@ -168,6 +168,10 @@ pub trait Host {
     /// Show a transient notification to the user.
     fn notify(&mut self, message: String);
 
+    /// Toggle the editor's light/dark appearance. The theme is app render state, so the app
+    /// applies it on the next drain (an effect-queue, like `open_path`). Default no-op.
+    fn toggle_theme(&mut self) {}
+
     /// Execute another registered command by id (composability).
     fn execute(&mut self, command_id: &str);
 }
