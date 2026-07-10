@@ -194,35 +194,40 @@ pub(super) fn render_picker(f: &mut Frame, app: &App, body: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(CLR_ACCENT))
         .title(TSpan::styled(
-            format!(" {} ", picker.prompt),
+            format!(" {} ", picker.prompt_label()),
             Style::default().add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(Color::Rgb(30, 33, 39)));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
-    // Query line.
+    // Query line. A subtle hint reminds the user that `>` switches to commands.
     let cursor = if picker.kind == PickerKind::GotoLine {
         ":"
     } else {
         "›"
     };
-    let mut lines = vec![
-        Line::from(vec![
-            TSpan::styled(format!("{cursor} "), Style::default().fg(CLR_ACCENT)),
-            TSpan::styled(
-                format!("{}▏", picker.query),
-                Style::default().fg(Color::White),
-            ),
-        ]),
-        Line::from(""),
+    let mut query_spans = vec![
+        TSpan::styled(format!("{cursor} "), Style::default().fg(CLR_ACCENT)),
+        TSpan::styled(
+            format!("{}▏", picker.query),
+            Style::default().fg(Color::White),
+        ),
     ];
+    if picker.query.is_empty() && picker.kind == PickerKind::File {
+        query_spans.push(TSpan::styled(
+            "  (type > for commands)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    let mut lines = vec![Line::from(query_spans), Line::from("")];
 
     // Scroll the result window to keep the selection visible.
+    let active = picker.active_items();
     let visible = inner.height.saturating_sub(2) as usize;
     let start = picker.selected.saturating_sub(visible.saturating_sub(1));
     for (row_idx, &item_idx) in picker.filtered.iter().enumerate().skip(start).take(visible) {
-        let item = &picker.items[item_idx];
+        let item = &active[item_idx];
         let selected = row_idx == picker.selected;
         let style = if selected {
             Style::default().fg(Color::White).bg(CLR_SEL)
