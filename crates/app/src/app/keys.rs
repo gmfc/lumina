@@ -36,7 +36,7 @@ impl App {
         if self.editor.completion.is_some() {
             if self.editor.overlay.is_some()
                 || self.editor.picker.is_some()
-                || self.editor.find.is_some()
+                || self.editor.prompt.is_some()
                 || self.search.is_some()
             {
                 self.editor.completion = None;
@@ -95,16 +95,35 @@ impl App {
     pub(super) fn handle_modal_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         if self.editor.overlay.is_some() {
             self.overlay_key(key);
+        } else if self.editor.prompt.is_some() {
+            self.prompt_key(key);
         } else if self.editor.picker.is_some() {
             self.picker_key(key);
         } else if self.search.is_some() {
             self.search_key(key);
-        } else if self.editor.find.is_some() {
-            self.find_key(key);
         } else {
             return false;
         }
         true
+    }
+
+    /// Route a key to the plugin owning the active prompt (find/replace today). The app does no
+    /// editing itself — the owner's `on_prompt_key` handles it — so this just translates the key
+    /// and forwards it, then drains any effects the plugin queued.
+    pub(super) fn prompt_key(&mut self, key: crossterm::event::KeyEvent) {
+        let Some((owner, prompt_id)) = self
+            .editor
+            .prompt
+            .as_ref()
+            .map(|p| (p.owner.clone(), p.prompt_id.clone()))
+        else {
+            return;
+        };
+        if let Some(pk) = to_plugin_key(key) {
+            self.registry
+                .dispatch_prompt_key(&owner, &prompt_id, pk, &mut self.editor);
+            self.drain_workers();
+        }
     }
 
     /// Handle a key while the sidebar is focused. Returns `true` when it was consumed;

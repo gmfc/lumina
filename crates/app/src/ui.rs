@@ -29,7 +29,7 @@ pub(crate) use settings::settings_entry_at;
 
 use chrome::{render_status, render_tabs};
 use editor::render_editor;
-use overlays::{render_find, render_overlay};
+use overlays::{render_overlay, render_prompt};
 use panel::render_terminal_panel;
 use pickers::{render_completion, render_picker, render_search};
 use settings::render_settings;
@@ -86,7 +86,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Overlays draw last, on top of the body above the dock (plan §4).
     render_completion(f, app, editor_area);
-    render_find(f, app, editor_area);
+    render_prompt(f, app, editor_area);
     render_search(f, app, main_body);
     render_picker(f, app, main_body);
     render_overlay(f, app, main_body);

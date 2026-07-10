@@ -77,16 +77,17 @@ fn renders_search_panel_with_results() {
 fn renders_find_and_replace_widget() {
     let path = temp_file("abc abc abc\n");
     let mut app = app_with(&path);
-    // Plain find with a query that matches → exercises the match-count branch.
-    app.open_find(false);
+    // Plain find with a query that matches → exercises the match-count branch (via the plugin's
+    // generic prompt, rendered by render_prompt).
+    app.exec_id("search.find");
     for c in "abc".chars() {
-        app.find_key(KeyEvent::from(KeyCode::Char(c)));
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
     let out = render_to_string(&mut app, 100, 20);
     assert!(out.contains("Find"));
     // Replace mode draws the extra "Repl" line.
     let mut app2 = app_with(&path);
-    app2.open_find(true);
+    app2.exec_id("search.replace");
     let out2 = render_to_string(&mut app2, 100, 20);
     assert!(out2.contains("Repl"));
     std::fs::remove_file(&path).ok();

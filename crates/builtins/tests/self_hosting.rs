@@ -29,6 +29,10 @@ const EXPLORER_COMMAND: &str = "explorer.revealActiveFile";
 const MULTICURSOR_ID: &str = "multicursor";
 const MULTICURSOR_COMMAND: &str = "cursor.addNextMatch";
 
+// Find/replace is a plugin too (over the prompt + decorations ports).
+const FIND_ID: &str = "find";
+const FIND_COMMAND: &str = "search.find";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -104,6 +108,36 @@ fn disabling_multicursor_removes_only_its_contributions() {
     }
 }
 
+#[test]
+fn find_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == FIND_COMMAND),
+        "find command missing — is find/replace wired as a plugin (not app Command arms)?"
+    );
+}
+
+#[test]
+fn disabling_find_removes_only_its_contributions() {
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+
+    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != FIND_ID));
+
+    // Its `search.find`/`search.replace`/… commands are gone …
+    assert!(
+        !reduced.command_ids().any(|id| id == FIND_COMMAND),
+        "find command still present after disabling — it is hardcoded, not a plugin"
+    );
+    // … and nothing unrelated was disturbed (the app's `search.project` isn't a find contribution).
+    for id in before.iter().filter(|id| !id.starts_with("search.")) {
+        assert!(
+            reduced.command_ids().any(|c| &c == id),
+            "disabling find wrongly removed unrelated command `{id}`"
+        );
+    }
+}
+
 /// A migrated plugin owns its keybindings too, not just its commands: the chord travels with
 /// the plugin (via `Contributions::keybinding`) so `build_keymap` folds it into the keymap and
 /// disabling the plugin unbinds the chord. Guards the keymap-wiring fix for invariant #3.
@@ -122,6 +156,10 @@ fn migrated_plugins_contribute_their_keybindings() {
     assert!(
         bound(&full, "alt+j", "git.nextHunk"),
         "git-nav's alt+j must be contributed through the registry, not the defaults table"
+    );
+    assert!(
+        bound(&full, "ctrl+f", "search.find"),
+        "find's ctrl+f must be contributed through the registry, not the defaults table"
     );
 
     let no_multicursor = Registry::with_plugins(

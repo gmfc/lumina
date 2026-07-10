@@ -10,13 +10,12 @@ use anyhow::Result;
 use crossterm::event::{self, Event as CtEvent, KeyEventKind, MouseButton, MouseEventKind};
 use editor_core::view::{screen_to_char, PaneGeometry};
 use editor_core::{edit, motion};
-use editor_core::{Change, Document, Selection, Transaction};
+use editor_core::{Document, Selection};
 use editor_plugin::{Host, Registry};
 use ratatui::DefaultTerminal;
 
 use crate::editor::{EditorState, Focus};
 use crate::files;
-use crate::find::FindState;
 use crate::input::Command;
 use crate::keymap::{Chord, Keymap};
 use crate::picker::{Picker, PickerItem, PickerKind};
@@ -101,7 +100,6 @@ mod cursors;
 mod diagnostics;
 mod dispatch;
 mod file_ops;
-mod find;
 mod git;
 mod keys;
 mod lifecycle;
@@ -114,13 +112,6 @@ mod search_ui;
 mod settings;
 mod vim;
 mod workers;
-
-/// Run `f` on the find state if it's open.
-fn toggle_and<F: FnOnce(&mut FindState)>(find: &mut Option<FindState>, f: F) {
-    if let Some(fs) = find {
-        f(fs);
-    }
-}
 
 /// Convert an LSP `(line, utf16_char)` position to a char offset in `doc`.
 pub(crate) fn lsp_pos_to_char(doc: &Document, line: u32, char16: u32) -> usize {

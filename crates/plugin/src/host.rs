@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use editor_core::{DocId, Selections, Transaction, Workspace};
 
 use crate::decoration::DecorationSet;
+use crate::overlay::Prompt;
 
 /// A styled run of text within a panel line. `style` is a semantic key the theme maps to
 /// colors (e.g. "dir", "file", "match", "dim").
@@ -119,6 +120,14 @@ pub trait Host {
 
     /// Drop a previously-published decoration `layer` for `doc`.
     fn clear_decorations(&mut self, _doc: DocId, _layer: &str) {}
+
+    /// Show a modal input widget the app renders and forwards keys to. The owning plugin
+    /// re-publishes it as its state changes; `dismiss_prompt` closes it. Default no-ops so a
+    /// host that doesn't render (tests, external guests) need not implement them.
+    fn set_prompt(&mut self, _prompt: Prompt) {}
+
+    /// Close the active prompt, if any.
+    fn dismiss_prompt(&mut self) {}
 
     /// Set a panel's rendered content.
     fn set_panel(&mut self, panel_id: &str, content: PanelContent);

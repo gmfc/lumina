@@ -175,9 +175,8 @@ impl App {
         self.editor
             .pending_events
             .push(editor_plugin::event::Event::ExternalReload(id));
-        // Find matches held raw offsets into the *old* text; recompute them against the reload
-        // so a later replace can't slice past the new buffer end (which would panic).
-        self.refresh_find_after_reload(id);
+        // The `find` plugin re-derives its matches against the reload on this ExternalReload event
+        // (its `on_event`), so a later replace can't slice past the new buffer end.
         // The file changed under us (e.g. an agent wrote it) — refresh its git gutter.
         self.request_git_status(id);
     }

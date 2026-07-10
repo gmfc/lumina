@@ -1614,7 +1614,14 @@ impl App {
                 self.dispatch(Command::CloseTab);
             }
             "qa" | "qall" | "qa!" | "quitall" | "quitall!" => self.quit = true,
-            "noh" | "nohl" | "nohlsearch" => self.editor.find = None,
+            "noh" | "nohl" | "nohlsearch" => {
+                // Clear the find widget + its match highlight (owned by the `find` plugin, but
+                // published as app-side state the app can dismiss).
+                self.editor.prompt = None;
+                if let Some(id) = self.editor.workspace.active_doc() {
+                    self.editor.clear_decorations(id, "find.match");
+                }
+            }
             _ => {
                 if is_substitute(cmd) {
                     self.vim_substitute_ex(cmd);

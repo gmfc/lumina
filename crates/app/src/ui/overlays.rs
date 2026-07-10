@@ -7,9 +7,10 @@ use ratatui::text::{Line, Span as TSpan};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use editor_plugin::{Prompt, PromptPlacement};
+
 use crate::app::App;
 use crate::editor::Overlay;
-use crate::find::Field;
 
 use super::util::CLR_ACCENT;
 
@@ -116,12 +117,21 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
     }
 }
 
-/// The find/replace widget: a top-right overlay (VS Code-shaped) with toggles + counts.
-pub(super) fn render_find(f: &mut Frame, app: &App, editor_area: Rect) {
-    let Some(find) = &app.editor.find else {
+/// A generic modal input prompt (find/replace today) — a pure function of `app.editor.prompt`.
+/// The owning plugin publishes the [`Prompt`]; the app just draws it here.
+pub(super) fn render_prompt(f: &mut Frame, app: &App, editor_area: Rect) {
+    let Some(prompt) = &app.editor.prompt else {
         return;
     };
-    let height = if find.replace_mode { 4 } else { 3 };
+    match prompt.placement {
+        PromptPlacement::TopRight => render_prompt_top_right(f, prompt, editor_area),
+        PromptPlacement::Center => render_prompt_centered(f, prompt, editor_area),
+    }
+}
+
+/// The find/replace shape: a top-right overlay (VS Code-shaped) with toggles + a count.
+fn render_prompt_top_right(f: &mut Frame, prompt: &Prompt, editor_area: Rect) {
+    let height = if prompt.fields.len() >= 2 { 4 } else { 3 };
     let width = 46u16.min(editor_area.width);
     let rect = Rect::new(
         editor_area.x + editor_area.width.saturating_sub(width),
@@ -137,6 +147,26 @@ pub(super) fn render_find(f: &mut Frame, app: &App, editor_area: Rect) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
+    let mut lines: Vec<Line> = prompt
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| {
+            let label_fg = if i == prompt.focused {
+                Color::White
+            } else {
+                Color::Gray
+            };
+            Line::from(vec![
+                TSpan::styled(format!("{} ", field.label), Style::default().fg(label_fg)),
+                TSpan::styled(
+                    format!("{}▏", field.value),
+                    Style::default().fg(Color::White),
+                ),
+            ])
+        })
+        .collect();
+
     let toggle = |on: bool, label: &str| {
         let style = if on {
             Style::default().fg(Color::Black).bg(CLR_ACCENT)
@@ -145,60 +175,63 @@ pub(super) fn render_find(f: &mut Frame, app: &App, editor_area: Rect) {
         };
         TSpan::styled(format!(" {label} "), style)
     };
-    let count = if find.error.is_some() {
-        " err ".to_string()
-    } else if find.matches.is_empty() {
-        " 0/0 ".to_string()
-    } else {
-        format!(" {}/{} ", find.current + 1, find.matches.len())
-    };
-
-    let query_focused = find.field == Field::Query;
-    let mut lines = vec![Line::from(vec![
-        TSpan::styled(
-            "Find ",
-            Style::default().fg(if query_focused {
-                Color::White
-            } else {
-                Color::Gray
-            }),
-        ),
-        TSpan::styled(
-            format!("{}▏", find.query),
-            Style::default().fg(Color::White),
-        ),
-    ])];
-    if find.replace_mode {
-        lines.push(Line::from(vec![
-            TSpan::styled(
-                "Repl ",
-                Style::default().fg(if !query_focused {
-                    Color::White
-                } else {
-                    Color::Gray
-                }),
-            ),
-            TSpan::styled(
-                format!("{}▏", find.replace),
-                Style::default().fg(Color::White),
-            ),
-        ]));
+    let mut toggle_row: Vec<TSpan> = Vec::new();
+    for (i, tog) in prompt.toggles.iter().enumerate() {
+        if i > 0 {
+            toggle_row.push(TSpan::raw(" "));
+        }
+        toggle_row.push(toggle(tog.on, &tog.label));
     }
-    lines.push(Line::from(vec![
-        toggle(find.case_sensitive, "Aa"),
-        TSpan::raw(" "),
-        toggle(find.whole_word, "W"),
-        TSpan::raw(" "),
-        toggle(find.regex, ".*"),
-        TSpan::styled(count, Style::default().fg(Color::Gray)),
-    ]));
-    if let Some(err) = &find.error {
+    if let Some(status) = &prompt.status {
+        toggle_row.push(TSpan::styled(
+            format!(" {status} "),
+            Style::default().fg(Color::Gray),
+        ));
+    }
+    lines.push(Line::from(toggle_row));
+    if let Some(err) = &prompt.error {
         lines.push(Line::from(TSpan::styled(
             format!(" {err}"),
             Style::default().fg(Color::Red),
         )));
     }
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A centered single-column prompt (title + fields + footer hint) for rename/save-as-shaped
+/// inputs. Currently unused by any migrated feature, but keeps the port complete.
+fn render_prompt_centered(f: &mut Frame, prompt: &Prompt, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(title) = &prompt.title {
+        lines.push(Line::from(TSpan::styled(
+            format!(" {title}"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+    }
+    for field in &prompt.fields {
+        lines.push(Line::from(format!(" › {}▏", field.value)));
+    }
+    if let Some(err) = &prompt.error {
+        lines.push(Line::from(TSpan::styled(
+            format!(" {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    if let Some(footer) = &prompt.footer {
+        lines.push(Line::from(TSpan::styled(
+            format!(" {footer}"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let rect = centered(area, 60, h);
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CLR_ACCENT))
+        .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+    f.render_widget(Paragraph::new(lines).block(block), rect);
 }
 
 /// A rectangle of `w`×`h` centered within `area` (clamped to fit).

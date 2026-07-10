@@ -48,6 +48,18 @@ pub trait Plugin {
     fn capture_key(&mut self, _key: crate::input::Key, _host: &mut dyn Host) -> bool {
         false
     }
+
+    /// Handle a raw key while this plugin's [`crate::overlay::Prompt`] (`prompt_id`) is up. The
+    /// app routes keys here instead of chord resolution while a prompt owned by this plugin is
+    /// active. Return `true` if handled. Default `false`.
+    fn on_prompt_key(
+        &mut self,
+        _prompt_id: &str,
+        _key: crate::input::Key,
+        _host: &mut dyn Host,
+    ) -> bool {
+        false
+    }
 }
 
 /// The registry. Owns the live plugins and the aggregated contribution tables.
@@ -196,6 +208,21 @@ impl Registry {
             if p.capture_key(key, host) {
                 return true;
             }
+        }
+        false
+    }
+
+    /// Route a key to the plugin that owns the active prompt (`owner` = its id). Returns `true`
+    /// if that plugin handled it. Used by the app while `EditorState.prompt` is `Some`.
+    pub fn dispatch_prompt_key(
+        &mut self,
+        owner: &str,
+        prompt_id: &str,
+        key: crate::input::Key,
+        host: &mut dyn Host,
+    ) -> bool {
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.id() == owner) {
+            return p.on_prompt_key(prompt_id, key, host);
         }
         false
     }

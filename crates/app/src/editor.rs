@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use editor_core::{DocId, Document, Selections, Transaction, Workspace};
 use editor_plugin::event::Event;
 use editor_plugin::host::DirEntry;
-use editor_plugin::{DecorationSet, Host, PanelContent};
+use editor_plugin::{DecorationSet, Host, PanelContent, Prompt};
 
 /// Which region has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,8 +65,9 @@ pub struct EditorState {
     /// via `Host::set_decorations`. The renderer merges these layers on top of syntax; keeping
     /// them here (not on the plugin) keeps render a pure function of state (invariant #8).
     pub decorations: HashMap<DocId, HashMap<String, DecorationSet>>,
-    /// Active in-file find/replace widget, if open.
-    pub find: Option<crate::find::FindState>,
+    /// The active modal input prompt (find/replace today), owned by a plugin and rendered
+    /// generically. `Some` while a prompt is up; the app routes keys to its owner.
+    pub prompt: Option<Prompt>,
     /// Active fuzzy picker (command palette / quick open / goto line), if open.
     pub picker: Option<crate::picker::Picker>,
     /// LSP diagnostics per document (from the language server).
@@ -101,7 +102,7 @@ impl EditorState {
             overlay: None,
             highlighters: HashMap::new(),
             decorations: HashMap::new(),
-            find: None,
+            prompt: None,
             picker: None,
             diagnostics: HashMap::new(),
             bracket_match: None,
@@ -236,6 +237,14 @@ impl Host for EditorState {
             .unwrap_or_default();
         lines.sort_unstable();
         lines
+    }
+
+    fn set_prompt(&mut self, prompt: Prompt) {
+        self.prompt = Some(prompt);
+    }
+
+    fn dismiss_prompt(&mut self) {
+        self.prompt = None;
     }
 
     fn set_decorations(&mut self, doc: DocId, layer: &str, decos: DecorationSet) {
