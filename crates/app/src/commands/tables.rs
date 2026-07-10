@@ -34,13 +34,8 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("edit.copy", "Edit: Copy"),
         ("edit.cut", "Edit: Cut"),
         ("edit.paste", "Edit: Paste"),
-        // Multi-cursor add-next-match / select-all / add-above-below are contributed by the
-        // `multicursor` builtin plugin and shown in the palette via the registry (open_palette
-        // merges registry.commands()); only the line-ends command remains app-side.
-        (
-            "cursor.addCursorsToLineEnds",
-            "Multi-cursor: Add Cursors to Line Ends",
-        ),
+        // All multi-cursor titles (add-next-match / select-all / add-above-below / line-ends) come
+        // from the `multicursor` plugin via the registry.
         ("cursor.jumpToBracket", "Go: Jump to Matching Bracket"),
         // All search.* titles (find/replace + project search) come from their plugins.
         ("lsp.hover", "Go: Show Hover"),
@@ -160,7 +155,7 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+shift+enter", "edit.insertLineAbove"),
         ("ctrl+k ctrl+x", "edit.trimTrailingWhitespace"),
         ("ctrl+\\", "cursor.jumpToBracket"),
-        ("shift+alt+i", "cursor.addCursorsToLineEnds"),
+        // shift+alt+i (addCursorsToLineEnds) is contributed by the `multicursor` plugin.
         ("f8", "lsp.nextDiagnostic"),
         ("shift+f8", "lsp.prevDiagnostic"),
         ("f12", "lsp.gotoDefinition"),

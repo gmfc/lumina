@@ -10,6 +10,17 @@ use super::helpers::span_end_line;
 /// `editor.action.insertCursorAtEndOfEachLineSelected`). A bare caret yields a single caret
 /// at its own line end; a multi-line selection fans out into one caret per line.
 pub fn cursors_to_line_ends(doc: &mut Document) {
+    if let Some(set) = cursors_to_line_ends_sels(doc) {
+        doc.selections = set;
+        doc.view.goal_col = None;
+    }
+}
+
+/// The selection set for "add cursors to line ends": a caret at the end of every line each
+/// selection spans, bottom-most primary. `None` when there's nothing to do. Pure over `&Document`
+/// so a plugin can compute it and install it through [`crate::Host`]-style `set_selections`
+/// (the in-place [`cursors_to_line_ends`] is this plus the `goal_col` reset).
+pub fn cursors_to_line_ends_sels(doc: &Document) -> Option<Selections> {
     let mut carets: Vec<Selection> = Vec::new();
     for s in doc.selections.ranges() {
         let first = doc.char_to_line(s.from());
@@ -20,14 +31,13 @@ pub fn cursors_to_line_ends(doc: &mut Document) {
         }
     }
     if carets.is_empty() {
-        return;
+        return None;
     }
     let mut set = Selections::from_iter(carets);
     // Keep the bottom-most caret primary, so the viewport follows the newest one.
     let primary = set.len().saturating_sub(1);
     set.set_primary(primary);
-    doc.selections = set;
-    doc.view.goal_col = None;
+    Some(set)
 }
 
 /// Move (or extend) every selection by `motion`. `page` is the viewport height.

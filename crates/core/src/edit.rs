@@ -32,7 +32,9 @@ pub use linewise::{
     copy_line_up, delete_lines, duplicate_line, indent, insert_line_above, insert_line_below,
     move_lines, outdent, toggle_comment,
 };
-pub use select::{cursors_to_line_ends, move_selections, select_line, select_word};
+pub use select::{
+    cursors_to_line_ends, cursors_to_line_ends_sels, move_selections, select_line, select_word,
+};
 pub use smart::{delete_backward_smart, insert_char_smart, insert_newline_smart};
 pub use undo::{redo, undo};
 
