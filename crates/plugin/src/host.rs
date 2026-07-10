@@ -101,6 +101,17 @@ pub trait Host {
     /// Open (or focus) a file in a tab.
     fn open_path(&mut self, path: &Path);
 
+    /// Open (or focus) a file and position the caret at 0-based `line`. Defaults to opening at
+    /// the top (`open_path`); the app overrides it to jump (used by project search / goto).
+    fn open_path_at(&mut self, path: &Path, _line: usize) {
+        self.open_path(path);
+    }
+
+    /// Run `work` off the main thread and deliver its result back as [`crate::Event::JobComplete`]
+    /// tagged with `id`. The plugin builds the closure (it owns any grep/fs deps); the host owns
+    /// the threading + bounded channel. Default no-op, so a host without a worker loop ignores it.
+    fn spawn_job(&mut self, _id: String, _work: Box<dyn FnOnce() -> Vec<u8> + Send + 'static>) {}
+
     /// List a directory, honoring ignore rules. Capability-gated for external plugins.
     fn read_dir(&self, path: &Path) -> Vec<DirEntry>;
 

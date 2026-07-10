@@ -42,9 +42,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
             "Multi-cursor: Add Cursors to Line Ends",
         ),
         ("cursor.jumpToBracket", "Go: Jump to Matching Bracket"),
-        // search.find / search.replace / search.findNext|Prev / search.replaceAll titles come
-        // from the `find` plugin via the registry; only project search is app-side.
-        ("search.project", "Search: Find in Files"),
+        // All search.* titles (find/replace + project search) come from their plugins.
         ("lsp.hover", "Go: Show Hover"),
         ("lsp.gotoDefinition", "Go: Go to Definition"),
         ("lsp.gotoImplementation", "Go: Go to Implementation"),
@@ -102,9 +100,7 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+c", "edit.copy"),
         ("ctrl+x", "edit.cut"),
         ("ctrl+v", "edit.paste"),
-        // ctrl+f/ctrl+h (find/replace) + f3/shift+f3 (next/prev) are contributed by the `find`
-        // plugin; only project search's chord is app-side.
-        ("ctrl+shift+f", "search.project"),
+        // find/replace + project-search (ctrl+shift+f) chords are contributed by their plugins.
         // ctrl+shift+p (palette) + ctrl+p (quick-open) + ctrl+g (goto-line) are contributed by
         // the `palette` plugin.
         ("ctrl+,", "view.settings"),

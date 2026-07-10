@@ -18,6 +18,7 @@ pub mod find;
 pub mod git_nav;
 pub mod multicursor;
 pub mod palette;
+pub mod project_search;
 
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
 /// config can filter the list to disable any of them (the litmus test for self-hosting).
@@ -29,14 +30,15 @@ pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
 /// the explorer draws Nerd Font glyphs).
 pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap). Extracted so
-    // far: the explorer, multi-cursor, git-change navigation, find/replace, and the command
-    // palette + quick-open + goto-line (all reach the editor only through `Host`). Still hardcoded
-    // in `editor-app` pending new `Host` ports: project search, lsp, terminal, vim.
+    // far: the explorer, multi-cursor, git-change navigation, find/replace, the command palette +
+    // quick-open + goto-line, and project search (all reach the editor only through `Host`). Still
+    // hardcoded in `editor-app` pending new `Host` ports: lsp, terminal, vim.
     vec![
         Box::new(explorer::ExplorerPlugin::new(icons)),
         Box::new(multicursor::MultiCursorPlugin),
         Box::new(git_nav::GitNavPlugin),
         Box::new(find::FindReplacePlugin::default()),
         Box::new(palette::PalettePlugin::default()),
+        Box::new(project_search::ProjectSearchPlugin::default()),
     ]
 }

@@ -112,24 +112,24 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
     }
 }
 
-/// Project-search results: a bottom panel with the query line and grouped hits.
-pub(super) fn render_search(f: &mut Frame, app: &App, body: Rect) {
-    let Some(search) = app.search() else {
+/// The bottom results dock: draws whatever `PanelContent` a plugin published to `"search.results"`
+/// (the project-search plugin's query line + grouped hits). A pure function of the panel state —
+/// no search-specific knowledge lives here.
+pub(super) fn render_bottom_panel(f: &mut Frame, app: &App, body: Rect) {
+    let Some(panel) = app.editor.panels.get("search.results") else {
         return;
     };
+    if panel.lines.is_empty() {
+        return; // closed / cleared
+    }
     let height = (body.height / 2).max(6).min(body.height);
     let rect = Rect::new(body.x, body.y + body.height - height, body.width, height);
     f.render_widget(Clear, rect);
-    let status = if search.running {
-        "searching…".to_string()
-    } else {
-        format!("{} result(s)", search.results.len())
-    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(CLR_ACCENT))
         .title(TSpan::styled(
-            format!(" Search: {}  [{status}] ", search.query),
+            " Search ",
             Style::default().add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(Color::Rgb(28, 30, 36)));
@@ -137,39 +137,26 @@ pub(super) fn render_search(f: &mut Frame, app: &App, body: Rect) {
     f.render_widget(block, rect);
 
     let visible = inner.height as usize;
-    let start = search.selected.saturating_sub(visible.saturating_sub(1));
-    let mut lines = Vec::new();
-    let mut last_file: Option<&std::path::Path> = None;
-    for (i, hit) in search.results.iter().enumerate().skip(start).take(visible) {
-        // Group header when the file changes.
-        if last_file != Some(hit.path.as_path()) {
-            last_file = Some(hit.path.as_path());
-            let name = hit
-                .path
-                .strip_prefix(&app.editor.workspace.root)
-                .unwrap_or(&hit.path)
-                .to_string_lossy()
-                .into_owned();
-            lines.push(Line::from(TSpan::styled(
-                name,
-                Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
-            )));
-        }
-        let selected = i == search.selected;
-        let style = if selected {
-            Style::default().fg(Color::White).bg(CLR_SEL)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        let text: String = hit.text.chars().take(120).collect();
-        lines.push(Line::from(vec![
-            TSpan::styled(
-                format!("  {:>4}: ", hit.line),
-                Style::default().fg(Color::DarkGray),
-            ),
-            TSpan::styled(text, style),
-        ]));
-    }
+    let start = panel.selected.saturating_sub(visible.saturating_sub(1));
+    let lines: Vec<Line> = panel
+        .lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(i, l)| {
+            let spans: Vec<TSpan> = l
+                .spans
+                .iter()
+                .map(|s| TSpan::styled(s.text.clone(), super::sidebar::style_for(&s.style)))
+                .collect();
+            let mut line = Line::from(spans);
+            if i == panel.selected {
+                line = line.style(Style::default().bg(CLR_SEL));
+            }
+            line
+        })
+        .collect();
     f.render_widget(Paragraph::new(lines), inner);
 }
 

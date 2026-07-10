@@ -9,14 +9,13 @@ use std::time::Duration;
 use notify::{PollWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, new_debouncer_opt, DebounceEventResult, FileIdMap};
 
-use crate::search::SearchHit;
-
 /// A message from a background worker to the main loop.
 pub enum WorkerMsg {
     /// A path under the project root changed on disk (debounced).
     DiskChanged { path: PathBuf },
-    /// A project search finished.
-    SearchComplete { query: String, hits: Vec<SearchHit> },
+    /// A plugin's background job (via `Host::spawn_job`) finished. `id` is the plugin's
+    /// correlation id; `payload` is the serialized result, decoded by the owning plugin.
+    JobComplete { id: String, payload: Vec<u8> },
     /// A git diff computation finished for `path` (plan §4.1).
     GitStatus {
         path: PathBuf,
@@ -95,14 +94,6 @@ pub fn spawn_watcher(
         }
         Some(Box::new(debouncer))
     }
-}
-
-/// Run a project search on a worker thread; the result arrives as `SearchComplete`.
-pub fn spawn_search(root: PathBuf, query: String, case_sensitive: bool, tx: WorkerTx) {
-    std::thread::spawn(move || {
-        let hits = crate::search::run_search(&root, &query, case_sensitive, 2000);
-        let _ = tx.send(WorkerMsg::SearchComplete { query, hits });
-    });
 }
 
 /// Compute a file's git change map off the main thread; result arrives as `GitStatus`

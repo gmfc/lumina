@@ -31,7 +31,7 @@ use chrome::{render_status, render_tabs};
 use editor::render_editor;
 use overlays::{render_overlay, render_prompt};
 use panel::render_terminal_panel;
-use pickers::{render_completion, render_picker, render_search};
+use pickers::{render_bottom_panel, render_completion, render_picker};
 use settings::render_settings;
 use sidebar::render_sidebar;
 
@@ -87,7 +87,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Overlays draw last, on top of the body above the dock (plan §4).
     render_completion(f, app, editor_area);
     render_prompt(f, app, editor_area);
-    render_search(f, app, main_body);
+    render_bottom_panel(f, app, main_body);
     render_picker(f, app, main_body);
     render_overlay(f, app, main_body);
 

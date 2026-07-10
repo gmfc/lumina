@@ -60,9 +60,7 @@ pub enum Command {
     NextTab,
     PrevTab,
     GotoTab(usize),
-    // search — find/replace is now the `find` builtin plugin (search.* commands); only
-    // project-wide search remains an app command.
-    ProjectSearch,
+    // search — find/replace + project search are builtin plugins now.
     // language server
     Hover,
     GotoDefinition,

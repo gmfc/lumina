@@ -100,9 +100,6 @@ impl App {
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),
 
-            // --- search (find/replace is the `find` plugin; only project search is app-side) ---
-            Command::ProjectSearch => self.open_search(),
-
             // --- clipboard ---
             Command::Copy => {
                 if let Some(t) = self.selection_text() {
