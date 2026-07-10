@@ -69,7 +69,9 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
     inner
 }
 
-fn style_for(key: &str) -> Style {
+/// Map a panel `Span` style key to a concrete style. Shared by the sidebar and the bottom
+/// results panel so plugin-published panels render consistently.
+pub(super) fn style_for(key: &str) -> Style {
     match key {
         "dir" => Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
         "file" => Style::default().fg(Color::Gray),

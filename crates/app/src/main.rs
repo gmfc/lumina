@@ -14,7 +14,6 @@ mod input;
 mod keymap;
 mod lsp;
 mod picker;
-mod search;
 mod session;
 mod settings;
 mod sync;

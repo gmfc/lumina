@@ -56,14 +56,25 @@ fn renders_search_panel_with_results() {
     let dir = temp_dir_with_files();
     std::fs::write(dir.join("a.txt"), "alpha match here\nsecond alpha line").unwrap();
     let mut app = app_with(&dir);
-    app.open_search();
+    app.exec_id("search.project");
     for c in "alpha".chars() {
-        app.search_key(KeyEvent::from(KeyCode::Char(c)));
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
-    app.search_key(KeyEvent::from(KeyCode::Enter)); // run
+    app.on_key(KeyEvent::from(KeyCode::Enter)); // run
     for _ in 0..200 {
         app.drain_workers();
-        if app.search().map(|s| !s.running).unwrap_or(true) {
+        let done = app
+            .editor
+            .panels
+            .get("search.results")
+            .map(|p| {
+                !p.lines
+                    .iter()
+                    .flat_map(|l| l.spans.iter())
+                    .any(|s| s.text.contains("searching"))
+            })
+            .unwrap_or(false);
+        if done {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));

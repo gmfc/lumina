@@ -20,4 +20,8 @@ pub enum Event {
     DidChangeConfig,
     /// The active tab changed.
     DidChangeActive(Option<DocId>),
+    /// A background job (spawned via [`crate::Host::spawn_job`]) finished. `id` is the
+    /// plugin's correlation id (e.g. carrying a generation so stale results drop); `payload`
+    /// is the job's serialized result, decoded by the owning plugin.
+    JobComplete { id: String, payload: Vec<u8> },
 }

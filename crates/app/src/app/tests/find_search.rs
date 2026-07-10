@@ -61,30 +61,46 @@ fn replace_all_is_one_undo() {
     std::fs::remove_file(&path).ok();
 }
 
+/// Flatten the published "search.results" panel into one string (query header + hit rows).
+fn search_panel_text(app: &App) -> String {
+    app.editor
+        .panels
+        .get("search.results")
+        .map(|p| {
+            p.lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .map(|s| s.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
 #[test]
 fn project_search_finds_and_opens() {
+    // The `project-search` plugin owns the state; drive it through exec_id + the prompt path and
+    // read results off the published panel.
     let dir = temp_dir_with_files();
     std::fs::write(dir.join("a.txt"), "find_me on this line\nother").unwrap();
     let mut app = app_with(&dir);
-    app.open_search();
+    app.exec_id("search.project");
     for c in "find_me".chars() {
-        app.search_key(KeyEvent::from(KeyCode::Char(c)));
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
     }
-    app.search_key(KeyEvent::from(KeyCode::Enter)); // run
-                                                    // Drain the worker channel until the search completes (bounded, with backoff).
+    app.on_key(KeyEvent::from(KeyCode::Enter)); // run
+                                                // Drain the worker channel until the job completes (panel stops showing "searching…").
     for _ in 0..200 {
         app.drain_workers();
-        if app.search().map(|s| !s.running).unwrap_or(true) {
+        if !search_panel_text(&app).contains("searching") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(app
-        .search()
-        .unwrap()
-        .results
-        .iter()
-        .any(|h| h.text.contains("find_me")));
+    assert!(
+        search_panel_text(&app).contains("find_me on this line"),
+        "search results should include the matching line"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

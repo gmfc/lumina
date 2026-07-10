@@ -67,6 +67,9 @@ impl App {
         // Background worker channel + directory watcher on the project root (plan §6). Also
         // watch the config dir (non-recursively) so edits to config.toml hot-reload.
         let (worker_tx, worker_rx) = crate::worker::channel();
+        // Hand the worker sender to EditorState so `Host::spawn_job` can run plugin work
+        // off-thread and fold results back as `Event::JobComplete`.
+        editor.job_tx = Some(worker_tx.clone());
         let config_path = crate::config::Config::path();
         let config_dir = config_path
             .as_ref()
@@ -102,8 +105,6 @@ impl App {
             config_path,
             pending_self_writes: std::collections::HashMap::new(),
             follow_mode,
-            search: None,
-            last_search_run: String::new(),
             lsp,
             lsp_sent_revision: std::collections::HashMap::new(),
             panel,
@@ -111,11 +112,6 @@ impl App {
             settings: None,
             settings_doc: None,
         })
-    }
-
-    /// The active project-search state (read by the renderer).
-    pub fn search(&self) -> Option<&crate::search::SearchState> {
-        self.search.as_ref()
     }
 
     /// Reload the config file and rebuild the keymap (the `config.reload` command).

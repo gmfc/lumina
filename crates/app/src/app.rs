@@ -75,10 +75,6 @@ pub struct App {
     pending_self_writes: std::collections::HashMap<PathBuf, u64>,
     /// Auto-scroll to the first externally-changed line on reload (follow mode).
     follow_mode: bool,
-    /// Active project-search UI, if open.
-    search: Option<crate::search::SearchState>,
-    /// The last query we actually ran (to distinguish Enter=run vs Enter=open).
-    last_search_run: String,
     // --- Phase 10: LSP ---
     /// Language-server manager (inert unless a server is configured).
     lsp: crate::lsp::LspManager,
@@ -108,7 +104,6 @@ mod mouse;
 mod overlay;
 mod palette;
 mod panel;
-mod search_ui;
 mod settings;
 mod vim;
 mod workers;

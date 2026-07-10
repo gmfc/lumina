@@ -37,7 +37,6 @@ impl App {
             if self.editor.overlay.is_some()
                 || self.editor.picker.is_some()
                 || self.editor.prompt.is_some()
-                || self.search.is_some()
             {
                 self.editor.completion = None;
             } else {
@@ -49,7 +48,7 @@ impl App {
     /// Give the active focus/overlay handlers first refusal on a key, in priority order.
     /// Returns `true` when one of them consumed it (so chord resolution is skipped).
     fn capture_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        // Modal overlays (confirm-close / picker / search / find).
+        // Modal overlays (confirm-close / prompt / picker).
         if self.handle_modal_key(key) {
             return true;
         }
@@ -90,8 +89,8 @@ impl App {
         false
     }
 
-    /// Route a key to an active modal (overlay / picker / search / find), in priority
-    /// order. Returns `true` when a modal consumed the key.
+    /// Route a key to an active modal (confirm-close overlay / plugin prompt / picker), in
+    /// priority order. Returns `true` when a modal consumed the key.
     pub(super) fn handle_modal_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         if self.editor.overlay.is_some() {
             self.overlay_key(key);
@@ -99,8 +98,6 @@ impl App {
             self.prompt_key(key);
         } else if self.editor.picker.is_some() {
             self.picker_key(key);
-        } else if self.search.is_some() {
-            self.search_key(key);
         } else {
             return false;
         }

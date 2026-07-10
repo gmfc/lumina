@@ -19,3 +19,5 @@ editor-core = { path = "../core" }
 editor-plugin = { path = "../plugin" }
 ignore.workspace = true
 regex.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true

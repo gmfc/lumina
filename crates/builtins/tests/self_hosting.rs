@@ -37,6 +37,11 @@ const FIND_COMMAND: &str = "search.find";
 const PALETTE_ID: &str = "palette";
 const PALETTE_COMMAND: &str = "view.commandPalette";
 
+// Project search (over the background-job + prompt + panel ports).
+const SEARCH_ID: &str = "project-search";
+const SEARCH_COMMAND: &str = "search.project";
+const SEARCH_PANEL: &str = "search.results";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -168,6 +173,44 @@ fn disabling_palette_removes_only_its_contributions() {
         assert!(
             reduced.command_ids().any(|c| &c == id),
             "disabling palette wrongly removed unrelated command `{id}`"
+        );
+    }
+}
+
+#[test]
+fn project_search_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == SEARCH_COMMAND),
+        "project-search command missing — is it wired as a plugin?"
+    );
+    assert!(
+        reg.panel_ids().any(|id| id == SEARCH_PANEL),
+        "project-search results panel missing — is it wired as a plugin?"
+    );
+}
+
+#[test]
+fn disabling_project_search_removes_only_its_contributions() {
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+
+    let reduced =
+        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != SEARCH_ID));
+
+    assert!(
+        !reduced.command_ids().any(|id| id == SEARCH_COMMAND),
+        "project-search command still present after disabling — it is hardcoded, not a plugin"
+    );
+    assert!(
+        !reduced.panel_ids().any(|id| id == SEARCH_PANEL),
+        "project-search panel still present after disabling — it is hardcoded, not a plugin"
+    );
+    // Nothing unrelated removed (find's `search.find` isn't a project-search contribution).
+    for id in before.iter().filter(|id| id.as_str() != SEARCH_COMMAND) {
+        assert!(
+            reduced.command_ids().any(|c| &c == id),
+            "disabling project-search wrongly removed unrelated command `{id}`"
         );
     }
 }

@@ -7,9 +7,12 @@ use super::*;
 impl App {
     pub(super) fn drain_workers(&mut self) {
         // Apply any queued opens/commands/events produced during dispatch.
-        let opens: Vec<PathBuf> = std::mem::take(&mut self.editor.pending_opens);
-        for path in opens {
+        let opens: Vec<(PathBuf, Option<usize>)> = std::mem::take(&mut self.editor.pending_opens);
+        for (path, line) in opens {
             self.open_path(&path);
+            if let Some(line) = line {
+                self.goto_line(line);
+            }
         }
         let cmds: Vec<String> = std::mem::take(&mut self.editor.pending_commands);
         for id in cmds {
@@ -57,7 +60,13 @@ impl App {
                         self.editor.git_hunks.insert(id, statuses);
                     }
                 }
-                WorkerMsg::SearchComplete { query, hits } => self.on_search_complete(query, hits),
+                WorkerMsg::JobComplete { id, payload } => {
+                    // Fold plugin job results back into single-threaded dispatch: broadcast as an
+                    // event the owning plugin decodes in `on_event`.
+                    self.editor
+                        .pending_events
+                        .push(editor_plugin::event::Event::JobComplete { id, payload });
+                }
                 WorkerMsg::TerminalOutput { id, bytes } => {
                     term_bytes += bytes.len();
                     if let Some(t) = self.panel.terminal_mut(id) {
@@ -72,21 +81,6 @@ impl App {
                         t.mark_exited();
                     }
                 }
-            }
-        }
-    }
-
-    /// Fold a completed project search into the open search panel, if it's still the live query.
-    pub(super) fn on_search_complete(
-        &mut self,
-        query: String,
-        hits: Vec<crate::search::SearchHit>,
-    ) {
-        if let Some(search) = &mut self.search {
-            if search.query == query {
-                search.results = hits;
-                search.selected = 0;
-                search.running = false;
             }
         }
     }

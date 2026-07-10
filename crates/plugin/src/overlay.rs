@@ -45,6 +45,9 @@ pub enum PromptPlacement {
     Center,
     /// Top-right of the editor pane (find / replace).
     TopRight,
+    /// The app draws nothing — the owner renders its own UI (e.g. in a panel) and uses the
+    /// prompt only to receive keys while it is up (project search's query box).
+    Panel,
 }
 
 /// A modal input widget owned by a plugin. The plugin re-publishes it as its state changes; the

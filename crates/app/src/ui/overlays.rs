@@ -126,6 +126,8 @@ pub(super) fn render_prompt(f: &mut Frame, app: &App, editor_area: Rect) {
     match prompt.placement {
         PromptPlacement::TopRight => render_prompt_top_right(f, prompt, editor_area),
         PromptPlacement::Center => render_prompt_centered(f, prompt, editor_area),
+        // The owner renders its own UI (e.g. a panel); the prompt is key-routing only.
+        PromptPlacement::Panel => {}
     }
 }
 

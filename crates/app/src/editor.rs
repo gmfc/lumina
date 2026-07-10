@@ -55,8 +55,12 @@ pub struct EditorState {
     pub pending_events: Vec<Event>,
     /// Command ids queued via `Host::execute`, run by `App` after the current dispatch.
     pub pending_commands: Vec<String>,
-    /// Paths requested via `Host::open_path`, opened by `App` (it owns file IO policy).
-    pub pending_opens: Vec<PathBuf>,
+    /// Paths requested via `Host::open_path`/`open_path_at`, opened by `App` (it owns file IO
+    /// policy) on the next drain. The optional line positions the caret (project search / goto).
+    pub pending_opens: Vec<(PathBuf, Option<usize>)>,
+    /// Sender to the app's bounded worker channel, so `Host::spawn_job` can run plugin work off
+    /// the main thread and fold the result back as `Event::JobComplete`. Set at construction.
+    pub job_tx: Option<crate::worker::WorkerTx>,
     /// Active modal overlay, if any.
     pub overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
@@ -103,6 +107,7 @@ impl EditorState {
             pending_events: Vec::new(),
             pending_commands: Vec::new(),
             pending_opens: Vec::new(),
+            job_tx: None,
             overlay: None,
             highlighters: HashMap::new(),
             decorations: HashMap::new(),
@@ -213,7 +218,24 @@ impl Host for EditorState {
     }
 
     fn open_path(&mut self, path: &Path) {
-        self.pending_opens.push(path.to_path_buf());
+        self.pending_opens.push((path.to_path_buf(), None));
+    }
+
+    fn open_path_at(&mut self, path: &Path, line: usize) {
+        self.pending_opens.push((path.to_path_buf(), Some(line)));
+    }
+
+    fn spawn_job(&mut self, id: String, work: Box<dyn FnOnce() -> Vec<u8> + Send + 'static>) {
+        // Run the plugin's closure on an OS thread and fold the result back into the single-
+        // threaded loop as a WorkerMsg the drain turns into Event::JobComplete. The app owns the
+        // threading + bounded channel; the plugin owns the work. No channel ⇒ silent no-op.
+        let Some(tx) = self.job_tx.clone() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let payload = work();
+            let _ = tx.send(crate::worker::WorkerMsg::JobComplete { id, payload });
+        });
     }
 
     fn read_dir(&self, path: &Path) -> Vec<DirEntry> {

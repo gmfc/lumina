@@ -70,10 +70,11 @@ fn modal_keys_route_to_active_modal() {
     app.exec_id("view.commandPalette");
     assert!(app.editor.picker.is_some());
     app.on_key(KeyEvent::from(KeyCode::Esc));
-    // search
-    app.open_search();
-    assert!(app.search.is_some());
+    // search (the `project-search` plugin's query box is a Panel-placement prompt)
+    app.exec_id("search.project");
+    assert!(app.editor.prompt.is_some());
     app.on_key(KeyEvent::from(KeyCode::Esc));
+    assert!(app.editor.prompt.is_none(), "Esc closes the search prompt");
     // overlay (confirm-close prompt on a dirty tab)
     app.dispatch(Command::Move(Motion::DocEnd));
     app.dispatch(Command::InsertChar('!'));
