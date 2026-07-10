@@ -70,13 +70,7 @@ pub enum Command {
     FocusSidebar,
     FocusEditor,
     // Command palette, quick-open, and goto-line are the `palette` plugin now.
-    // terminal panel
-    ToggleTerminal,
-    NewTerminal,
-    CloseTerminal,
-    MinimizeTerminal,
-    NextTerminal,
-    PrevTerminal,
+    // terminal-dock commands are the `terminal` plugin now (PTY/render stay app-side).
     // registry command by id (plugin-contributed)
     Run(String),
     Quit,

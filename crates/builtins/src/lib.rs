@@ -20,6 +20,7 @@ pub mod lsp;
 pub mod multicursor;
 pub mod palette;
 pub mod project_search;
+pub mod terminal;
 pub mod theme;
 
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
@@ -33,9 +34,10 @@ pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
 pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap). Extracted so
     // far: the explorer, multi-cursor, git-change navigation, find/replace, the command palette +
-    // quick-open + goto-line, project search, the theme toggle, and the LSP request commands (all
-    // reach the editor only through `Host`). Still hardcoded in `editor-app`: the diagnostics
-    // model + LSP response handling (transport stays app-side), the terminal, and vim.
+    // quick-open + goto-line, project search, the theme toggle, the LSP request commands, and the
+    // terminal-dock commands (all reach the editor only through `Host`). Still hardcoded in
+    // `editor-app`: the diagnostics model + completion widget + LSP response handling, the terminal
+    // PTY/vt100/render machinery, and vim.
     vec![
         Box::new(explorer::ExplorerPlugin::new(icons)),
         Box::new(multicursor::MultiCursorPlugin),
@@ -45,5 +47,6 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(project_search::ProjectSearchPlugin::default()),
         Box::new(theme::ThemePlugin),
         Box::new(lsp::LspPlugin::default()),
+        Box::new(terminal::TerminalPlugin),
     ]
 }

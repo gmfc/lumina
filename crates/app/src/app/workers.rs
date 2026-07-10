@@ -16,6 +16,11 @@ impl App {
         for kind in lsp_reqs {
             self.dispatch_lsp_request(kind);
         }
+        // Apply queued terminal-dock lifecycle actions to the (app-owned) PTY panel.
+        let term_ops = std::mem::take(&mut self.editor.pending_terminal_ops);
+        for op in term_ops {
+            self.apply_terminal_op(op);
+        }
         // Apply any queued opens/commands/events produced during dispatch.
         let opens: Vec<(PathBuf, Option<usize>)> = std::mem::take(&mut self.editor.pending_opens);
         for (path, line) in opens {

@@ -46,6 +46,10 @@ const SEARCH_PANEL: &str = "search.results";
 const LSP_ID: &str = "lsp";
 const LSP_COMMAND: &str = "lsp.gotoDefinition";
 
+// The terminal-dock commands (over the terminal_op effect-queue).
+const TERMINAL_ID: &str = "terminal";
+const TERMINAL_COMMAND: &str = "terminal.toggle";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -245,6 +249,35 @@ fn disabling_lsp_removes_only_its_contributions() {
         assert!(
             reduced.command_ids().any(|c| &c == id),
             "disabling lsp wrongly removed unrelated command `{id}`"
+        );
+    }
+}
+
+#[test]
+fn terminal_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == TERMINAL_COMMAND),
+        "terminal command missing — is the terminal dock wired as a plugin?"
+    );
+}
+
+#[test]
+fn disabling_terminal_removes_only_its_contributions() {
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+
+    let reduced =
+        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != TERMINAL_ID));
+
+    assert!(
+        !reduced.command_ids().any(|id| id == TERMINAL_COMMAND),
+        "terminal command still present after disabling — it is hardcoded, not a plugin"
+    );
+    for id in before.iter().filter(|id| !id.starts_with("terminal.")) {
+        assert!(
+            reduced.command_ids().any(|c| &c == id),
+            "disabling terminal wrongly removed unrelated command `{id}`"
         );
     }
 }

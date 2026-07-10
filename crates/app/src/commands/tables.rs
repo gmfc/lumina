@@ -44,13 +44,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("lsp.prevDiagnostic", "Go: Previous Problem"),
         // git.nextHunk / git.prevHunk titles come from the `git-nav` plugin via the registry
         ("view.toggleSidebar", "View: Toggle Sidebar"),
-        // view.toggleTheme title comes from the `theme` plugin.
-        ("terminal.toggle", "Terminal: Toggle Panel"),
-        ("terminal.new", "Terminal: New Terminal"),
-        ("terminal.close", "Terminal: Close Active Terminal"),
-        ("terminal.minimize", "Terminal: Minimize/Restore Panel"),
-        ("terminal.next", "Terminal: Next Terminal"),
-        ("terminal.prev", "Terminal: Previous Terminal"),
+        // view.toggleTheme title comes from the `theme` plugin; terminal.* from the `terminal` plugin.
         // view.commandPalette / view.quickOpen / view.gotoLine titles come from the `palette` plugin.
         ("view.settings", "Preferences: Open Settings"),
         ("config.reload", "Preferences: Reload Configuration"),
@@ -79,10 +73,8 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         // so this reaches Reopen Closed Editor exactly as VS Code intends.
         ("ctrl+shift+t", "tab.reopenClosed"),
         ("ctrl+b", "view.toggleSidebar"),
-        ("ctrl+j", "terminal.toggle"),
-        ("ctrl+`", "terminal.toggle"),
-        ("ctrl+pagedown", "terminal.next"),
-        ("ctrl+pageup", "terminal.prev"),
+        // ctrl+j / ctrl+` (toggle) + ctrl+pagedown/pageup (next/prev) are contributed by the
+        // `terminal` plugin.
         ("ctrl+z", "edit.undo"),
         ("ctrl+y", "edit.redo"),
         ("ctrl+a", "edit.selectAll"),

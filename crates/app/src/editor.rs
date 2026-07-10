@@ -61,6 +61,9 @@ pub struct EditorState {
     /// Mirror of `App.lsp.is_enabled()` so `Host::lsp_enabled` can answer across the split-borrow
     /// wall. Set at construction / config reload (the server set is config-stable per session).
     pub lsp_enabled: bool,
+    /// Terminal-dock lifecycle actions queued via `Host::terminal_op`; the app applies them to the
+    /// (app-owned) PTY panel on the next drain (effect-queue idiom).
+    pub pending_terminal_ops: Vec<editor_plugin::TerminalOp>,
     /// Active modal overlay, if any.
     pub overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
@@ -111,6 +114,7 @@ impl EditorState {
             pending_theme_toggle: false,
             pending_lsp_requests: Vec::new(),
             lsp_enabled: false,
+            pending_terminal_ops: Vec::new(),
             overlay: None,
             highlighters: HashMap::new(),
             decorations: HashMap::new(),
@@ -364,6 +368,10 @@ impl Host for EditorState {
 
     fn lsp_enabled(&self) -> bool {
         self.lsp_enabled
+    }
+
+    fn terminal_op(&mut self, op: editor_plugin::TerminalOp) {
+        self.pending_terminal_ops.push(op);
     }
 
     fn execute(&mut self, command_id: &str) {

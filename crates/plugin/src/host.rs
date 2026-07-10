@@ -183,6 +183,10 @@ pub trait Host {
         false
     }
 
+    /// Perform a terminal-dock lifecycle action. The app owns the PTY/vt100/render machinery; the
+    /// plugin only expresses intent, applied on the next drain (effect-queue). Default no-op.
+    fn terminal_op(&mut self, _op: crate::terminal::TerminalOp) {}
+
     /// Execute another registered command by id (composability).
     fn execute(&mut self, command_id: &str);
 }

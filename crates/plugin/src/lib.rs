@@ -18,6 +18,7 @@ pub mod overlay;
 pub mod picker;
 pub mod registry;
 pub mod runtime;
+pub mod terminal;
 pub mod wasm;
 
 pub use contribution::CommandSpec;
@@ -33,3 +34,4 @@ pub use lsp::LspRequestKind;
 pub use overlay::{Prompt, PromptField, PromptPlacement, PromptToggle};
 pub use picker::{CommandInfo, PickerItem, PickerRequest};
 pub use registry::{Plugin, Registry};
+pub use terminal::TerminalOp;
