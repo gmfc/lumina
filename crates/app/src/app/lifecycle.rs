@@ -62,6 +62,9 @@ impl App {
         let panel = crate::terminal::TerminalPanel::new(config.terminal_height);
         let follow_mode = config.follow_mode;
         let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
+        // Mirror LSP availability onto EditorState so the `lsp` plugin can no-op through
+        // `Host::lsp_enabled` when no server is configured.
+        editor.lsp_enabled = lsp.is_enabled();
         let keymap = build_keymap(&config, &registry);
 
         // Background worker channel + directory watcher on the project root (plan §6). Also

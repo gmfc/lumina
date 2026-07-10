@@ -28,14 +28,6 @@ pub enum Overlay {
     ConfirmClose { tab: usize },
     /// A dismissable information popup (e.g. LSP hover).
     Info(String),
-    /// Rename prompt for the symbol at `(line, character)` in `path` (LSP rename).
-    RenameInput {
-        path: PathBuf,
-        language: String,
-        line: u32,
-        character: u32,
-        buffer: String,
-    },
     /// Save As prompt: type a path for the active document (plan §1.5).
     SaveAsInput { buffer: String },
 }
@@ -63,6 +55,12 @@ pub struct EditorState {
     pub job_tx: Option<crate::worker::WorkerTx>,
     /// Set by `Host::toggle_theme`; the app flips its (app-owned) theme on the next drain.
     pub pending_theme_toggle: bool,
+    /// LSP requests queued via `Host::lsp_request`; the app resolves the cursor position and
+    /// forwards them to the (app-owned) `LspManager` on the next drain (effect-queue idiom).
+    pub pending_lsp_requests: Vec<editor_plugin::LspRequestKind>,
+    /// Mirror of `App.lsp.is_enabled()` so `Host::lsp_enabled` can answer across the split-borrow
+    /// wall. Set at construction / config reload (the server set is config-stable per session).
+    pub lsp_enabled: bool,
     /// Active modal overlay, if any.
     pub overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
@@ -111,6 +109,8 @@ impl EditorState {
             pending_opens: Vec::new(),
             job_tx: None,
             pending_theme_toggle: false,
+            pending_lsp_requests: Vec::new(),
+            lsp_enabled: false,
             overlay: None,
             highlighters: HashMap::new(),
             decorations: HashMap::new(),
@@ -356,6 +356,14 @@ impl Host for EditorState {
 
     fn toggle_theme(&mut self) {
         self.pending_theme_toggle = true;
+    }
+
+    fn lsp_request(&mut self, kind: editor_plugin::LspRequestKind) {
+        self.pending_lsp_requests.push(kind);
+    }
+
+    fn lsp_enabled(&self) -> bool {
+        self.lsp_enabled
     }
 
     fn execute(&mut self, command_id: &str) {

@@ -91,10 +91,13 @@ fn lsp_commands_request_at_cursor() {
     path.push(format!("lumina_lsp_{}_{}.rs", std::process::id(), n));
     std::fs::write(&path, "fn main() {}\n").unwrap();
     let mut app = app_with(&path);
-    // A .rs doc resolves lsp_position, so each command reaches its request arm.
-    app.dispatch(Command::Hover);
-    app.dispatch(Command::GotoDefinition);
-    app.dispatch(Command::Completion);
+    // The `lsp` plugin owns these ids; force the enabled mirror so it queues requests, then
+    // exec_id drains them through the app (a .rs doc resolves lsp_position; no server is
+    // configured, so the manager no-ops gracefully rather than spawning one).
+    app.editor.lsp_enabled = true;
+    app.exec_id("lsp.hover");
+    app.exec_id("lsp.gotoDefinition");
+    app.exec_id("lsp.completion");
     std::fs::remove_file(&path).ok();
 }
 

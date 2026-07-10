@@ -120,20 +120,34 @@ fn renders_each_overlay_variant() {
     assert!(render_to_string(&mut app, 100, 20).contains("Hover"));
 
     let mut app = app_with(&path);
-    app.editor.overlay = Some(Overlay::RenameInput {
-        path: path.clone(),
-        language: "rust".into(),
-        line: 0,
-        character: 0,
-        buffer: "newName".into(),
-    });
-    assert!(render_to_string(&mut app, 100, 20).contains("Rename"));
-
-    let mut app = app_with(&path);
     app.editor.overlay = Some(Overlay::SaveAsInput {
         buffer: "out.rs".into(),
     });
     assert!(render_to_string(&mut app, 100, 20).contains("Save As"));
 
+    std::fs::remove_file(&path).ok();
+}
+
+/// Rename is the `lsp` plugin's centered prompt now (no more `Overlay::RenameInput`).
+#[test]
+fn renders_rename_prompt() {
+    let path = temp_file("let value = 1;\n");
+    let mut app = app_with(&path);
+    app.editor.lsp_enabled = true; // pretend a server is configured so the prompt opens
+    app.editor.active_document_mut().unwrap().set_caret(4); // on "value"
+    app.exec_id("lsp.rename");
+    assert!(
+        app.editor.prompt.is_some(),
+        "rename opens the plugin's prompt"
+    );
+    let out = render_to_string(&mut app, 100, 20);
+    assert!(
+        out.contains("Rename"),
+        "the rename prompt renders its title"
+    );
+    assert!(
+        out.contains("value"),
+        "the prompt is seeded with the symbol under the caret"
+    );
     std::fs::remove_file(&path).ok();
 }

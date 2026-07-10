@@ -10,6 +10,12 @@ impl App {
         if std::mem::take(&mut self.editor.pending_theme_toggle) {
             self.toggle_theme();
         }
+        // Forward queued LSP requests to the (app-owned) manager, resolving the cursor position
+        // app-side (the plugin only expressed intent).
+        let lsp_reqs = std::mem::take(&mut self.editor.pending_lsp_requests);
+        for kind in lsp_reqs {
+            self.dispatch_lsp_request(kind);
+        }
         // Apply any queued opens/commands/events produced during dispatch.
         let opens: Vec<(PathBuf, Option<usize>)> = std::mem::take(&mut self.editor.pending_opens);
         for (path, line) in opens {
