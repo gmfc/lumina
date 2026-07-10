@@ -64,6 +64,54 @@ fn renders_editor_with_all_decorations() {
 }
 
 #[test]
+fn long_line_scrolls_horizontally_to_follow_caret() {
+    // A line far wider than the viewport, with distinct markers at each end.
+    let path = temp_file("STARThere 1111111111 2222222222 3333333333 4444444444 ENDhere\nsecond\n");
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false; // give the editor the full width
+    app.page_height = 10;
+
+    // A first render populates the laid-out regions that ensure_cursor_visible reads.
+    let text = render_to_string(&mut app, 40, 12);
+    assert!(
+        text.contains("STARThere"),
+        "caret at start: the line's head is visible before scrolling"
+    );
+
+    // Move the caret to end-of-line; the viewport should scroll right to follow it.
+    let end = app.editor.active_document().unwrap().line_len_chars(0);
+    app.editor.active_document_mut().unwrap().set_caret(end);
+    app.ensure_cursor_visible();
+    assert!(
+        app.editor.active_document().unwrap().view.scroll_col > 0,
+        "a long line should scroll horizontally to keep the caret visible"
+    );
+
+    let text = render_to_string(&mut app, 40, 12);
+    assert!(
+        text.contains("ENDhere"),
+        "the caret end of the long line is now visible"
+    );
+    assert!(
+        !text.contains("STARThere"),
+        "the head of the long line is scrolled off the left edge"
+    );
+
+    // Moving back to the line start scrolls the view all the way back to column 0.
+    app.editor.active_document_mut().unwrap().set_caret(0);
+    app.ensure_cursor_visible();
+    assert_eq!(
+        app.editor.active_document().unwrap().view.scroll_col,
+        0,
+        "returning to the line start resets the horizontal scroll"
+    );
+    let text = render_to_string(&mut app, 40, 12);
+    assert!(text.contains("STARThere"), "the head is visible again");
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn renders_welcome_when_no_document_is_open() {
     let path = temp_file("x");
     let mut app = app_with(&path);

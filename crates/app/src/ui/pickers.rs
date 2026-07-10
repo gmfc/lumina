@@ -31,6 +31,7 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
         origin_y: editor_area.y,
         gutter: gutter_width(doc),
         scroll_line: doc.view.scroll_line,
+        scroll_col: doc.view.scroll_col,
         tab_width: doc.tab_width,
         height: editor_area.height,
     };

@@ -47,6 +47,7 @@ fn geo(gutter: u16, scroll: usize, tab: usize) -> PaneGeometry {
         origin_y: 0,
         gutter,
         scroll_line: scroll,
+        scroll_col: 0,
         tab_width: tab,
         height: 100,
     }
@@ -118,6 +119,78 @@ fn screen_click_with_wide_chars() {
     assert_eq!(screen_to_char(&doc, &g, 8, 0), Some(2));
 }
 
+// --- horizontal scroll (long lines) ---------------------------------------
+
+fn hgeo(gutter: u16, scroll_col: usize) -> PaneGeometry {
+    PaneGeometry {
+        origin_x: 0,
+        origin_y: 0,
+        gutter,
+        scroll_line: 0,
+        scroll_col,
+        tab_width: 4,
+        height: 100,
+    }
+}
+
+#[test]
+fn screen_click_accounts_for_hscroll() {
+    let doc = Document::from_str("abcdefghij");
+    // Scrolled right by 3 columns: the leftmost text cell now shows char 'd' (index 3).
+    let g = hgeo(4, 3);
+    assert_eq!(screen_to_char(&doc, &g, 4, 0), Some(3));
+    assert_eq!(screen_to_char(&doc, &g, 6, 0), Some(5));
+}
+
+#[test]
+fn char_to_screen_hidden_when_scrolled_off_left() {
+    let doc = Document::from_str("abcdefghij");
+    let g = hgeo(4, 3);
+    // Chars 0..3 are scrolled off the left edge -> not on screen.
+    for off in 0..3 {
+        assert_eq!(char_to_screen(&doc, &g, off), None);
+    }
+    // Char 3 sits at the first visible text cell (x = gutter).
+    assert_eq!(char_to_screen(&doc, &g, 3), Some((4, 0)));
+    assert_eq!(char_to_screen(&doc, &g, 5), Some((6, 0)));
+}
+
+#[test]
+fn hscroll_round_trips_through_screen() {
+    let doc = Document::from_str("the quick brown fox jumps");
+    let g = hgeo(4, 7);
+    for off in 0..doc.line_len_chars(0) {
+        if let Some((x, y)) = char_to_screen(&doc, &g, off) {
+            assert_eq!(screen_to_char(&doc, &g, x, y), Some(off));
+        }
+    }
+}
+
+#[test]
+fn scroll_to_col_follows_caret_both_edges() {
+    let mut v = ViewState::default();
+    // Caret near the start keeps the view pinned to column 0.
+    v.scroll_to_col(0, 20);
+    assert_eq!(v.scroll_col, 0);
+    // Caret past the right edge scrolls right so it stays visible.
+    v.scroll_to_col(60, 20);
+    assert!(v.scroll_col > 0);
+    assert!(60 >= v.scroll_col && 60 < v.scroll_col + 20);
+    // Caret back near the start scrolls left, returning to 0 at the very start.
+    v.scroll_to_col(0, 20);
+    assert_eq!(v.scroll_col, 0);
+}
+
+#[test]
+fn scroll_to_col_noop_on_zero_width() {
+    let mut v = ViewState {
+        scroll_col: 5,
+        ..Default::default()
+    };
+    v.scroll_to_col(100, 0);
+    assert_eq!(v.scroll_col, 5);
+}
+
 #[test]
 fn char_to_screen_inverts_click() {
     let doc = Document::from_str("abc\n\tdef\n世x");
@@ -126,6 +199,7 @@ fn char_to_screen_inverts_click() {
         origin_y: 1,
         gutter: 4,
         scroll_line: 0,
+        scroll_col: 0,
         tab_width: 4,
         height: 100,
     };
