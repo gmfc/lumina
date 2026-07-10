@@ -78,6 +78,59 @@ fn clipboard_copy_paste() {
 }
 
 #[test]
+fn queued_command_resolves_through_full_precedence() {
+    // Regression: a plugin (the palette) runs the chosen row via `Host::execute`, which queues the
+    // id onto `pending_commands`. The drain must resolve it through the full `exec_id` precedence
+    // (registry → `command_for_id` → app-level stringly ids), not just the registry — otherwise
+    // app-level ids like `view.settings` are silently dropped.
+    let path = temp_file("x");
+    let mut app = app_with(&path);
+    assert!(!app.settings_active());
+    app.editor
+        .pending_commands
+        .push("view.settings".to_string()); // mirrors Host::execute
+    app.drain_workers();
+    assert!(
+        app.settings_active(),
+        "an app-level command queued via Host::execute must run"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn palette_opens_settings_end_to_end() {
+    // The user-facing path: pick "Preferences: Open Settings" in the command palette. It activates
+    // via Host::execute → pending_commands → drain, so this guards the whole chain, not just the
+    // drain routing above. Before the fix, selecting it did nothing.
+    let path = temp_file("x");
+    let mut app = app_with(&path);
+    app.exec_id("view.commandPalette");
+    for c in "settings".chars() {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    // Locate the Open Settings row in the filtered list and step the selection onto it (don't
+    // assume a fuzzy rank), then activate it.
+    let idx = app
+        .editor
+        .picker
+        .as_ref()
+        .unwrap()
+        .active_items()
+        .iter()
+        .position(|i| i.id == "view.settings")
+        .expect("Open Settings is listed in the palette");
+    for _ in 0..idx {
+        app.on_key(KeyEvent::from(KeyCode::Down));
+    }
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+    assert!(
+        app.settings_active(),
+        "activating Open Settings from the palette must open the Settings tab"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn theme_toggles() {
     let path = temp_file("x");
     let mut app = app_with(&path);
