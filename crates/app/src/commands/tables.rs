@@ -50,7 +50,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("lsp.documentSymbols", "Go: Symbols in File…"),
         // git.nextHunk / git.prevHunk titles come from the `git-nav` plugin via the registry
         ("view.toggleSidebar", "View: Toggle Sidebar"),
-        ("view.toggleTheme", "View: Toggle Light/Dark Theme"),
+        // view.toggleTheme title comes from the `theme` plugin.
         ("terminal.toggle", "Terminal: Toggle Panel"),
         ("terminal.new", "Terminal: New Terminal"),
         ("terminal.close", "Terminal: Close Active Terminal"),

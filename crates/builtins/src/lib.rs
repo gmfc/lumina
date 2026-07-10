@@ -19,6 +19,7 @@ pub mod git_nav;
 pub mod multicursor;
 pub mod palette;
 pub mod project_search;
+pub mod theme;
 
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
 /// config can filter the list to disable any of them (the litmus test for self-hosting).
@@ -40,5 +41,6 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(find::FindReplacePlugin::default()),
         Box::new(palette::PalettePlugin::default()),
         Box::new(project_search::ProjectSearchPlugin::default()),
+        Box::new(theme::ThemePlugin),
     ]
 }

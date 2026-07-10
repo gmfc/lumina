@@ -61,6 +61,8 @@ pub struct EditorState {
     /// Sender to the app's bounded worker channel, so `Host::spawn_job` can run plugin work off
     /// the main thread and fold the result back as `Event::JobComplete`. Set at construction.
     pub job_tx: Option<crate::worker::WorkerTx>,
+    /// Set by `Host::toggle_theme`; the app flips its (app-owned) theme on the next drain.
+    pub pending_theme_toggle: bool,
     /// Active modal overlay, if any.
     pub overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
@@ -108,6 +110,7 @@ impl EditorState {
             pending_commands: Vec::new(),
             pending_opens: Vec::new(),
             job_tx: None,
+            pending_theme_toggle: false,
             overlay: None,
             highlighters: HashMap::new(),
             decorations: HashMap::new(),
@@ -349,6 +352,10 @@ impl Host for EditorState {
 
     fn notify(&mut self, message: String) {
         self.status_message = Some(message);
+    }
+
+    fn toggle_theme(&mut self) {
+        self.pending_theme_toggle = true;
     }
 
     fn execute(&mut self, command_id: &str) {

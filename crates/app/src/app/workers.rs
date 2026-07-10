@@ -6,6 +6,10 @@ use super::*;
 
 impl App {
     pub(super) fn drain_workers(&mut self) {
+        // Apply a queued appearance toggle (the theme is app-owned render state).
+        if std::mem::take(&mut self.editor.pending_theme_toggle) {
+            self.toggle_theme();
+        }
         // Apply any queued opens/commands/events produced during dispatch.
         let opens: Vec<(PathBuf, Option<usize>)> = std::mem::take(&mut self.editor.pending_opens);
         for (path, line) in opens {

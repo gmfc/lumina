@@ -21,7 +21,6 @@ impl App {
         }
         match id {
             "config.reload" => self.reload_config(),
-            "view.toggleTheme" => self.toggle_theme(),
             "vim.enable" => self.set_vim(true),
             "vim.disable" => self.set_vim(false),
             "vim.toggle" => self.set_vim(self.editor.vim.is_none()),
