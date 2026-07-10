@@ -29,9 +29,14 @@ impl App {
                 self.goto_line(line);
             }
         }
+        // A plugin can queue *any* command id via `Host::execute` (the palette does this for the
+        // selected row). Resolve each through the full `exec_id` precedence — registry, then the
+        // `command_for_id` editing table, then the app-level stringly ids (`view.settings`,
+        // `config.reload`, `vim.*`) — not just the registry, or those last two tiers get silently
+        // dropped (e.g. "Open Settings" from the palette did nothing).
         let cmds: Vec<String> = std::mem::take(&mut self.editor.pending_commands);
         for id in cmds {
-            self.registry.dispatch_command(&id, &mut self.editor);
+            self.exec_id(&id);
         }
         // Coalesce duplicate notifications from this tick: a burst of external changes (e.g. a
         // build touching files, or a formatter rewriting several open tabs) can enqueue the same
