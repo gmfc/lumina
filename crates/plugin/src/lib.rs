@@ -11,6 +11,7 @@
 pub mod contribution;
 pub mod event;
 pub mod host;
+pub mod input;
 pub mod registry;
 pub mod runtime;
 pub mod wasm;
@@ -22,4 +23,5 @@ pub use contribution::{
 };
 pub use event::Event;
 pub use host::{Host, PanelContent, PanelLine, Span};
+pub use input::{Key, KeyCode};
 pub use registry::{Plugin, Registry};
