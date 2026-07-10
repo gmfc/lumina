@@ -31,4 +31,8 @@ pub enum Event {
         doc: Option<DocId>,
         diagnostics: Vec<crate::lsp::LspDiagnostic>,
     },
+    /// The language server answered a completion request with these items (translated from
+    /// `editor-lsp` at the app boundary). Delivered to the completion plugin, which anchors and
+    /// filters them into a caret popup.
+    LspCompletion(Vec<crate::lsp::LspCompletionItem>),
 }

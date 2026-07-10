@@ -23,7 +23,7 @@ mod select;
 mod smart;
 mod undo;
 
-pub use apply::edit_selections;
+pub use apply::{edit_selections, selection_edit_transaction};
 pub use hygiene::apply_save_hygiene;
 pub use insert::{
     delete_backward, delete_forward, delete_word_backward, insert_char, insert_newline, insert_text,

@@ -72,6 +72,40 @@ pub struct Prompt {
     pub placement: PromptPlacement,
 }
 
+/// One row of a caret-anchored popup (a completion candidate, a hover line, …).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PopupRow {
+    /// A short kind glyph/abbreviation shown before the label (e.g. "ƒ", "x").
+    pub glyph: String,
+    pub label: String,
+    pub detail: Option<String>,
+}
+
+impl PopupRow {
+    pub fn new(glyph: impl Into<String>, label: impl Into<String>, detail: Option<String>) -> Self {
+        PopupRow {
+            glyph: glyph.into(),
+            label: label.into(),
+            detail,
+        }
+    }
+}
+
+/// A caret-anchored floating list a plugin publishes (the completion popup today). The app owns
+/// the on-screen positioning (`char_to_screen` on `anchor`, flip-above, scroll); the plugin
+/// supplies only the anchor char offset + the rows + the selection, and receives navigation keys
+/// via [`crate::Plugin::on_popup_key`] while it is up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Popup {
+    /// Owning plugin id — routes keys back to it while the popup is up.
+    pub owner: String,
+    /// Char offset the popup is anchored to (the start of the replaced identifier).
+    pub anchor: usize,
+    pub rows: Vec<PopupRow>,
+    /// Highlighted row index into `rows`.
+    pub selected: usize,
+}
+
 impl Prompt {
     /// An empty prompt owned by `owner`'s `prompt_id`, drawn at `placement`.
     pub fn new(
