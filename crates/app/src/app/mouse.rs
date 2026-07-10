@@ -7,6 +7,7 @@ use super::*;
 impl App {
     pub(super) fn on_mouse(&mut self, m: crossterm::event::MouseEvent) {
         let (col, row) = (m.column, m.row);
+        self.reconcile_settings();
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_left_down(col, row, m.modifiers),
             MouseEventKind::Down(MouseButton::Middle) => self.mouse_middle_down(col, row),
@@ -31,6 +32,11 @@ impl App {
     ) {
         if in_rect(self.regions.editor, col, row) {
             self.editor.focus = Focus::Editor;
+            // The Settings tab routes editor-area clicks to its widgets.
+            if self.settings_active() {
+                self.handle_settings_click(col, row);
+                return;
+            }
             if mods.contains(crossterm::event::KeyModifiers::ALT) {
                 // Alt+Click adds a cursor (multi-cursor).
                 if let Some(off) = self.editor_offset_at(col, row) {

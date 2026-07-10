@@ -89,6 +89,11 @@ pub struct App {
     pub panel: crate::terminal::TerminalPanel,
     /// Paths of recently closed tabs, newest last — the "reopen closed editor" stack.
     closed_tabs: Vec<PathBuf>,
+    /// The Settings tab's model + UI state, when a settings tab is open.
+    pub settings: Option<crate::settings::SettingsView>,
+    /// The `DocId` of the empty buffer backing the settings tab (so it lives in the
+    /// normal tab machinery — switching, closing — while rendering a custom view).
+    settings_doc: Option<editor_core::DocId>,
 }
 
 mod completion;
@@ -106,6 +111,7 @@ mod overlay;
 mod palette;
 mod panel;
 mod search_ui;
+mod settings;
 mod vim;
 mod workers;
 
