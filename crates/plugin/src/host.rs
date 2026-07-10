@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use editor_core::{DocId, Selections, Transaction, Workspace};
 
+use crate::decoration::DecorationSet;
+
 /// A styled run of text within a panel line. `style` is a semantic key the theme maps to
 /// colors (e.g. "dir", "file", "match", "dim").
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +110,15 @@ pub trait Host {
     fn changed_lines(&self, _doc: DocId) -> Vec<usize> {
         Vec::new()
     }
+
+    /// Publish `doc`'s decorations for a named `layer` (e.g. `"find.match"`, `"lsp.diag"`) — the
+    /// styled char spans + gutter marks the pure renderer paints. Replaces the whole set for that
+    /// layer; `clear_decorations` drops it. Default no-ops, so a host that doesn't render (tests,
+    /// external guests) need not implement them; the app overrides both.
+    fn set_decorations(&mut self, _doc: DocId, _layer: &str, _decos: DecorationSet) {}
+
+    /// Drop a previously-published decoration `layer` for `doc`.
+    fn clear_decorations(&mut self, _doc: DocId, _layer: &str) {}
 
     /// Set a panel's rendered content.
     fn set_panel(&mut self, panel_id: &str, content: PanelContent);

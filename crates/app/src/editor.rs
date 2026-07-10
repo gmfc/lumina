@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use editor_core::{DocId, Document, Selections, Transaction, Workspace};
 use editor_plugin::event::Event;
 use editor_plugin::host::DirEntry;
-use editor_plugin::{Host, PanelContent};
+use editor_plugin::{DecorationSet, Host, PanelContent};
 
 /// Which region has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +61,10 @@ pub struct EditorState {
     pub overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
     pub highlighters: HashMap<DocId, editor_syntax::DocHighlighter>,
+    /// Per-document, per-layer decorations (styled spans + gutter marks) published by plugins
+    /// via `Host::set_decorations`. The renderer merges these layers on top of syntax; keeping
+    /// them here (not on the plugin) keeps render a pure function of state (invariant #8).
+    pub decorations: HashMap<DocId, HashMap<String, DecorationSet>>,
     /// Active in-file find/replace widget, if open.
     pub find: Option<crate::find::FindState>,
     /// Active fuzzy picker (command palette / quick open / goto line), if open.
@@ -96,6 +100,7 @@ impl EditorState {
             pending_opens: Vec::new(),
             overlay: None,
             highlighters: HashMap::new(),
+            decorations: HashMap::new(),
             find: None,
             picker: None,
             diagnostics: HashMap::new(),
@@ -233,6 +238,27 @@ impl Host for EditorState {
         lines
     }
 
+    fn set_decorations(&mut self, doc: DocId, layer: &str, decos: DecorationSet) {
+        // An empty set is a clear: don't leave a dead layer the renderer must skip every frame.
+        if decos.is_empty() {
+            self.clear_decorations(doc, layer);
+            return;
+        }
+        self.decorations
+            .entry(doc)
+            .or_default()
+            .insert(layer.to_string(), decos);
+    }
+
+    fn clear_decorations(&mut self, doc: DocId, layer: &str) {
+        if let Some(layers) = self.decorations.get_mut(&doc) {
+            layers.remove(layer);
+            if layers.is_empty() {
+                self.decorations.remove(&doc);
+            }
+        }
+    }
+
     fn set_panel(&mut self, panel_id: &str, content: PanelContent) {
         self.panels.insert(panel_id.to_string(), content);
     }
@@ -247,5 +273,32 @@ impl Host for EditorState {
 
     fn execute(&mut self, command_id: &str) {
         self.pending_commands.push(command_id.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use editor_plugin::{Decoration, DecorationSet};
+
+    #[test]
+    fn set_and_clear_decorations() {
+        let mut ed = EditorState::new(std::path::PathBuf::from("."));
+        let id = ed.workspace.open_document(Document::from_str("hello"));
+        let set = DecorationSet::spans(vec![Decoration::new((0, 3), "find.match")]);
+
+        ed.set_decorations(id, "find", set.clone());
+        assert_eq!(ed.decorations[&id].get("find"), Some(&set));
+
+        // Publishing an empty set clears the layer — and the doc entry when it was the last one.
+        ed.set_decorations(id, "find", DecorationSet::default());
+        assert!(!ed.decorations.contains_key(&id));
+
+        // clear_decorations removes just the named layer, keeping the rest.
+        ed.set_decorations(id, "find", set.clone());
+        ed.set_decorations(id, "sel", set);
+        ed.clear_decorations(id, "find");
+        let layers = &ed.decorations[&id];
+        assert!(!layers.contains_key("find") && layers.contains_key("sel"));
     }
 }

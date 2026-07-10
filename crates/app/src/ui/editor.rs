@@ -9,6 +9,7 @@ use ratatui::Frame;
 
 use editor_core::Document;
 use editor_lsp::{Diagnostic, Severity};
+use editor_plugin::{Decoration, GutterMark};
 use editor_syntax::DocHighlighter;
 
 use crate::app::App;
@@ -36,6 +37,11 @@ struct EditorCtx<'a> {
     sel_bg: Color,
     gutter_fg: Color,
     find_matches: &'a [(usize, usize)],
+    /// Published decoration spans for the active doc, flattened across layers in deterministic
+    /// (layer-name) order. Painted over syntax; empty until a plugin publishes a layer.
+    deco_spans: Vec<&'a Decoration>,
+    /// Published gutter marks for the active doc, flattened across layers (same order).
+    deco_gutter: Vec<&'a GutterMark>,
     diags: &'a [Diagnostic],
     sels: &'a [editor_core::Selection],
     /// `(bracket, partner)` char offsets to highlight, precomputed in `EditorState`.
@@ -47,6 +53,27 @@ struct EditorCtx<'a> {
     vim_visual_char: bool,
     /// In Vim linewise Visual mode: the whole-line `[start, end)` char range to tint.
     vim_visual_lines: Option<(usize, usize)>,
+}
+
+/// Flatten the active document's published decoration layers into span + gutter-mark lists, in
+/// deterministic (layer-name) order so precedence is stable frame to frame. Empty until a plugin
+/// publishes a layer via `Host::set_decorations`.
+fn collect_decorations(
+    app: &App,
+    active: Option<editor_core::DocId>,
+) -> (Vec<&Decoration>, Vec<&GutterMark>) {
+    let mut spans = Vec::new();
+    let mut gutter = Vec::new();
+    if let Some(layers) = active.and_then(|id| app.editor.decorations.get(&id)) {
+        let mut keys: Vec<&String> = layers.keys().collect();
+        keys.sort();
+        for k in keys {
+            let set = &layers[k];
+            spans.extend(set.spans.iter());
+            gutter.extend(set.gutter.iter());
+        }
+    }
+    (spans, gutter)
 }
 
 /// The editor pane: gutter + line numbers + text + selections + cursor.
@@ -62,6 +89,7 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     let gutter = gutter_width(doc);
     // Syntax highlighting for the active document (cached, viewport-only).
     let active_id = app.editor.workspace.active_doc();
+    let (deco_spans, deco_gutter) = collect_decorations(app, active_id);
     let ctx = EditorCtx {
         doc,
         area,
@@ -80,6 +108,8 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
             .as_ref()
             .map(|find| find.matches.as_slice())
             .unwrap_or(&[]),
+        deco_spans,
+        deco_gutter,
         // LSP diagnostics for the active document.
         diags: active_id
             .and_then(|id| app.editor.diagnostics.get(&id))
@@ -175,6 +205,9 @@ fn render_editor_row(
     // Git change-bar in the gutter's separator column, just left of the text (plan §4.1).
     draw_git_bar(buf, ctx, line_idx, y);
 
+    // Published gutter marks (from decoration layers), drawn in the leftmost gutter column.
+    draw_deco_gutter(buf, ctx, line_idx, y);
+
     // Resolve syntax colors per char (shortest span wins for overlaps).
     let char_styles = ctx
         .hl
@@ -249,6 +282,20 @@ fn draw_git_bar(buf: &mut ratatui::buffer::Buffer, ctx: &EditorCtx, line_idx: us
     }
 }
 
+/// Draw published gutter marks (from decoration layers) for `line_idx` in the leftmost gutter
+/// column. Later layers overwrite earlier ones on the same line (deterministic layer order).
+fn draw_deco_gutter(buf: &mut ratatui::buffer::Buffer, ctx: &EditorCtx, line_idx: usize, y: u16) {
+    if ctx.gutter == 0 {
+        return;
+    }
+    for mark in ctx.deco_gutter.iter().filter(|m| m.line == line_idx) {
+        if let Some(cell) = cell_at(buf, ctx.area.x, y) {
+            cell.set_char(mark.glyph);
+            cell.set_style(ctx.theme.decoration_style(&mark.style));
+        }
+    }
+}
+
 /// Past EOF: draw a tilde like Vim.
 fn draw_eof_tilde(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16) {
     if let Some(cell) = cell_at(buf, x, y) {
@@ -305,6 +352,14 @@ fn cell_style(
         .copied()
         .flatten()
         .unwrap_or_else(|| Style::default().bg(CLR_BG));
+    // Published decoration layers (find/diagnostics/… as features migrate to plugins). Painted
+    // over syntax and under the bespoke highlights that still live below, so a migrated layer
+    // lands in the same visual slot the hardcoded path used. Deterministic layer order.
+    for d in &ctx.deco_spans {
+        if char_off >= d.range.0 && char_off < d.range.1 {
+            style = style.patch(ctx.theme.decoration_style(&d.style));
+        }
+    }
     let in_match = ctx
         .find_matches
         .iter()

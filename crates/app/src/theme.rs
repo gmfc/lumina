@@ -178,6 +178,20 @@ impl Theme {
         }
     }
 
+    /// Resolve a decoration layer's semantic `style` key to a concrete [`Style`] the renderer
+    /// patches onto a cell. Most keys map through [`Self::style_for`] (fg + modifier); a few
+    /// editor decorations need an effect the capture map can't carry (a background tint), so
+    /// they're handled explicitly here — keeping all color policy in the theme while plugins
+    /// speak only in semantic keys.
+    pub fn decoration_style(&self, key: &str) -> Style {
+        match key {
+            // The find-match highlight is a background tint; the capture map only carries fg, so
+            // it lives here. Matches the former hardcoded `CLR_MATCH`.
+            "find.match" => Style::default().bg(Color::Rgb(90, 74, 30)),
+            _ => self.style_for(key).unwrap_or_default(),
+        }
+    }
+
     /// Merge overrides parsed from a TOML `[theme]`-style table: `capture = "#rrggbb"`.
     pub fn apply_toml(&mut self, toml_src: &str) -> Result<(), String> {
         let value: toml::Value = toml_src.parse().map_err(|e| format!("{e}"))?;

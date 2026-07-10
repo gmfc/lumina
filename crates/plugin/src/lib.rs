@@ -9,6 +9,7 @@
 //! through this API.
 
 pub mod contribution;
+pub mod decoration;
 pub mod event;
 pub mod host;
 pub mod input;
@@ -21,6 +22,7 @@ pub use contribution::{
     Contributions, KeybindingSpec, LanguageSpec, PanelLocation, PanelSpec, StatusItemSpec,
     ThemeSpec,
 };
+pub use decoration::{Decoration, DecorationSet, GutterMark};
 pub use event::Event;
 pub use host::{Host, PanelContent, PanelLine, Span};
 pub use input::{Key, KeyCode};
