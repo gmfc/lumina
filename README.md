@@ -88,7 +88,7 @@ cargo run -p editor-app -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+P` quick-open (files; type `>` for the command palette) · `Ctrl+F`/`Ctrl+H` find/replace ·
 `Ctrl+Shift+F` project search · `Ctrl+B` toggle sidebar · `Ctrl+D` add cursor at next match ·
 `Ctrl+F2` select all occurrences · `Shift+Alt+I` cursors to line ends · `Alt+Click` add cursor ·
-`Ctrl+G` go to line · `Ctrl+\` jump to matching bracket · `Ctrl+S` save · `Ctrl+K S` save all ·
+`Ctrl+G` go to line · `Ctrl+,` settings · `Ctrl+\` jump to matching bracket · `Ctrl+S` save · `Ctrl+K S` save all ·
 `Ctrl+K Ctrl+S` save as · `Ctrl+N` new file · `Ctrl+W` close tab · `Ctrl+K Ctrl+W` close all ·
 `Ctrl+Shift+T` reopen closed editor · `Ctrl+K Ctrl+K` delete line ·
 `Shift+Alt+Down`/`Shift+Alt+Up` copy line down/up · `Alt+Down`/`Alt+Up` move line ·
@@ -145,8 +145,20 @@ chords fall through in Normal mode too, so `Ctrl+S`, `Ctrl+P`, `Ctrl+Shift+P`, e
 their usual thing. Not (yet) implemented: macros (`q`/`@`), marks, jump/change lists, tag
 objects (`it`/`at`), the `=`/`gq` reformat operators, and regex in `:s` (it's literal).
 
+## Settings
+
+Prefer a UI? Open the **Settings** tab with `Ctrl+,` (or the command palette →
+*Preferences: Open Settings*). It renders as a normal editor tab with sections and typed
+widgets — checkboxes, `‹ … ›` steppers/dropdowns, and text fields — for every `[settings]`
+option plus a **Plugins** section to enable/disable each installed plugin. Navigate with the
+arrows (or `j`/`k`), toggle with `Space`, adjust with `←`/`→`, `Enter` to open a dropdown or
+edit a field, or just click. Changes apply live and are written straight back to
+`config.toml` (other sections you hand-wrote are preserved; comments are not). Plugin
+enable/disable takes effect on the next launch.
+
 ## Configuration
 
+Everything the Settings tab writes can also be edited by hand in
 `~/.config/lumina/config.toml`:
 
 ```toml

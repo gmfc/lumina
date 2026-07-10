@@ -19,6 +19,8 @@ impl App {
         for dir in external_plugin_dirs(&editor.workspace.root) {
             plugins.extend(editor_plugin::runtime::load_dir(&dir));
         }
+        // Honor plugins the user disabled in `[plugins]` (Settings → Plugins).
+        plugins.retain(|p| config.is_plugin_enabled(p.id()));
         let mut registry = Registry::with_plugins(plugins);
         registry.activate_all(&mut editor);
 
@@ -103,6 +105,8 @@ impl App {
             lsp_sent_revision: std::collections::HashMap::new(),
             panel,
             closed_tabs: Vec::new(),
+            settings: None,
+            settings_doc: None,
         })
     }
 

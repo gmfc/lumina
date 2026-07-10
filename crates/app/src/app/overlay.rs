@@ -17,6 +17,7 @@ impl App {
             "vim.enable" => self.set_vim(true),
             "vim.disable" => self.set_vim(false),
             "vim.toggle" => self.set_vim(self.editor.vim.is_none()),
+            "view.settings" => self.open_settings(),
             other => {
                 if !self.registry.dispatch_command(other, &mut self.editor) {
                     self.editor.status_message = Some(format!("Unknown command: {other}"));

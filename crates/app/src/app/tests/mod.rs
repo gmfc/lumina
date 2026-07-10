@@ -14,6 +14,7 @@ mod palette_theme;
 mod plugins;
 mod render;
 mod render_overlays;
+mod settings;
 mod sync;
 mod terminal;
 mod vim;

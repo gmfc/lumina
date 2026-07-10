@@ -35,6 +35,9 @@ pub struct Config {
     pub terminal_height: u16,
     /// `language → server command (split into program + args)`.
     pub lsp_servers: std::collections::HashMap<String, Vec<String>>,
+    /// Plugin ids the user has disabled (`[plugins] "<id>" = false`). Applied when
+    /// plugins load, so the change takes effect on the next launch / config reload.
+    pub disabled_plugins: Vec<String>,
 }
 
 impl Default for Config {
@@ -55,6 +58,7 @@ impl Default for Config {
             terminal_shell: None,
             terminal_height: 12,
             lsp_servers: std::collections::HashMap::new(),
+            disabled_plugins: Vec::new(),
         }
     }
 }
@@ -87,8 +91,74 @@ impl Config {
         if let Some(lsp) = value.get("lsp").and_then(|v| v.as_table()) {
             cfg.apply_lsp(lsp);
         }
+        if let Some(plugins) = value.get("plugins").and_then(|v| v.as_table()) {
+            for (id, enabled) in plugins {
+                if enabled.as_bool() == Some(false) {
+                    cfg.disabled_plugins.push(id.clone());
+                }
+            }
+        }
 
         Ok(cfg)
+    }
+
+    /// True unless the user disabled the plugin `id` in `[plugins]`.
+    pub fn is_plugin_enabled(&self, id: &str) -> bool {
+        !self.disabled_plugins.iter().any(|d| d == id)
+    }
+
+    /// Serialize the current settings back to `path`, preserving any `[keys]`,
+    /// `[lsp]`, and `[theme]` sections already there (the `[settings]` and
+    /// `[plugins]` tables are rewritten from this value). Comments are not
+    /// preserved — `toml` has no formatting round-trip.
+    pub fn write_to(&self, path: &std::path::Path) -> Result<(), String> {
+        // Start from the existing file so unmanaged sections survive.
+        let mut root: toml::Table = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.parse::<toml::Table>().ok())
+            .unwrap_or_default();
+
+        let mut settings = toml::Table::new();
+        let entries: [(&str, toml::Value); 12] = [
+            ("tab_width", (self.tab_width as i64).into()),
+            ("sidebar_width", (self.sidebar_width as i64).into()),
+            ("follow_mode", self.follow_mode.into()),
+            ("poll_watch", self.poll_watch.into()),
+            ("auto_pairs", self.auto_pairs.into()),
+            ("auto_indent", self.auto_indent.into()),
+            (
+                "trim_trailing_whitespace",
+                self.trim_trailing_whitespace.into(),
+            ),
+            ("insert_final_newline", self.insert_final_newline.into()),
+            ("git_gutter", self.git_gutter.into()),
+            ("icons", self.icons.into()),
+            ("vim", self.vim.into()),
+            ("terminal_height", (self.terminal_height as i64).into()),
+        ];
+        for (k, v) in entries {
+            settings.insert(k.to_string(), v);
+        }
+        if let Some(shell) = &self.terminal_shell {
+            settings.insert("terminal_shell".to_string(), shell.clone().into());
+        }
+        root.insert("settings".to_string(), settings.into());
+
+        if self.disabled_plugins.is_empty() {
+            root.remove("plugins");
+        } else {
+            let mut plugins = toml::Table::new();
+            for id in &self.disabled_plugins {
+                plugins.insert(id.clone(), false.into());
+            }
+            root.insert("plugins".to_string(), plugins.into());
+        }
+
+        let out = toml::to_string_pretty(&root).map_err(|e| e.to_string())?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(path, out).map_err(|e| e.to_string())
     }
 
     /// Merge the `[settings]` table, clamping numeric fields to sane ranges.
@@ -202,6 +272,39 @@ mod tests {
             .keybindings
             .iter()
             .any(|(c, i)| c == "ctrl+s" && i == "file.saveAll"));
+    }
+
+    #[test]
+    fn write_to_roundtrips_and_preserves_other_sections() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("lumina_cfg_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        // Seed a [keys] section the writer must preserve.
+        std::fs::write(&path, "[keys]\n\"ctrl+k ctrl+u\" = \"shout.line\"\n").unwrap();
+
+        let cfg = Config {
+            vim: true,
+            tab_width: 2,
+            auto_pairs: false,
+            terminal_shell: Some("/bin/zsh".into()),
+            disabled_plugins: vec!["todo".into()],
+            ..Config::default()
+        };
+        cfg.write_to(&path).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let reread = Config::from_toml_str(&raw).unwrap();
+        assert!(reread.vim);
+        assert_eq!(reread.tab_width, 2);
+        assert!(!reread.auto_pairs);
+        assert_eq!(reread.terminal_shell.as_deref(), Some("/bin/zsh"));
+        assert!(reread.disabled_plugins.iter().any(|d| d == "todo"));
+        assert!(!reread.is_plugin_enabled("todo"));
+        assert!(reread.is_plugin_enabled("explorer"));
+        // The unmanaged [keys] section survived the rewrite.
+        assert!(raw.contains("shout.line"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

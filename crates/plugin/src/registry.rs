@@ -110,6 +110,11 @@ impl Registry {
         self.commands.iter().map(|c| c.id.clone())
     }
 
+    /// The ids of every loaded plugin (built-in and external), in load order.
+    pub fn plugin_ids(&self) -> impl Iterator<Item = &str> + '_ {
+        self.plugins.iter().map(|p| p.id())
+    }
+
     /// All contributed panel ids.
     pub fn panel_ids(&self) -> impl Iterator<Item = String> + '_ {
         self.panels.iter().map(|p| p.id.clone())

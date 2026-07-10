@@ -21,12 +21,15 @@ pub(super) fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     }
     for (i, &id) in ws.tabs.iter().enumerate() {
         let doc = &ws.documents[id];
-        let name = doc
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "untitled".into());
+        let name = if app.is_settings_doc(id) {
+            "⚙ Settings".to_string()
+        } else {
+            doc.path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "untitled".into())
+        };
         let marker = if doc.external_conflict.is_some() {
             "⚠"
         } else if doc.dirty {

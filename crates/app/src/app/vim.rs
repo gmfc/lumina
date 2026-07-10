@@ -125,7 +125,8 @@ impl App {
     /// `false` lets it fall through to the normal chord keymap (so global shortcuts
     /// like Ctrl+S keep working, and Insert-mode text still reaches the editor).
     pub(super) fn handle_vim_key(&mut self, key: KeyEvent) -> bool {
-        if self.editor.vim.is_none() || self.editor.focus != Focus::Editor {
+        if self.editor.vim.is_none() || self.editor.focus != Focus::Editor || self.settings_active()
+        {
             return false;
         }
         let mode = self.vim().mode;

@@ -21,14 +21,18 @@ mod editor;
 mod overlays;
 mod panel;
 mod pickers;
+mod settings;
 mod sidebar;
 mod util;
+
+pub(crate) use settings::settings_entry_at;
 
 use chrome::{render_status, render_tabs};
 use editor::render_editor;
 use overlays::{render_find, render_overlay};
 use panel::render_terminal_panel;
 use pickers::{render_completion, render_picker, render_search};
+use settings::render_settings;
 use sidebar::render_sidebar;
 
 /// Draw one full frame.
@@ -67,7 +71,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
 
     render_tabs(f, app, tabs_area);
-    render_editor(f, app, editor_area);
+    if app.settings_active() {
+        render_settings(f, app, editor_area);
+    } else {
+        render_editor(f, app, editor_area);
+    }
     render_status(f, app, status_area);
 
     // The terminal dock draws after the editor so its cursor wins when the panel is focused.

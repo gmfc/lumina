@@ -8,6 +8,9 @@ impl App {
     pub(super) fn on_key(&mut self, key: crossterm::event::KeyEvent) {
         use crate::keymap::{Chord, Resolve};
 
+        // Drop stale Settings state if its tab was closed.
+        self.reconcile_settings();
+
         // Modal captures, in priority order.
         if self.handle_modal_key(key) {
             return;
@@ -23,6 +26,15 @@ impl App {
         }
         // Sidebar focus: arrows/enter drive the explorer; Esc returns to the editor.
         if self.editor.focus == Focus::Sidebar && self.handle_sidebar_key(key) {
+            return;
+        }
+        // Settings tab: its widgets consume nav/toggle/edit keys; un-owned chords
+        // (Ctrl+W, Ctrl+P, …) fall through to the keymap below.
+        if self.settings_active()
+            && self.editor.focus == Focus::Editor
+            && self.handle_settings_key(key)
+        {
+            self.pending.clear();
             return;
         }
         // Vim modal layer (when enabled): consumes normal/visual keys and Esc-to-normal,
@@ -143,7 +155,7 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
         let single = self.pending.len() == 1;
         self.pending.clear();
-        if !(single && self.editor.focus == Focus::Editor) {
+        if !(single && self.editor.focus == Focus::Editor) || self.settings_active() {
             return;
         }
         if let KeyCode::Char(c) = key.code {
