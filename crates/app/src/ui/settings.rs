@@ -76,94 +76,113 @@ pub(super) fn render_settings(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let bg = Style::default().bg(Color::Rgb(24, 26, 31));
-    // Paint the whole pane background.
     f.render_widget(Clear, area);
     let buf = f.buffer_mut();
-    for y in area.y..area.y + area.height {
-        put_str(
-            buf,
-            area.x,
-            y,
-            &" ".repeat(area.width as usize),
-            bg,
-            area.x + area.width,
-        );
-    }
+    let max_x = area.x + area.width;
 
-    // Title.
+    paint_background(buf, area, bg);
     put_str(
         buf,
         area.x + 1,
         area.y,
         "⚙  Settings",
         bg.fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
-        area.x + area.width,
+        max_x,
     );
 
-    // List.
     let la = list_area(area);
     let rows = la.height as usize;
     let scroll = scroll_offset(view, rows);
-    let max_x = area.x + area.width;
     for (i, entry) in view.entries.iter().enumerate().skip(scroll).take(rows) {
         let y = la.y + (i - scroll) as u16;
-        match entry {
-            Entry::Header(title) => {
-                put_str(
-                    buf,
-                    area.x + 1,
-                    y,
-                    &title.to_uppercase(),
-                    bg.fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
-                    max_x,
-                );
-            }
-            Entry::Item(item) => {
-                let selected = i == view.selected;
-                let row_style = if selected {
-                    Style::default().bg(CLR_SEL).fg(Color::White)
-                } else {
-                    bg.fg(Color::Gray)
-                };
-                // Fill the row so the selection bar spans the pane.
-                put_str(
-                    buf,
-                    area.x,
-                    y,
-                    &" ".repeat(area.width as usize),
-                    row_style,
-                    max_x,
-                );
-                let marker = if selected { "▸ " } else { "  " };
-                let mut label = format!("{marker}{}", item.label);
-                let w = label.chars().count();
-                if w < LABEL_COL {
-                    label.push_str(&" ".repeat(LABEL_COL - w));
-                }
-                // The value, or the live edit buffer for the focused field.
-                let value = match (selected, &view.editing) {
-                    (true, Some(buf)) => format!("{buf}▏"),
-                    _ => widget_text(&item.widget),
-                };
-                let val_style = if selected {
-                    row_style.add_modifier(Modifier::BOLD)
-                } else {
-                    row_style.fg(CLR_ACCENT)
-                };
-                put_str(buf, area.x + 3, y, &label, row_style, max_x);
-                put_str(
-                    buf,
-                    area.x + 3 + LABEL_COL as u16,
-                    y,
-                    &value,
-                    val_style,
-                    max_x,
-                );
-            }
+        render_entry(buf, view, entry, i, y, area, bg);
+    }
+    render_footer(buf, view, area, bg);
+
+    // Dropdown overlay for an open Select.
+    if let (Some(d), Some(item)) = (view.dropdown, view.selected_item()) {
+        if let Widget::Select { options, .. } = &item.widget {
+            render_dropdown(buf, view, &la, scroll, options, d, max_x);
         }
     }
+}
 
-    // Footer: the focused setting's description + the key hints.
+/// Fill the whole pane with the settings background.
+fn paint_background(buf: &mut ratatui::buffer::Buffer, area: Rect, bg: Style) {
+    let blank = " ".repeat(area.width as usize);
+    for y in area.y..area.y + area.height {
+        put_str(buf, area.x, y, &blank, bg, area.x + area.width);
+    }
+}
+
+/// Draw one list row — a section header or a setting with its widget value.
+fn render_entry(
+    buf: &mut ratatui::buffer::Buffer,
+    view: &SettingsView,
+    entry: &Entry,
+    i: usize,
+    y: u16,
+    area: Rect,
+    bg: Style,
+) {
+    let max_x = area.x + area.width;
+    match entry {
+        Entry::Header(title) => put_str(
+            buf,
+            area.x + 1,
+            y,
+            &title.to_uppercase(),
+            bg.fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
+            max_x,
+        ),
+        Entry::Item(item) => {
+            let selected = i == view.selected;
+            let row_style = if selected {
+                Style::default().bg(CLR_SEL).fg(Color::White)
+            } else {
+                bg.fg(Color::Gray)
+            };
+            // Fill the row so the selection bar spans the pane.
+            put_str(
+                buf,
+                area.x,
+                y,
+                &" ".repeat(area.width as usize),
+                row_style,
+                max_x,
+            );
+            let marker = if selected { "▸ " } else { "  " };
+            let mut label = format!("{marker}{}", item.label);
+            let w = label.chars().count();
+            if w < LABEL_COL {
+                label.push_str(&" ".repeat(LABEL_COL - w));
+            }
+            // The value, or the live edit buffer for the focused field.
+            let value = match (selected, &view.editing) {
+                (true, Some(edit)) => format!("{edit}▏"),
+                _ => widget_text(&item.widget),
+            };
+            let val_style = if selected {
+                row_style.add_modifier(Modifier::BOLD)
+            } else {
+                row_style.fg(CLR_ACCENT)
+            };
+            put_str(buf, area.x + 3, y, &label, row_style, max_x);
+            put_str(
+                buf,
+                area.x + 3 + LABEL_COL as u16,
+                y,
+                &value,
+                val_style,
+                max_x,
+            );
+        }
+    }
+}
+
+/// The footer: the focused setting's description plus the key hints.
+fn render_footer(buf: &mut ratatui::buffer::Buffer, view: &SettingsView, area: Rect, bg: Style) {
+    let max_x = area.x + area.width;
     let footer_y = area.y + area.height - 1;
     let desc = view
         .selected_item()
@@ -185,13 +204,6 @@ pub(super) fn render_settings(f: &mut Frame, app: &App, area: Rect) {
         bg.fg(Color::DarkGray),
         max_x,
     );
-
-    // Dropdown overlay for an open Select.
-    if let (Some(d), Some(item)) = (view.dropdown, view.selected_item()) {
-        if let Widget::Select { options, .. } = &item.widget {
-            render_dropdown(buf, view, &la, scroll, options, d, max_x);
-        }
-    }
 }
 
 /// Draw the open dropdown's option list just below the focused row.
