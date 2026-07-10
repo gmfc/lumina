@@ -38,14 +38,15 @@ fn renders_command_palette() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The goto-line picker draws with its `:` prompt cursor.
+/// The goto-line prompt (a centered `Prompt`) renders its title.
 #[test]
-fn renders_goto_line_picker() {
+fn renders_goto_line_prompt() {
     let path = temp_file("a\nb\nc\n");
     let mut app = app_with(&path);
-    app.open_goto_line();
-    assert!(app.editor.picker.is_some());
-    let _ = render_to_string(&mut app, 100, 20);
+    app.exec_id("view.gotoLine");
+    assert!(app.editor.prompt.is_some());
+    let out = render_to_string(&mut app, 100, 20);
+    assert!(out.contains("Go to Line"));
     std::fs::remove_file(&path).ok();
 }
 

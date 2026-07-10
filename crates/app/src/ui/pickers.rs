@@ -202,11 +202,7 @@ pub(super) fn render_picker(f: &mut Frame, app: &App, body: Rect) {
     f.render_widget(block, rect);
 
     // Query line. A subtle hint reminds the user that `>` switches to commands.
-    let cursor = if picker.kind == PickerKind::GotoLine {
-        ":"
-    } else {
-        "›"
-    };
+    let cursor = "›";
     let mut query_spans = vec![
         TSpan::styled(format!("{cursor} "), Style::default().fg(CLR_ACCENT)),
         TSpan::styled(

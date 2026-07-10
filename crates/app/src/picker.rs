@@ -7,10 +7,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
     /// Project files; `id` is the absolute path. The unified quick-open uses this as its base
-    /// kind and carries `commands` too, switching to command mode on a leading `>`.
+    /// kind and carries `commands` too, switching to command mode on a leading `>`. (Goto-line is
+    /// a generic prompt now, not a picker kind.)
     File,
-    /// A line-number prompt; `query` holds the digits.
-    GotoLine,
     /// LSP locations (references / symbols); `id` is the index into `EditorState::nav_locations`.
     Locations,
 }
@@ -125,11 +124,6 @@ impl Picker {
 
     /// Recompute the filtered/ranked list for the current query against the active source.
     pub fn refilter(&mut self) {
-        if self.kind == PickerKind::GotoLine {
-            self.filtered.clear();
-            self.selected = 0;
-            return;
-        }
         let query = self.effective_query().to_string();
         let mut scored: Vec<(usize, i64)> = self
             .active_items()

@@ -21,15 +21,20 @@ fn palette_lists_builtin_and_plugin_commands() {
 
 #[test]
 fn goto_line_moves_cursor() {
+    // Goto-line is the `palette` plugin's centered prompt now: exec_id opens it, digits + Enter
+    // route through the real prompt-key path to the plugin.
     let path = temp_file("l0\nl1\nl2\nl3");
     let mut app = app_with(&path);
-    app.open_goto_line();
-    for c in "3".chars() {
-        app.picker_key(KeyEvent::from(KeyCode::Char(c)));
-    }
-    app.picker_key(KeyEvent::from(KeyCode::Enter));
+    app.exec_id("view.gotoLine");
+    assert!(app.editor.prompt.is_some());
+    app.on_key(KeyEvent::from(KeyCode::Char('3')));
+    app.on_key(KeyEvent::from(KeyCode::Enter));
     let doc = app.editor.active_document().unwrap();
     assert_eq!(doc.char_to_line(doc.selections.primary().head), 2); // line 3 (0-based 2)
+    assert!(
+        app.editor.prompt.is_none(),
+        "Enter closes the goto-line prompt"
+    );
     std::fs::remove_file(&path).ok();
 }
 

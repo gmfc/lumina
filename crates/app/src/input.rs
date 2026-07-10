@@ -79,8 +79,7 @@ pub enum Command {
     ToggleSidebar,
     FocusSidebar,
     FocusEditor,
-    // Command palette + quick-open are the `palette` plugin now; goto-line stays app-side.
-    GotoLine,
+    // Command palette, quick-open, and goto-line are the `palette` plugin now.
     // terminal panel
     ToggleTerminal,
     NewTerminal,

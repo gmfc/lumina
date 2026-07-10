@@ -30,13 +30,13 @@ pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
 pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap). Extracted so
     // far: the explorer, multi-cursor, git-change navigation, find/replace, and the command
-    // palette + quick-open (all reach the editor only through `Host`). Still hardcoded in
-    // `editor-app` pending new `Host` ports: goto-line, project search, lsp, terminal, vim.
+    // palette + quick-open + goto-line (all reach the editor only through `Host`). Still hardcoded
+    // in `editor-app` pending new `Host` ports: project search, lsp, terminal, vim.
     vec![
         Box::new(explorer::ExplorerPlugin::new(icons)),
         Box::new(multicursor::MultiCursorPlugin),
         Box::new(git_nav::GitNavPlugin),
         Box::new(find::FindReplacePlugin::default()),
-        Box::new(palette::PalettePlugin),
+        Box::new(palette::PalettePlugin::default()),
     ]
 }
