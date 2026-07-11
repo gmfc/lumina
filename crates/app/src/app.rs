@@ -44,8 +44,6 @@ pub struct App {
     pub pending: Vec<crate::keymap::Chord>,
     /// User configuration.
     pub config: crate::config::Config,
-    /// System clipboard (with OSC 52 + internal-register fallbacks).
-    clipboard: crate::clipboard::Clipboard,
     /// Char offset where the current drag began (selection anchor).
     drag_anchor: Option<usize>,
     /// Index of the tab currently being dragged to reorder, if any.

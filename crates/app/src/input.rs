@@ -39,11 +39,8 @@ pub enum Command {
     SelectWord,
     SelectLine,
     // multi-cursor is entirely the `multicursor` builtin plugin now (add-next-match / select-all
-    // / add-above-below / add-cursors-to-line-ends).
-    // clipboard
-    Copy,
-    Cut,
-    Paste(String),
+    // / add-above-below / add-cursors-to-line-ends). clipboard copy/cut/paste is the `clipboard`
+    // builtin plugin.
     // history
     Undo,
     Redo,

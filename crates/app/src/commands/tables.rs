@@ -31,9 +31,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
             "Edit: Trim Trailing Whitespace",
         ),
         ("edit.deleteWordBackward", "Edit: Delete Word Left"),
-        ("edit.copy", "Edit: Copy"),
-        ("edit.cut", "Edit: Cut"),
-        ("edit.paste", "Edit: Paste"),
+        // Clipboard copy/cut/paste titles come from the `clipboard` plugin via the registry.
         // All multi-cursor titles (add-next-match / select-all / add-above-below / line-ends) come
         // from the `multicursor` plugin via the registry.
         ("cursor.jumpToBracket", "Go: Jump to Matching Bracket"),
@@ -76,9 +74,7 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+z", "edit.undo"),
         ("ctrl+y", "edit.redo"),
         ("ctrl+a", "edit.selectAll"),
-        ("ctrl+c", "edit.copy"),
-        ("ctrl+x", "edit.cut"),
-        ("ctrl+v", "edit.paste"),
+        // ctrl+c / ctrl+x / ctrl+v (copy/cut/paste) chords are contributed by the `clipboard` plugin.
         // find/replace + project-search (ctrl+shift+f) chords are contributed by their plugins.
         // ctrl+shift+p (palette) + ctrl+p (quick-open) + ctrl+g (goto-line) are contributed by
         // the `palette` plugin.

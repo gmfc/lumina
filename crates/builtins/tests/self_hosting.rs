@@ -58,6 +58,10 @@ const DIAGNOSTICS_COMMAND: &str = "lsp.nextDiagnostic";
 const COMPLETION_ID: &str = "completion";
 const COMPLETION_COMMAND: &str = "lsp.completion";
 
+// Clipboard copy/cut/paste (over the clipboard_read/clipboard_write Host port).
+const CLIPBOARD_ID: &str = "clipboard";
+const CLIPBOARD_COMMAND: &str = "edit.paste";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -283,6 +287,29 @@ fn completion_contributes_through_the_public_api() {
 }
 
 #[test]
+fn clipboard_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == CLIPBOARD_COMMAND),
+        "clipboard's edit.paste missing — is copy/cut/paste wired as a plugin?"
+    );
+    let reduced = Registry::with_plugins(
+        all_builtins()
+            .into_iter()
+            .filter(|p| p.id() != CLIPBOARD_ID),
+    );
+    for id in ["edit.copy", "edit.cut", "edit.paste"] {
+        assert!(
+            !reduced.command_ids().any(|c| c == id),
+            "`{id}` still present after disabling clipboard — it is hardcoded, not a plugin"
+        );
+    }
+    // Disabling clipboard must leave unrelated plugins' commands intact.
+    assert!(reduced.command_ids().any(|id| id == COMPLETION_COMMAND));
+    assert!(reduced.command_ids().any(|id| id == EXPLORER_COMMAND));
+}
+
+#[test]
 fn diagnostics_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
     assert!(
@@ -354,6 +381,20 @@ fn migrated_plugins_contribute_their_keybindings() {
     assert!(
         bound(&full, "ctrl+f", "search.find"),
         "find's ctrl+f must be contributed through the registry, not the defaults table"
+    );
+    assert!(
+        bound(&full, "ctrl+v", "edit.paste"),
+        "clipboard's ctrl+v must be contributed through the registry, not the defaults table"
+    );
+
+    let no_clipboard = Registry::with_plugins(
+        all_builtins()
+            .into_iter()
+            .filter(|p| p.id() != CLIPBOARD_ID),
+    );
+    assert!(
+        !bound(&no_clipboard, "ctrl+v", "edit.paste"),
+        "disabling clipboard must unbind ctrl+v — otherwise the binding is hardcoded"
     );
 
     let no_multicursor = Registry::with_plugins(

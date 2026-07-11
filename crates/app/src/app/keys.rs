@@ -181,7 +181,9 @@ impl App {
         true
     }
 
-    /// Route a bracketed paste to the terminal when it is focused, else into the document.
+    /// Route a bracketed paste to the terminal when it is focused, else into the document. The
+    /// payload arrives with the event (it isn't the clipboard), so it inserts directly through
+    /// `Command::InsertText` — the `clipboard` plugin's `edit.paste` is for the ctrl+v register.
     pub(super) fn on_paste(&mut self, s: String) {
         if self.editor.focus == Focus::Panel && self.panel.open && !self.panel.minimized {
             if let Some(t) = self.panel.active_terminal_mut() {
@@ -189,7 +191,7 @@ impl App {
                 return;
             }
         }
-        self.dispatch(Command::Paste(s));
+        self.dispatch(Command::InsertText(s));
     }
 
     /// Fallback for a key that resolved to nothing: printable text entry into the editor.

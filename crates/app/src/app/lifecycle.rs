@@ -98,7 +98,6 @@ impl App {
             keymap,
             pending: Vec::new(),
             config,
-            clipboard: crate::clipboard::Clipboard::new(),
             drag_anchor: None,
             tab_drag: None,
             last_click: None,

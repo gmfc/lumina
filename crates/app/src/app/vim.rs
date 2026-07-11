@@ -1309,7 +1309,7 @@ impl App {
         match reg {
             Some('_') => {}
             Some('+') | Some('*') => {
-                self.clipboard.set(text.clone());
+                self.editor.clipboard.set(text.clone());
                 self.vim_mut().unnamed = Register { text, linewise };
             }
             Some(c) if c.is_ascii_alphabetic() => {
@@ -1346,7 +1346,7 @@ impl App {
     fn vim_read_register(&mut self, reg: Option<char>) -> Register {
         match reg {
             Some('+') | Some('*') => Register {
-                text: self.clipboard.get(),
+                text: self.editor.clipboard.get(),
                 linewise: false,
             },
             Some('0') => self.vim().yanked.clone(),

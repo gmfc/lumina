@@ -64,12 +64,14 @@ fn keymap_typed_char_inserts() {
 
 #[test]
 fn clipboard_copy_paste() {
+    // Copy/paste are the `clipboard` builtin plugin now: `edit.copy`/`edit.paste` route through the
+    // registry (exec_id). Select-all + caret motion stay app-side editing primitives.
     let path = temp_file("hello");
     let mut app = app_with(&path);
     app.dispatch(Command::SelectAll);
-    app.dispatch(Command::Copy);
+    app.exec_id("edit.copy");
     app.dispatch(Command::Move(Motion::DocEnd));
-    app.dispatch(Command::Paste(String::new()));
+    app.exec_id("edit.paste");
     assert_eq!(
         app.editor.active_document().unwrap().to_string(),
         "hellohello"

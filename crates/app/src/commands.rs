@@ -60,11 +60,8 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "edit.outdent" => Command::Outdent,
         "edit.undo" => Command::Undo,
         "edit.redo" => Command::Redo,
-        "edit.copy" => Command::Copy,
-        "edit.cut" => Command::Cut,
-        "edit.paste" => Command::Paste(String::new()),
-        // multi-cursor is the `multicursor` builtin plugin — all cursor.* ids dispatch through
-        // the registry, not here.
+        // multi-cursor is the `multicursor` builtin plugin and clipboard copy/cut/paste is the
+        // `clipboard` builtin plugin — those ids dispatch through the registry, not here.
         // files / tabs
         "file.save" => Command::Save,
         "file.saveAs" => Command::SaveAs,

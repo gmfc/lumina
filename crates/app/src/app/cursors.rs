@@ -1,8 +1,8 @@
-//! The theme toggle and selection helpers.
+//! The theme toggle.
 //!
-//! Multi-cursor commands (add-next-match, select-all-occurrences, add-cursor-above/below) used
-//! to live here; they are now the `multicursor` builtin plugin (crates/builtins), reaching the
-//! editor only through `Host` (invariant #3).
+//! Multi-cursor commands (add-next-match, select-all-occurrences, add-cursor-above/below) and the
+//! clipboard selection helper used to live here; they are now the `multicursor` and `clipboard`
+//! builtin plugins (crates/builtins), reaching the editor only through `Host` (invariant #3).
 //!
 //! Part of the [`crate::app`] module; these are `impl App` blocks split out by concern.
 
@@ -25,17 +25,5 @@ impl App {
                 "light"
             }
         ));
-    }
-
-    // --- clipboard -------------------------------------------------------------
-
-    pub(super) fn selection_text(&self) -> Option<String> {
-        let doc = self.editor.active_document()?;
-        let sel = doc.selections.primary();
-        if sel.is_empty() {
-            None
-        } else {
-            Some(doc.rope().slice(sel.from()..sel.to()).to_string())
-        }
     }
 }
