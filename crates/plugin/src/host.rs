@@ -199,6 +199,16 @@ pub trait Host {
     /// plugin only expresses intent, applied on the next drain (effect-queue). Default no-op.
     fn terminal_op(&mut self, _op: crate::terminal::TerminalOp) {}
 
+    /// Read the clipboard (system clipboard, falling back to an in-process register). The app owns
+    /// the clipboard I/O (system daemon + OSC 52); a clipboard plugin reads through this for paste.
+    /// `&mut` because system access is stateful. Default empty.
+    fn clipboard_read(&mut self) -> String {
+        String::new()
+    }
+
+    /// Write `text` to every clipboard sink (system + OSC 52 + register). Default no-op.
+    fn clipboard_write(&mut self, _text: String) {}
+
     /// Execute another registered command by id (composability).
     fn execute(&mut self, command_id: &str);
 }

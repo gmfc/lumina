@@ -67,17 +67,9 @@ impl App {
             }),
 
             // multi-cursor is entirely the `multicursor` builtin plugin (all cursor.* ids
-            // dispatch through the registry).
-
-            // --- clipboard (paste; copy/cut below) ---
-            Command::Paste(s) => {
-                let text = if s.is_empty() {
-                    self.clipboard.get()
-                } else {
-                    s
-                };
-                self.with_doc(|d| edit::insert_text(d, &text, editor_core::GroupBreak::Force))
-            }
+            // dispatch through the registry). clipboard copy/cut/paste is the `clipboard` builtin
+            // plugin; a bracketed paste from the terminal inserts its payload via
+            // `Command::InsertText` (see `on_paste`).
 
             // --- history ---
             Command::Undo => self.with_doc(|d| {
@@ -100,18 +92,8 @@ impl App {
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),
 
-            // --- clipboard ---
-            Command::Copy => {
-                if let Some(t) = self.selection_text() {
-                    self.clipboard.set(t);
-                }
-            }
-            Command::Cut => {
-                if let Some(t) = self.selection_text() {
-                    self.clipboard.set(t);
-                    self.with_doc(edit::delete_backward);
-                }
-            }
+            // clipboard copy/cut/paste is the `clipboard` builtin plugin, dispatched through the
+            // registry.
 
             // language server: the request-issuing commands are the `lsp` plugin and diagnostic
             // navigation is the `diagnostics` plugin — both dispatched through the registry.

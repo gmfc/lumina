@@ -94,6 +94,10 @@ pub struct EditorState {
     /// The optional Vim modal-editing layer. `Some` when `vim = true` (or the user
     /// toggled it on); the renderer reads its mode for the status badge.
     pub vim: Option<crate::vim::VimState>,
+    /// The system clipboard (arboard + OSC 52 + an in-process register). App-owned I/O, kept here
+    /// so the `clipboard` plugin can reach it through `Host::clipboard_read`/`clipboard_write`
+    /// across the split-borrow wall (the plugin only sees `&mut EditorState`).
+    pub clipboard: crate::clipboard::Clipboard,
 }
 
 impl EditorState {
@@ -125,6 +129,7 @@ impl EditorState {
             nav_locations: Vec::new(),
             git_hunks: HashMap::new(),
             vim: None,
+            clipboard: crate::clipboard::Clipboard::new(),
         }
     }
 
@@ -382,6 +387,14 @@ impl Host for EditorState {
 
     fn terminal_op(&mut self, op: editor_plugin::TerminalOp) {
         self.pending_terminal_ops.push(op);
+    }
+
+    fn clipboard_read(&mut self) -> String {
+        self.clipboard.get()
+    }
+
+    fn clipboard_write(&mut self, text: String) {
+        self.clipboard.set(text);
     }
 
     fn execute(&mut self, command_id: &str) {
