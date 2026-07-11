@@ -199,6 +199,14 @@ pub trait Host {
     /// plugin only expresses intent, applied on the next drain (effect-queue). Default no-op.
     fn terminal_op(&mut self, _op: crate::terminal::TerminalOp) {}
 
+    /// Open `path` and place the caret at the LSP `(line, character)` (a UTF-16 column), resolved
+    /// to a char offset app-side once the document is open. The app owns file IO, so this is a
+    /// deferred effect (applied on the next drain), like [`Host::open_path`]. Default: open the
+    /// path and drop the precise position.
+    fn open_location(&mut self, path: &Path, _line: u32, _character: u32) {
+        self.open_path(path);
+    }
+
     /// Read the clipboard (system clipboard, falling back to an in-process register). The app owns
     /// the clipboard I/O (system daemon + OSC 52); a clipboard plugin reads through this for paste.
     /// `&mut` because system access is stateful. Default empty.

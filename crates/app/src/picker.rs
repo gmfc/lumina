@@ -8,10 +8,9 @@
 pub enum PickerKind {
     /// Project files; `id` is the absolute path. The unified quick-open uses this as its base
     /// kind and carries `commands` too, switching to command mode on a leading `>`. (Goto-line is
-    /// a generic prompt now, not a picker kind.)
+    /// a generic prompt now, not a picker kind; LSP location lists are owned by the `lsp-nav`
+    /// plugin, which opens a generic plugin-owned picker rather than a `PickerKind`.)
     File,
-    /// LSP locations (references / symbols); `id` is the index into `EditorState::nav_locations`.
-    Locations,
 }
 
 /// One selectable row.
@@ -39,22 +38,6 @@ pub struct Picker {
 }
 
 impl Picker {
-    pub fn new(kind: PickerKind, prompt: &str, items: Vec<PickerItem>) -> Picker {
-        let mut p = Picker {
-            kind,
-            prompt: prompt.to_string(),
-            query: String::new(),
-            items,
-            commands: Vec::new(),
-            filtered: Vec::new(),
-            selected: 0,
-            owner: None,
-            token: None,
-        };
-        p.refilter();
-        p
-    }
-
     /// A unified quick-open / command palette: `files` by default, `commands` when the query
     /// starts with `>`. `start_in_commands` pre-fills the `>` (the command-palette entry point).
     pub fn unified(
@@ -221,7 +204,7 @@ mod tests {
                 label: "File: Save".into(),
             },
         ];
-        let mut p = Picker::new(PickerKind::File, "Files", items);
+        let mut p = Picker::unified("Files", items, Vec::new(), false);
         p.query = "save".into();
         p.refilter();
         assert_eq!(p.selected_item().unwrap().id, "2");

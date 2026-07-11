@@ -35,4 +35,14 @@ pub enum Event {
     /// `editor-lsp` at the app boundary). Delivered to the completion plugin, which anchors and
     /// filters them into a caret popup.
     LspCompletion(Vec<crate::lsp::LspCompletionItem>),
+    /// The language server resolved a single navigation target (go-to-definition / implementation /
+    /// type-definition). Delivered to the navigation plugin, which jumps there via
+    /// [`crate::Host::open_location`].
+    LspGoto(crate::lsp::LspLocation),
+    /// The language server returned a set of navigation targets to choose from (references /
+    /// document symbols). `title` names the picker; each item carries its jump target + label.
+    LspLocations {
+        title: String,
+        items: Vec<crate::lsp::LspNavItem>,
+    },
 }

@@ -73,7 +73,15 @@ impl App {
             LspEvent::Hover(text) => {
                 self.editor.overlay = Some(crate::editor::Overlay::Info(text));
             }
-            LspEvent::Goto(loc) => self.goto_location(loc),
+            LspEvent::Goto(loc) => {
+                // Hand a single navigation target to the `lsp-nav` plugin, which jumps via
+                // `Host::open_location` (the app owns the actual open + caret placement on drain).
+                if let Some(location) = to_primitive_location(&loc) {
+                    self.editor
+                        .pending_events
+                        .push(editor_plugin::event::Event::LspGoto(location));
+                }
+            }
             LspEvent::Completion(items) => {
                 // Broadcast to the `completion` plugin, which anchors + filters into a popup.
                 let items = items.into_iter().map(to_primitive_completion).collect();
@@ -83,39 +91,39 @@ impl App {
             }
             LspEvent::Rename(edit) => self.apply_workspace_edit(edit),
             LspEvent::References(locs) => {
-                let entries = locs
-                    .into_iter()
-                    .map(|l| {
-                        let label = location_label(&l);
-                        (l, label)
+                let items = locs
+                    .iter()
+                    .filter_map(|l| {
+                        Some(editor_plugin::LspNavItem {
+                            location: to_primitive_location(l)?,
+                            label: location_label(l),
+                        })
                     })
                     .collect();
-                self.open_locations_picker(entries, "References");
+                self.push_locations("References", items);
             }
             LspEvent::DocumentSymbols(syms) => {
-                let uri = self
+                // Every symbol is in the active document; resolve its path once.
+                let Some(path) = self
                     .editor
                     .active_document()
-                    .and_then(|d| d.path.as_ref())
-                    .map(|p| crate::lsp::uri_for(p));
-                let Some(uri) = uri else {
+                    .and_then(|d| d.path.clone())
+                    .map(|p| p.to_string_lossy().into_owned())
+                else {
                     return;
                 };
-                let entries = syms
+                let items = syms
                     .into_iter()
-                    .map(|s| {
-                        let label = format!("{}{}", "  ".repeat(s.depth), s.name);
-                        let loc = editor_lsp::Location {
-                            uri: uri.clone(),
+                    .map(|s| editor_plugin::LspNavItem {
+                        label: format!("{}{}", "  ".repeat(s.depth), s.name),
+                        location: editor_plugin::LspLocation {
+                            path: path.clone(),
                             line: s.line,
                             character: s.character,
-                            end_line: s.line,
-                            end_character: s.character,
-                        };
-                        (loc, label)
+                        },
                     })
                     .collect();
-                self.open_locations_picker(entries, "Symbols");
+                self.push_locations("Symbols", items);
             }
             LspEvent::Error(message) => {
                 self.editor.status_message = Some(format!("LSP: {message}"));
@@ -123,47 +131,15 @@ impl App {
         }
     }
 
-    /// Open a picker over LSP locations; selecting one jumps there (plan §2.3). The concrete
-    /// `Location`s are parked on `EditorState::nav_locations`, indexed by the picker item id.
-    pub(super) fn open_locations_picker(
-        &mut self,
-        entries: Vec<(editor_lsp::Location, String)>,
-        title: &str,
-    ) {
-        if entries.is_empty() {
-            self.editor.status_message = Some(format!("No {title}"));
-            return;
-        }
-        let mut locs = Vec::with_capacity(entries.len());
-        let items: Vec<crate::picker::PickerItem> = entries
-            .into_iter()
-            .enumerate()
-            .map(|(i, (loc, label))| {
-                locs.push(loc);
-                crate::picker::PickerItem {
-                    id: i.to_string(),
-                    label,
-                }
-            })
-            .collect();
-        self.editor.nav_locations = locs;
-        self.editor.picker = Some(crate::picker::Picker::new(
-            crate::picker::PickerKind::Locations,
-            title,
-            items,
-        ));
-    }
-
-    /// Open a definition location and place the cursor on it.
-    pub(super) fn goto_location(&mut self, loc: editor_lsp::Location) {
-        let Some(path) = crate::lsp::path_from_uri(&loc.uri) else {
-            return;
-        };
-        self.open_path(&path);
-        if let Some(doc) = self.editor.active_document_mut() {
-            let off = lsp_pos_to_char(doc, loc.line, loc.character);
-            doc.set_caret(off);
-        }
+    /// Hand a navigation location set (references / document symbols) to the `lsp-nav` plugin,
+    /// which opens the picker and owns the jump. Shared by both response arms.
+    fn push_locations(&mut self, title: &str, items: Vec<editor_plugin::LspNavItem>) {
+        self.editor
+            .pending_events
+            .push(editor_plugin::event::Event::LspLocations {
+                title: title.to_string(),
+                items,
+            });
     }
 
     /// Apply an LSP `WorkspaceEdit` (rename) across the affected documents as transactions.
@@ -278,6 +254,17 @@ fn to_primitive_completion(it: editor_lsp::CompletionItem) -> editor_plugin::Lsp
         insert_text: it.insert_text,
         kind: it.kind,
     }
+}
+
+/// Resolve an `editor-lsp` location's URI to a filesystem path and package it as the primitive
+/// [`editor_plugin::LspLocation`] the `lsp-nav` plugin jumps to. `None` for a non-`file:` URI.
+fn to_primitive_location(loc: &editor_lsp::Location) -> Option<editor_plugin::LspLocation> {
+    let path = crate::lsp::path_from_uri(&loc.uri)?;
+    Some(editor_plugin::LspLocation {
+        path: path.to_string_lossy().into_owned(),
+        line: loc.line,
+        character: loc.character,
+    })
 }
 
 /// A `file:line:col` label for a location picker row (plan §2.3).

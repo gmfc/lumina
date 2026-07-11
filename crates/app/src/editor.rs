@@ -50,6 +50,9 @@ pub struct EditorState {
     /// Paths requested via `Host::open_path`/`open_path_at`, opened by `App` (it owns file IO
     /// policy) on the next drain. The optional line positions the caret (project search / goto).
     pub pending_opens: Vec<(PathBuf, Option<usize>)>,
+    /// LSP navigation jumps requested via `Host::open_location`: `(path, line, utf16_char)`. The
+    /// app opens the path and resolves the UTF-16 column to a char offset on the next drain.
+    pub pending_locations: Vec<(PathBuf, u32, u32)>,
     /// Sender to the app's bounded worker channel, so `Host::spawn_job` can run plugin work off
     /// the main thread and fold the result back as `Event::JobComplete`. Set at construction.
     pub job_tx: Option<crate::worker::WorkerTx>,
@@ -87,8 +90,6 @@ pub struct EditorState {
     /// Active caret-anchored popup (the completion list), published by a plugin and rendered
     /// generically. `Some` while a popup is up; the app routes nav keys to its owner.
     pub popup: Option<Popup>,
-    /// Locations backing the current `Locations` picker (references / symbols, plan §2.3).
-    pub nav_locations: Vec<editor_lsp::Location>,
     /// Per-document git change map for the gutter (plan §4.1), computed off-thread.
     pub git_hunks: HashMap<DocId, crate::git::LineStatuses>,
     /// The optional Vim modal-editing layer. `Some` when `vim = true` (or the user
@@ -113,6 +114,7 @@ impl EditorState {
             pending_events: Vec::new(),
             pending_commands: Vec::new(),
             pending_opens: Vec::new(),
+            pending_locations: Vec::new(),
             job_tx: None,
             pending_theme_toggle: false,
             pending_lsp_requests: Vec::new(),
@@ -126,7 +128,6 @@ impl EditorState {
             command_catalog: Vec::new(),
             bracket_match: None,
             popup: None,
-            nav_locations: Vec::new(),
             git_hunks: HashMap::new(),
             vim: None,
             clipboard: crate::clipboard::Clipboard::new(),
@@ -233,6 +234,11 @@ impl Host for EditorState {
 
     fn open_path_at(&mut self, path: &Path, line: usize) {
         self.pending_opens.push((path.to_path_buf(), Some(line)));
+    }
+
+    fn open_location(&mut self, path: &Path, line: u32, character: u32) {
+        self.pending_locations
+            .push((path.to_path_buf(), line, character));
     }
 
     fn spawn_job(&mut self, id: String, work: Box<dyn FnOnce() -> Vec<u8> + Send + 'static>) {

@@ -43,24 +43,10 @@ impl App {
                     .activate_picker(&owner, &token, &id, &mut self.editor);
                 self.drain_workers();
             }
-            return;
         }
-        // The last app-owned picker kind: the LSP locations list. (File pickers are plugin-owned;
-        // goto-line is a generic prompt now.)
-        match picker.kind {
-            PickerKind::File => {
-                // File pickers are plugin-owned now; nothing to do for an app-owned one.
-            }
-            PickerKind::Locations => {
-                if let Some(loc) = picker
-                    .selected_item()
-                    .and_then(|item| item.id.parse::<usize>().ok())
-                    .and_then(|i| self.editor.nav_locations.get(i).cloned())
-                {
-                    self.goto_location(loc);
-                }
-            }
-        }
+        // Anything else is an app-owned `PickerKind::File` picker, and those are plugin-owned in
+        // practice — nothing to activate. (References/symbols are the `lsp-nav` plugin's owned
+        // picker now; goto-line is a generic prompt.)
     }
 
     pub(super) fn goto_line(&mut self, line: usize) {
