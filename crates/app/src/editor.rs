@@ -53,6 +53,9 @@ pub struct EditorState {
     /// LSP navigation jumps requested via `Host::open_location`: `(path, line, utf16_char)`. The
     /// app opens the path and resolves the UTF-16 column to a char offset on the next drain.
     pub pending_locations: Vec<(PathBuf, u32, u32)>,
+    /// Multi-file rename edits requested via `Host::apply_workspace_edit`; the app opens each file
+    /// and applies the edits as history-recorded transactions on the next drain (effect-queue).
+    pub pending_workspace_edits: Vec<editor_plugin::LspWorkspaceEdit>,
     /// Sender to the app's bounded worker channel, so `Host::spawn_job` can run plugin work off
     /// the main thread and fold the result back as `Event::JobComplete`. Set at construction.
     pub job_tx: Option<crate::worker::WorkerTx>,
@@ -115,6 +118,7 @@ impl EditorState {
             pending_commands: Vec::new(),
             pending_opens: Vec::new(),
             pending_locations: Vec::new(),
+            pending_workspace_edits: Vec::new(),
             job_tx: None,
             pending_theme_toggle: false,
             pending_lsp_requests: Vec::new(),
@@ -243,6 +247,10 @@ impl Host for EditorState {
 
     fn show_info(&mut self, text: String) {
         self.overlay = Some(Overlay::Info(text));
+    }
+
+    fn apply_workspace_edit(&mut self, edit: editor_plugin::LspWorkspaceEdit) {
+        self.pending_workspace_edits.push(edit);
     }
 
     fn spawn_job(&mut self, id: String, work: Box<dyn FnOnce() -> Vec<u8> + Send + 'static>) {

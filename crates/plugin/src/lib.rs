@@ -32,6 +32,7 @@ pub use host::{Host, PanelContent, PanelLine, Span};
 pub use input::{Key, KeyCode};
 pub use lsp::{
     LspCompletionItem, LspDiagnostic, LspLocation, LspNavItem, LspRequestKind, LspSeverity,
+    LspTextEdit, LspWorkspaceEdit,
 };
 pub use overlay::{Popup, PopupRow, Prompt, PromptField, PromptPlacement, PromptToggle};
 pub use picker::{CommandInfo, PickerItem, PickerRequest};

@@ -26,7 +26,8 @@ fn workspace_edit_applies_rename_across_occurrences() {
             ],
         )],
     };
-    app.apply_workspace_edit(edit);
+    app.handle_lsp_event(crate::lsp::LspEvent::Rename(edit));
+    app.drain_workers(); // broadcast LspWorkspaceEdit → rename plugin → apply on drain
     assert_eq!(
         app.editor.active_document().unwrap().to_string(),
         "let bar = bar + 1;"
