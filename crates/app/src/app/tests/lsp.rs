@@ -189,6 +189,21 @@ fn goto_definition_jumps_to_the_target() {
 }
 
 #[test]
+fn hover_shows_info_overlay() {
+    // A Hover response becomes an `LspHover` event; the `hover` plugin shows the text in a
+    // dismissable info box (the app-owned `Overlay::Info`).
+    let path = temp_file("x");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::Hover("fn main()".into()));
+    app.drain_workers(); // broadcast LspHover → hover plugin → show_info
+    assert!(
+        matches!(app.editor.overlay.as_ref(), Some(crate::editor::Overlay::Info(t)) if t == "fn main()"),
+        "hover response should open an info overlay with the text"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn lsp_error_event_is_shown_on_status_bar() {
     let path = temp_file("x");
     let mut app = app_with(&path);

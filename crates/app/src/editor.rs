@@ -241,6 +241,10 @@ impl Host for EditorState {
             .push((path.to_path_buf(), line, character));
     }
 
+    fn show_info(&mut self, text: String) {
+        self.overlay = Some(Overlay::Info(text));
+    }
+
     fn spawn_job(&mut self, id: String, work: Box<dyn FnOnce() -> Vec<u8> + Send + 'static>) {
         // Run the plugin's closure on an OS thread and fold the result back into the single-
         // threaded loop as a WorkerMsg the drain turns into Event::JobComplete. The app owns the

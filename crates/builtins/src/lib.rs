@@ -19,6 +19,7 @@ pub mod diagnostics;
 pub mod explorer;
 pub mod find;
 pub mod git_nav;
+pub mod hover;
 pub mod lsp;
 pub mod lsp_nav;
 pub mod multicursor;
@@ -40,9 +41,9 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // far: the explorer, multi-cursor, git-change navigation, find/replace, the command palette +
     // quick-open + goto-line, project search, the theme toggle, the LSP request commands,
     // diagnostics, completion, clipboard copy/cut/paste, LSP navigation (goto/references/symbols
-    // responses), and the terminal-dock commands (all reach the editor only through `Host`). Still
-    // hardcoded in `editor-app`: the remaining LSP responses (hover popup + rename application), the
-    // terminal PTY/vt100/render machinery, and vim.
+    // responses), hover, and the terminal-dock commands (all reach the editor only through `Host`).
+    // Still hardcoded in `editor-app`: the LSP rename application, the terminal PTY/vt100/render
+    // machinery, and vim.
     vec![
         Box::new(explorer::ExplorerPlugin::new(icons)),
         Box::new(multicursor::MultiCursorPlugin),
@@ -53,6 +54,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(theme::ThemePlugin),
         Box::new(lsp::LspPlugin::default()),
         Box::new(lsp_nav::LspNavPlugin::default()),
+        Box::new(hover::HoverPlugin),
         Box::new(diagnostics::DiagnosticsPlugin::default()),
         Box::new(completion::CompletionPlugin::default()),
         Box::new(clipboard::ClipboardPlugin),

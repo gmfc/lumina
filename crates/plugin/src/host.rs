@@ -207,6 +207,10 @@ pub trait Host {
         self.open_path(path);
     }
 
+    /// Show `text` in a dismissable info box (LSP hover today). App-owned overlay render state; a
+    /// plugin publishes into it through here. Default no-op.
+    fn show_info(&mut self, _text: String) {}
+
     /// Read the clipboard (system clipboard, falling back to an in-process register). The app owns
     /// the clipboard I/O (system daemon + OSC 52); a clipboard plugin reads through this for paste.
     /// `&mut` because system access is stateful. Default empty.
