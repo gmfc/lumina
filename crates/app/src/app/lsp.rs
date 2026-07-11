@@ -71,7 +71,10 @@ impl App {
                     .push(editor_plugin::event::Event::LspDiagnostics { doc, diagnostics });
             }
             LspEvent::Hover(text) => {
-                self.editor.overlay = Some(crate::editor::Overlay::Info(text));
+                // Hand the rendered hover text to the `hover` plugin, which shows the info box.
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspHover(text));
             }
             LspEvent::Goto(loc) => {
                 // Hand a single navigation target to the `lsp-nav` plugin, which jumps via

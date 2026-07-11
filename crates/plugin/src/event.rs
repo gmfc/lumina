@@ -45,4 +45,7 @@ pub enum Event {
         title: String,
         items: Vec<crate::lsp::LspNavItem>,
     },
+    /// The language server answered a hover request with this (already-rendered) text. Delivered
+    /// to the hover plugin, which shows it in a dismissable info box.
+    LspHover(String),
 }
