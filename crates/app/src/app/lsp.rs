@@ -92,7 +92,24 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspCompletion(items));
             }
-            LspEvent::Rename(edit) => self.apply_workspace_edit(edit),
+            LspEvent::Rename(edit) => {
+                // Resolve each file's URI to a path and hand the edit to the `rename` plugin, which
+                // forwards it back through `Host::apply_workspace_edit` (applied on drain).
+                let changes = edit
+                    .changes
+                    .into_iter()
+                    .filter_map(|(uri, edits)| {
+                        let path = crate::lsp::path_from_uri(&uri)?;
+                        let edits = edits.into_iter().map(to_primitive_text_edit).collect();
+                        Some((path.to_string_lossy().into_owned(), edits))
+                    })
+                    .collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspWorkspaceEdit(
+                        editor_plugin::LspWorkspaceEdit { changes },
+                    ));
+            }
             LspEvent::References(locs) => {
                 let items = locs
                     .iter()
@@ -145,13 +162,13 @@ impl App {
             });
     }
 
-    /// Apply an LSP `WorkspaceEdit` (rename) across the affected documents as transactions.
-    pub(super) fn apply_workspace_edit(&mut self, edit: editor_lsp::WorkspaceEdit) {
+    /// Apply a rename's edits across the affected documents as history-recorded transactions. The
+    /// `rename` plugin forwards a primitive [`editor_plugin::LspWorkspaceEdit`] (paths already
+    /// resolved) here through the effect-queue; the app owns the file IO + UTF-16↔char mapping.
+    pub(super) fn apply_workspace_edit(&mut self, edit: editor_plugin::LspWorkspaceEdit) {
         let mut count = 0usize;
-        for (uri, edits) in edit.changes {
-            let Some(path) = crate::lsp::path_from_uri(&uri) else {
-                continue;
-            };
+        for (path, edits) in edit.changes {
+            let path = std::path::PathBuf::from(path);
             if self.editor.workspace.find_by_path(&path).is_none() {
                 self.open_path(&path);
             }
@@ -256,6 +273,17 @@ fn to_primitive_completion(it: editor_lsp::CompletionItem) -> editor_plugin::Lsp
         detail: it.detail,
         insert_text: it.insert_text,
         kind: it.kind,
+    }
+}
+
+/// Translate an `editor-lsp` text edit into the kernel's primitive `LspTextEdit` (same coordinates).
+fn to_primitive_text_edit(te: editor_lsp::TextEdit) -> editor_plugin::LspTextEdit {
+    editor_plugin::LspTextEdit {
+        start_line: te.start_line,
+        start_char16: te.start_char16,
+        end_line: te.end_line,
+        end_char16: te.end_char16,
+        new_text: te.new_text,
     }
 }
 

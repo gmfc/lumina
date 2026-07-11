@@ -70,3 +70,23 @@ pub struct LspNavItem {
     pub location: LspLocation,
     pub label: String,
 }
+
+/// A single text replacement in (line, UTF-16 char) coordinates — the primitive twin of
+/// `editor_lsp::TextEdit`. The app resolves the UTF-16 columns to char offsets when it applies the
+/// edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspTextEdit {
+    pub start_line: u32,
+    pub start_char16: u32,
+    pub end_line: u32,
+    pub end_char16: u32,
+    pub new_text: String,
+}
+
+/// A set of edits grouped by file — the primitive twin of `editor_lsp::WorkspaceEdit` (a rename
+/// result). URIs are resolved to filesystem paths app-side; the plugin only forwards this to
+/// [`crate::Host::apply_workspace_edit`], which opens each file and applies the edits.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LspWorkspaceEdit {
+    pub changes: Vec<(String, Vec<LspTextEdit>)>,
+}

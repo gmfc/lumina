@@ -211,6 +211,11 @@ pub trait Host {
     /// plugin publishes into it through here. Default no-op.
     fn show_info(&mut self, _text: String) {}
 
+    /// Apply a multi-file edit set (an LSP rename result). The app owns file IO + the UTF-16↔char
+    /// mapping, so this is a deferred effect: it opens each file and applies the edits as
+    /// history-recorded transactions on the next drain. Default no-op.
+    fn apply_workspace_edit(&mut self, _edit: crate::lsp::LspWorkspaceEdit) {}
+
     /// Read the clipboard (system clipboard, falling back to an in-process register). The app owns
     /// the clipboard I/O (system daemon + OSC 52); a clipboard plugin reads through this for paste.
     /// `&mut` because system access is stateful. Default empty.

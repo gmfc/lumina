@@ -70,6 +70,15 @@ impl App {
             }
         }
 
+        // Multi-file rename edits queued via `Host::apply_workspace_edit` (the `rename` plugin only
+        // forwards the edit). Also drained after the broadcast so a rename applied while reacting to
+        // the event lands in the same pass; the app opens each file and applies the edits.
+        let workspace_edits: Vec<editor_plugin::LspWorkspaceEdit> =
+            std::mem::take(&mut self.editor.pending_workspace_edits);
+        for edit in workspace_edits {
+            self.apply_workspace_edit(edit);
+        }
+
         // LSP responses/notifications: diagnostics, hover, goto, completion, rename.
         for event in self.lsp.poll() {
             self.handle_lsp_event(event);
