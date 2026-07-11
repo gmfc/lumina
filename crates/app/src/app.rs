@@ -18,7 +18,6 @@ use crate::editor::{EditorState, Focus};
 use crate::files;
 use crate::input::Command;
 use crate::keymap::{Chord, Keymap};
-use crate::picker::PickerKind;
 use crate::ui::{self, Regions};
 
 /// Tracks click cadence for double/triple-click detection.

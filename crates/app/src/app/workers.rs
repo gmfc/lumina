@@ -56,6 +56,20 @@ impl App {
             self.registry.broadcast(&ev, &mut self.editor);
         }
 
+        // LSP navigation jumps queued via `Host::open_location` (the `lsp-nav` plugin only
+        // expresses intent). Drained *after* the broadcast so a jump the plugin queued while
+        // reacting to an `LspGoto`/`LspLocations` event lands in the same pass: open the target
+        // and resolve its UTF-16 column to a char offset now that the doc is loaded (app owns IO).
+        let locations: Vec<(PathBuf, u32, u32)> =
+            std::mem::take(&mut self.editor.pending_locations);
+        for (path, line, character) in locations {
+            self.open_path(&path);
+            if let Some(doc) = self.editor.active_document_mut() {
+                let off = crate::app::lsp_pos_to_char(doc, line, character);
+                doc.set_caret(off);
+            }
+        }
+
         // LSP responses/notifications: diagnostics, hover, goto, completion, rename.
         for event in self.lsp.poll() {
             self.handle_lsp_event(event);

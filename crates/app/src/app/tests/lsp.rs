@@ -139,6 +139,9 @@ fn git_status_message_stored_per_doc() {
 
 #[test]
 fn references_open_picker_and_jump() {
+    // Drives the `lsp-nav` plugin: a References response becomes an `LspLocations` event; the
+    // plugin opens its own picker and, on Enter, jumps via `Host::open_location` (resolved in the
+    // drain). The picker is plugin-owned (owner "lsp-nav"), not an app-side `PickerKind::Locations`.
     let path = temp_file("aaa\nbbb\nccc\n");
     let mut app = app_with(&path);
     let uri = crate::lsp::uri_for(&path);
@@ -150,15 +153,38 @@ fn references_open_picker_and_jump() {
         end_character: 1,
     };
     app.handle_lsp_event(crate::lsp::LspEvent::References(vec![loc]));
-    assert!(matches!(
-        app.editor.picker.as_ref().map(|p| p.kind),
-        Some(crate::picker::PickerKind::Locations)
-    ));
-    assert_eq!(app.editor.nav_locations.len(), 1);
+    app.drain_workers(); // broadcast LspLocations → lsp-nav opens the picker
+    assert_eq!(
+        app.editor.picker.as_ref().and_then(|p| p.owner.as_deref()),
+        Some("lsp-nav"),
+        "references open the lsp-nav plugin's picker"
+    );
     // Accepting the row jumps the caret to line 3 (offset 8).
     app.picker_key(KeyEvent::from(KeyCode::Enter));
     let doc = app.editor.active_document().unwrap();
     assert_eq!(doc.char_to_line(doc.selections.primary().head), 2);
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn goto_definition_jumps_to_the_target() {
+    // A Goto response becomes an `LspGoto` event; the `lsp-nav` plugin jumps via
+    // `Host::open_location`, resolved (open + caret) in the same drain.
+    let path = temp_file("aaa\nbbb\nccc\n");
+    let mut app = app_with(&path);
+    let uri = crate::lsp::uri_for(&path);
+    let loc = editor_lsp::Location {
+        uri,
+        line: 1,
+        character: 2,
+        end_line: 1,
+        end_character: 3,
+    };
+    app.handle_lsp_event(crate::lsp::LspEvent::Goto(loc));
+    app.drain_workers(); // broadcast LspGoto → open_location → drain opens + jumps
+    let doc = app.editor.active_document().unwrap();
+    // Line 1 ("bbb") starts at offset 4; character 2 → offset 6.
+    assert_eq!(doc.selections.primary().head, 6);
     std::fs::remove_file(&path).ok();
 }
 

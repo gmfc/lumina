@@ -30,7 +30,9 @@ pub use decoration::{Decoration, DecorationSet, GutterMark};
 pub use event::Event;
 pub use host::{Host, PanelContent, PanelLine, Span};
 pub use input::{Key, KeyCode};
-pub use lsp::{LspCompletionItem, LspDiagnostic, LspRequestKind, LspSeverity};
+pub use lsp::{
+    LspCompletionItem, LspDiagnostic, LspLocation, LspNavItem, LspRequestKind, LspSeverity,
+};
 pub use overlay::{Popup, PopupRow, Prompt, PromptField, PromptPlacement, PromptToggle};
 pub use picker::{CommandInfo, PickerItem, PickerRequest};
 pub use registry::{Plugin, Registry};

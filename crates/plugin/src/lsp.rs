@@ -51,3 +51,22 @@ pub struct LspDiagnostic {
     pub severity: LspSeverity,
     pub message: String,
 }
+
+/// A resolved navigation target — the primitive twin of `editor_lsp::Location`, with the URI
+/// already resolved to a filesystem path app-side. A navigation plugin jumps here through
+/// [`crate::Host::open_location`] without touching `editor-lsp` or URI parsing. `character` is a
+/// UTF-16 column, resolved to a char offset app-side when the jump is applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspLocation {
+    pub path: String,
+    pub line: u32,
+    pub character: u32,
+}
+
+/// A row in a navigation picker (references / document symbols): where to jump, plus the label the
+/// app already formatted for it (a `file:line:col` for references, an indented name for symbols).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspNavItem {
+    pub location: LspLocation,
+    pub label: String,
+}
