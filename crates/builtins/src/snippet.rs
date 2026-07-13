@@ -1,0 +1,189 @@
+//! Minimal LSP completion-snippet expansion (§5.2 grammar): `$1`, `${1:placeholder}`,
+//! `${1|a,b,c|}` choice, `$0`, `${VAR}` / `${VAR:default}` variables, and `\$ \} \\ \,` escapes.
+//!
+//! Expands the snippet to plain text plus the tabstop ranges. On accept the completion plugin
+//! inserts the text and places the caret at the first tabstop (selecting its placeholder). A full
+//! multi-tabstop session (Tab/Shift-Tab cycling, mirrored edits) is a follow-up; unknown variables
+//! resolve to their `:default` text (or empty), never to a literal `$name`.
+
+/// A tabstop's number and its char range within the expanded [`Snippet::text`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tabstop {
+    pub number: u32,
+    pub range: (usize, usize),
+}
+
+/// The result of expanding a snippet: plain text + tabstops.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Snippet {
+    pub text: String,
+    pub tabstops: Vec<Tabstop>,
+}
+
+impl Snippet {
+    /// The tabstop the caret should land on after insertion: the lowest positive tabstop, else
+    /// `$0`, else `None` (caret goes to the end of the inserted text).
+    pub fn first_stop(&self) -> Option<&Tabstop> {
+        self.tabstops
+            .iter()
+            .filter(|t| t.number > 0)
+            .min_by_key(|t| t.number)
+            .or_else(|| self.tabstops.iter().find(|t| t.number == 0))
+    }
+}
+
+/// Expand a snippet string.
+pub fn expand(src: &str) -> Snippet {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::new();
+    let mut stops = Vec::new();
+    let mut i = 0;
+    parse(&chars, &mut i, &mut out, &mut stops, false);
+    Snippet {
+        text: out,
+        tabstops: stops,
+    }
+}
+
+fn parse(chars: &[char], i: &mut usize, out: &mut String, stops: &mut Vec<Tabstop>, nested: bool) {
+    while *i < chars.len() {
+        let c = chars[*i];
+        if nested && c == '}' {
+            return; // caller consumes the closing brace
+        }
+        match c {
+            '\\' => {
+                *i += 1;
+                if *i < chars.len() && matches!(chars[*i], '$' | '}' | '\\' | ',') {
+                    out.push(chars[*i]);
+                    *i += 1;
+                } else {
+                    out.push('\\');
+                }
+            }
+            '$' => {
+                *i += 1;
+                parse_dollar(chars, i, out, stops);
+            }
+            _ => {
+                out.push(c);
+                *i += 1;
+            }
+        }
+    }
+}
+
+fn parse_dollar(chars: &[char], i: &mut usize, out: &mut String, stops: &mut Vec<Tabstop>) {
+    if *i >= chars.len() {
+        out.push('$');
+        return;
+    }
+    if chars[*i] == '{' {
+        *i += 1; // consume '{'
+        if *i < chars.len() && chars[*i].is_ascii_digit() {
+            let num = read_number(chars, i);
+            let start = out.chars().count();
+            match chars.get(*i) {
+                Some(':') => {
+                    *i += 1;
+                    parse(chars, i, out, stops, true); // placeholder (may nest tabstops)
+                }
+                Some('|') => {
+                    *i += 1;
+                    read_choice_first(chars, i, out);
+                }
+                _ => {}
+            }
+            let end = out.chars().count();
+            stops.push(Tabstop {
+                number: num,
+                range: (start, end),
+            });
+            consume_close(chars, i);
+        } else {
+            // ${VAR} / ${VAR:default} — unknown vars fall back to their default (or empty).
+            while *i < chars.len() && chars[*i] != '}' && chars[*i] != ':' {
+                *i += 1;
+            }
+            if chars.get(*i) == Some(&':') {
+                *i += 1;
+                parse(chars, i, out, stops, true);
+            }
+            consume_close(chars, i);
+        }
+    } else if chars[*i].is_ascii_digit() {
+        let num = read_number(chars, i);
+        let at = out.chars().count();
+        stops.push(Tabstop {
+            number: num,
+            range: (at, at),
+        });
+    } else if chars[*i].is_alphabetic() || chars[*i] == '_' {
+        // bare $VAR — unknown, expands to nothing.
+        while *i < chars.len() && (chars[*i].is_alphanumeric() || chars[*i] == '_') {
+            *i += 1;
+        }
+    } else {
+        out.push('$');
+    }
+}
+
+fn read_number(chars: &[char], i: &mut usize) -> u32 {
+    let mut n = String::new();
+    while *i < chars.len() && chars[*i].is_ascii_digit() {
+        n.push(chars[*i]);
+        *i += 1;
+    }
+    n.parse().unwrap_or(0)
+}
+
+/// Emit the first choice option and skip the rest up to `}`.
+fn read_choice_first(chars: &[char], i: &mut usize, out: &mut String) {
+    while *i < chars.len() && !matches!(chars[*i], ',' | '|' | '}') {
+        if chars[*i] == '\\' && *i + 1 < chars.len() {
+            *i += 1;
+        }
+        out.push(chars[*i]);
+        *i += 1;
+    }
+    while *i < chars.len() && chars[*i] != '}' {
+        *i += 1;
+    }
+}
+
+fn consume_close(chars: &[char], i: &mut usize) {
+    if chars.get(*i) == Some(&'}') {
+        *i += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_tabstop_and_final_cursor() {
+        let s = expand("println!($1)$0");
+        assert_eq!(s.text, "println!()");
+        // $1 at the '(' + 1 = char 9; $0 at end (10).
+        assert_eq!(s.first_stop().unwrap().number, 1);
+        assert_eq!(s.first_stop().unwrap().range, (9, 9));
+    }
+
+    #[test]
+    fn placeholder_text_and_range() {
+        let s = expand("for ${1:item} in ${2:iter} {\n\t$0\n}");
+        assert!(s.text.starts_with("for item in iter {"));
+        let t1 = s.first_stop().unwrap();
+        assert_eq!(t1.number, 1);
+        assert_eq!(&s.text[t1.range.0..t1.range.1], "item");
+    }
+
+    #[test]
+    fn choice_uses_first_and_vars_and_escapes() {
+        assert_eq!(expand("${1|a,b,c|}").text, "a");
+        assert_eq!(expand("${TM_UNKNOWN:def}").text, "def"); // unknown var → default
+        assert_eq!(expand("$UNKNOWN").text, ""); // bare unknown var → empty
+        assert_eq!(expand("cost is \\$5").text, "cost is $5"); // escaped $
+    }
+}
