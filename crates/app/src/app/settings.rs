@@ -346,7 +346,8 @@ impl App {
             ("icons", SettingValue::Bool(b)) => self.config.icons = b,
             ("vim", SettingValue::Bool(b)) => {
                 self.config.vim = b;
-                self.set_vim(b);
+                let cmd = if b { "vim.enable" } else { "vim.disable" };
+                self.registry.dispatch_command(cmd, &mut self.editor);
             }
             _ => {}
         }

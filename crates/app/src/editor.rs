@@ -107,9 +107,13 @@ pub struct EditorState {
     pub popup: Option<Popup>,
     /// Per-document git change map for the gutter (plan §4.1), computed off-thread.
     pub git_hunks: HashMap<DocId, crate::git::LineStatuses>,
-    /// The optional Vim modal-editing layer. `Some` when `vim = true` (or the user
-    /// toggled it on); the renderer reads its mode for the status badge.
-    pub vim: Option<crate::vim::VimState>,
+    /// The Vim render mirror published by the `vim` plugin via `Host::set_vim_view`: the mode (for
+    /// the status badge + visual-selection shading) and any pending-command hint. `Some` while the
+    /// vim layer is enabled. The whole modal state machine lives in the plugin.
+    pub vim_view: Option<editor_plugin::VimView>,
+    /// The editor's visible height in rows, mirrored from the layout each frame so the `vim` plugin
+    /// can read it through `Host::viewport_height` for page motions / recentering.
+    pub page_height: usize,
     /// The system clipboard (arboard + OSC 52 + an in-process register). App-owned I/O, kept here
     /// so the `clipboard` plugin can reach it through `Host::clipboard_read`/`clipboard_write`
     /// across the split-borrow wall (the plugin only sees `&mut EditorState`).
@@ -149,7 +153,8 @@ impl EditorState {
             bracket_match: None,
             popup: None,
             git_hunks: HashMap::new(),
-            vim: None,
+            vim_view: None,
+            page_height: 20,
             clipboard: crate::clipboard::Clipboard::new(),
         }
     }
@@ -441,6 +446,42 @@ impl Host for EditorState {
 
     fn set_terminal_focus(&mut self, focused: bool) {
         self.focus = if focused { Focus::Panel } else { Focus::Editor };
+    }
+
+    fn viewport_height(&self) -> usize {
+        self.page_height
+    }
+
+    fn move_lines(&mut self, doc: DocId, delta: isize, extend: bool) {
+        let page = self.page_height;
+        let motion = if delta < 0 {
+            editor_core::Motion::Up
+        } else {
+            editor_core::Motion::Down
+        };
+        if let Some(d) = self.workspace.documents.get_mut(doc) {
+            for _ in 0..delta.unsigned_abs() {
+                editor_core::edit::move_selections(d, motion, page, extend);
+            }
+        }
+        self.emit(Event::DidChangeCursor(doc));
+    }
+
+    fn set_scroll(&mut self, doc: DocId, line: usize) {
+        if let Some(d) = self.workspace.documents.get_mut(doc) {
+            let max = d.len_lines().saturating_sub(1);
+            d.view.scroll_line = line.min(max);
+        }
+    }
+
+    fn set_dirty(&mut self, doc: DocId, dirty: bool) {
+        if let Some(d) = self.workspace.documents.get_mut(doc) {
+            d.dirty = dirty;
+        }
+    }
+
+    fn set_vim_view(&mut self, view: Option<editor_plugin::VimView>) {
+        self.vim_view = view;
     }
 
     fn clipboard_read(&mut self) -> String {

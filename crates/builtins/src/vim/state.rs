@@ -1,44 +1,18 @@
-//! Vim modal editing state — the types the [`crate::app::App`] key handlers drive.
-//!
-//! Lumina is a mouse-first, non-modal editor; this adds an *optional* Vim layer on
-//! top of it, enabled with `vim = true` in `[settings]` (or the `vim.toggle`
-//! command). It is a **native module**, not a plugin: modal editing has to consume
-//! raw keystrokes differently per mode — buffering counts, operators, and
-//! operator-pending state — which the plugin contribution API (discrete
-//! key→command bindings, no raw-keystroke event) can't express. It still respects
-//! the architecture: every buffer change flows through `editor_core::edit`
-//! (invariant #1), Vim reuses existing command ids where it can (invariant #4),
-//! and the pure motion/text-object math lives in `editor_core::vim` (invariant #5).
-//!
-//! The state machine itself — how each key is interpreted — lives in
-//! [`crate::app`]'s `vim` submodule (`impl App`), because acting on a key needs the
-//! whole `App` (documents, clipboard, command dispatch). This module holds the
-//! data those handlers read and mutate, plus a little pure bookkeeping.
+//! Vim modal state — the data the [`super::VimPlugin`] state machine reads and mutates, plus a
+//! little pure bookkeeping (counts, dot-repeat recording). Moved out of the app with vim; the only
+//! change is that dot-repeat records the crossterm-free [`Key`] the plugin sees.
 
 use std::collections::HashMap;
 
-use crossterm::event::KeyEvent;
+use editor_plugin::input::Key;
 
-/// The active editing mode. `Normal` is home base; `Insert` types literal text;
-/// `Visual`/`VisualLine` select before acting.
+/// The active editing mode.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Normal,
     Insert,
     Visual,
     VisualLine,
-}
-
-impl Mode {
-    /// The status-line badge for this mode (`-- NORMAL --`, …).
-    pub fn label(self) -> &'static str {
-        match self {
-            Mode::Normal => "NORMAL",
-            Mode::Insert => "INSERT",
-            Mode::Visual => "VISUAL",
-            Mode::VisualLine => "V-LINE",
-        }
-    }
 }
 
 /// A Vim operator — the verb that acts on the range a motion or text object spans.
@@ -65,8 +39,7 @@ pub enum MotionKind {
     Linewise,
 }
 
-/// The contents of a register: text plus whether it was yanked line-wise (so `p`
-/// knows to paste on a new line).
+/// The contents of a register: text plus whether it was yanked line-wise.
 #[derive(Clone, Default, Debug)]
 pub struct Register {
     pub text: String,
@@ -80,8 +53,7 @@ pub enum Prefix {
     G,
     /// `z…` — `zz`, `zt`, `zb`.
     Z,
-    /// A text object is being entered: the next key is the object; `around` picks
-    /// `a` (true) vs `i` (false).
+    /// A text object: the next key is the object; `around` picks `a` (true) vs `i` (false).
     Object { around: bool },
     /// Replace-with (`r`): the next key is the replacement char.
     Replace,
@@ -98,9 +70,7 @@ pub enum FindPending {
     TillBack,
 }
 
-/// The whole Vim layer's state, hung off [`crate::editor::EditorState`] so the
-/// renderer (a pure function of state) can show the mode, and off `App` so the key
-/// handlers can drive it.
+/// The whole Vim layer's state.
 pub struct VimState {
     pub mode: Mode,
     /// Count typed before the operator (or before a bare motion).
@@ -125,11 +95,10 @@ pub struct VimState {
     pub search: Option<(bool, String)>,
     /// The last search pattern, for `n`/`N`.
     pub last_search: Option<(bool, String)>,
-    // --- dot-repeat via keystroke recording ---
     /// Keys captured for the change currently being made.
-    pub recording: Option<Vec<KeyEvent>>,
+    pub recording: Option<Vec<Key>>,
     /// The finished last change, replayed by `.`.
-    pub last_change: Vec<KeyEvent>,
+    pub last_change: Vec<Key>,
     /// True while `.` is feeding recorded keys back through the handler.
     pub replaying: bool,
     /// Document revision when the current recording began (to detect a real change).
@@ -137,7 +106,6 @@ pub struct VimState {
 }
 
 impl VimState {
-    /// A fresh Vim layer, starting in Normal mode.
     pub fn new() -> VimState {
         VimState {
             mode: Mode::Normal,
@@ -173,9 +141,7 @@ impl VimState {
         self.count.is_some() || self.op_count.is_some()
     }
 
-    /// Push a digit onto the active count accumulator (post-operator once an
-    /// operator is pending). A leading `0` with no count in progress is *not* a
-    /// count — it's the `0` motion; the caller checks [`Self::count_active`] first.
+    /// Push a digit onto the active count accumulator (post-operator once an operator is pending).
     pub fn push_digit(&mut self, d: usize) {
         if self.operator.is_some() {
             self.op_count = Some(self.op_count.unwrap_or(0) * 10 + d);
@@ -193,8 +159,8 @@ impl VimState {
         }
     }
 
-    /// Clear everything pending after a command completes or is cancelled — but
-    /// keep the mode, registers, and dot-repeat state.
+    /// Clear everything pending after a command completes/cancels — but keep mode, registers,
+    /// and dot-repeat state.
     pub fn clear_pending(&mut self) {
         self.count = None;
         self.op_count = None;
@@ -216,9 +182,8 @@ impl VimState {
             && self.register.is_none()
     }
 
-    /// Append `key` to the in-progress dot-repeat recording, starting one if none
-    /// is open. Bounded so a very long insert session can't grow without limit.
-    pub fn record_key(&mut self, key: KeyEvent, rev: u64) {
+    /// Append `key` to the in-progress dot-repeat recording (bounded).
+    pub fn record_key(&mut self, key: Key, rev: u64) {
         if self.recording.is_none() {
             self.recording = Some(Vec::new());
             self.rev_at_record_start = rev;
@@ -230,8 +195,8 @@ impl VimState {
         }
     }
 
-    /// If a recording is open and we're back at a clean Normal state, commit it as
-    /// the last change (when the buffer actually changed) or discard it.
+    /// Commit an open recording as the last change (when the buffer changed) once back at a clean
+    /// Normal state, or discard it.
     pub fn finalize_recording(&mut self, rev: u64) {
         if self.recording.is_some() && self.mode == Mode::Normal && self.is_idle() {
             let keys = self.recording.take().unwrap_or_default();
@@ -241,8 +206,7 @@ impl VimState {
         }
     }
 
-    /// A short hint for the status line describing the pending state (count,
-    /// register, operator), or `None` when idle.
+    /// A short status-line hint for the pending state (count, register, operator), or `None`.
     pub fn pending_hint(&self) -> Option<String> {
         if let Some((fwd, pat)) = &self.search {
             return Some(format!("{}{pat}", if *fwd { '/' } else { '?' }));

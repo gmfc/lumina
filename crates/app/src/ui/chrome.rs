@@ -252,11 +252,11 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         left = format!(" {msg}");
     }
 
-    // Vim mode badge (and any pending count/operator) at the far left.
-    if let Some(vim) = &app.editor.vim {
+    // Vim mode badge (and any pending count/operator) at the far left, from the plugin's mirror.
+    if let Some(vim) = &app.editor.vim_view {
         let mut badge = format!(" -- {} -- ", vim.mode.label());
-        if let Some(hint) = vim.pending_hint() {
-            badge.push_str(&hint);
+        if let Some(hint) = &vim.pending {
+            badge.push_str(hint);
             badge.push(' ');
         }
         left = format!("{badge}{}", left.trim_start());

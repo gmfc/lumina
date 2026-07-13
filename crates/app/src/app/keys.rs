@@ -62,18 +62,18 @@ impl App {
             self.pending.clear();
             return true;
         }
-        // Vim modal layer: consumes normal/visual keys; Insert text and un-owned chords fall through.
-        if self.handle_vim_key(key) {
-            self.pending.clear();
-            return true;
-        }
-        // Registry-contributed raw-key capturers (vim/terminal once they migrate to plugins) get
-        // the last refusal before chord resolution. A no-op today: no built-in plugin overrides
-        // `Plugin::capture_key`, so this preserves behavior until a capturer exists.
-        if let Some(pk) = to_plugin_key(key) {
-            if self.registry.capture_key(pk, &mut self.editor) {
-                self.pending.clear();
-                return true;
+        // Registry-contributed raw-key capturers (the `vim` plugin) get the last refusal before
+        // chord resolution — but only when the editor itself is focused and no Settings tab is
+        // active, matching vim's old entry gate. Insert-mode text + un-owned chords return `false`
+        // and fall through. Drain after a consumed key so vim's queued commands (undo/save/quit
+        // via `Host::execute`) and its edit events are applied this tick.
+        if self.editor.focus == Focus::Editor && !self.settings_active() {
+            if let Some(pk) = to_plugin_key(key) {
+                if self.registry.capture_key(pk, &mut self.editor) {
+                    self.pending.clear();
+                    self.drain_workers();
+                    return true;
+                }
             }
         }
         false

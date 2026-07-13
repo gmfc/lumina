@@ -21,9 +21,7 @@ impl App {
         }
         match id {
             "config.reload" => self.reload_config(),
-            "vim.enable" => self.set_vim(true),
-            "vim.disable" => self.set_vim(false),
-            "vim.toggle" => self.set_vim(self.editor.vim.is_none()),
+            // vim.enable/disable/toggle are the `vim` plugin's commands (resolved registry-first).
             "view.settings" => self.open_settings(),
             other => {
                 self.editor.status_message = Some(format!("Unknown command: {other}"));

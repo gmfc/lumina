@@ -11,7 +11,7 @@ use crossterm::event::{self, Event as CtEvent, KeyEventKind, MouseButton, MouseE
 use editor_core::view::{screen_to_char, PaneGeometry};
 use editor_core::{edit, motion};
 use editor_core::{Document, Selection};
-use editor_plugin::{Host, Registry};
+use editor_plugin::Registry;
 use ratatui::DefaultTerminal;
 
 use crate::editor::{EditorState, Focus};
@@ -88,7 +88,6 @@ mod overlay;
 mod palette;
 mod panel;
 mod settings;
-mod vim;
 mod workers;
 
 /// Convert an LSP `(line, utf16_char)` position to a char offset in `doc`.

@@ -19,6 +19,7 @@ pub mod picker;
 pub mod registry;
 pub mod runtime;
 pub mod terminal;
+pub mod vim;
 pub mod wasm;
 
 pub use contribution::CommandSpec;
@@ -38,3 +39,4 @@ pub use overlay::{Popup, PopupRow, Prompt, PromptField, PromptPlacement, PromptT
 pub use picker::{CommandInfo, PickerItem, PickerRequest};
 pub use registry::{Plugin, Registry};
 pub use terminal::{TerminalId, TerminalView};
+pub use vim::{VimMode, VimView};
