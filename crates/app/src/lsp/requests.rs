@@ -131,6 +131,23 @@ impl LspManager {
         })
     }
 
+    pub fn request_signature_help(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(
+            language,
+            &uri,
+            Pending::SignatureHelp,
+            Cap::SignatureHelp,
+            |c| c.signature_help(&uri, line, character),
+        )
+    }
+
     pub fn request_rename(
         &mut self,
         path: &Path,

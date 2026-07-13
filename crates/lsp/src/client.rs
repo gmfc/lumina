@@ -107,6 +107,7 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
             "textDocument": {
                 "publishDiagnostics": { "relatedInformation": false },
                 "hover": { "contentFormat": ["plaintext"] },
+                "signatureHelp": { "signatureInformation": { "parameterInformation": { "labelOffsetSupport": true }, "activeParameterSupport": true } },
                 "definition": { "linkSupport": true },
                 "typeDefinition": { "linkSupport": true },
                 "implementation": { "linkSupport": true },
@@ -182,6 +183,14 @@ impl LspHandle {
     pub fn completion(&self, uri: &str, line: u32, character: u32) -> io::Result<i64> {
         self.request(
             "textDocument/completion",
+            Self::position(uri, line, character),
+        )
+    }
+
+    /// Request signature help at a position (the parameter hints while typing a call).
+    pub fn signature_help(&self, uri: &str, line: u32, character: u32) -> io::Result<i64> {
+        self.request(
+            "textDocument/signatureHelp",
             Self::position(uri, line, character),
         )
     }

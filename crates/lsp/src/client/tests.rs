@@ -218,14 +218,16 @@ fn parse_capabilities_full_and_minimal() {
         "documentSymbolProvider": true,
         "completionProvider": { "triggerCharacters": ["."] },
         "renameProvider": { "prepareProvider": true },
-        "documentFormattingProvider": true
+        "documentFormattingProvider": true,
+        "signatureHelpProvider": { "triggerCharacters": ["(", ","] }
     }});
     let c = parse_capabilities(&full);
     assert_eq!(c.position_encoding, Some(PositionEncoding::Utf8));
     assert_eq!(c.sync_kind, SyncKind::Incremental);
     assert!(c.hover && c.definition && c.type_definition && c.implementation);
     assert!(c.references && c.document_symbol && c.completion && c.rename && c.formatting);
-    assert!(c.allows(Cap::Hover) && c.allows(Cap::Rename) && c.allows(Cap::Formatting));
+    assert!(c.signature_help);
+    assert!(c.allows(Cap::Hover) && c.allows(Cap::Formatting) && c.allows(Cap::SignatureHelp));
 
     // minimal: providers as bare booleans, sync as a number, no encoding.
     let min = serde_json::json!({ "capabilities": {
@@ -239,6 +241,35 @@ fn parse_capabilities_full_and_minimal() {
     assert!(c.hover && c.completion);
     assert!(!c.definition && !c.rename && !c.formatting);
     assert!(!c.allows(Cap::Definition) && !c.allows(Cap::Formatting));
+}
+
+#[test]
+fn parse_signature_help_offsets_substring_and_empty() {
+    // Offset-based active parameter (labelOffsetSupport).
+    let offs = serde_json::json!({
+        "signatures": [{ "label": "fn f(a: i32, b: str)", "parameters": [
+            { "label": [5, 11] }, { "label": [13, 19] }
+        ]}],
+        "activeSignature": 0,
+        "activeParameter": 1
+    });
+    let s = parse_signature_help(&offs).unwrap();
+    assert_eq!(s.label, "fn f(a: i32, b: str)");
+    assert_eq!(s.active_param, Some((13, 19)));
+
+    // Substring-based active parameter, with a per-signature activeParameter override.
+    let subs = serde_json::json!({
+        "signatures": [{ "label": "add(x, y)", "parameters": [
+            { "label": "x" }, { "label": "y" }
+        ], "activeParameter": 0 }]
+    });
+    assert_eq!(
+        parse_signature_help(&subs).unwrap().active_param,
+        Some((4, 5))
+    );
+
+    // No signatures → None (clear the hint).
+    assert!(parse_signature_help(&serde_json::json!({ "signatures": [] })).is_none());
 }
 
 #[test]
