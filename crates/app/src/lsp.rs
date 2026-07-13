@@ -485,6 +485,13 @@ impl LspManager {
         matches!(self.state.get(language), Some(ClientState::Running(caps)) if caps.allows(cap))
     }
 
+    /// Whether the server declared `command` in `executeCommandProvider.commands` — only declared
+    /// commands may be sent to `workspace/executeCommand` (§8.4).
+    fn can_execute(&self, language: &str, command: &str) -> bool {
+        matches!(self.state.get(language), Some(ClientState::Running(caps))
+            if caps.execute_commands.iter().any(|c| c == command))
+    }
+
     /// Notify the server that a document opened. Sends only once the connection is `Running`;
     /// returns whether the notification was actually sent (so the caller records the sent
     /// revision only on a real send).

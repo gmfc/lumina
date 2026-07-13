@@ -30,6 +30,12 @@ pub enum LspRequestKind {
         label: String,
         data: serde_json::Value,
     },
+    /// Run a command (server `workspace/executeCommand`, or a client-command shim like
+    /// `editor.action.triggerSuggest`).
+    ExecuteCommand {
+        command: String,
+        arguments: serde_json::Value,
+    },
 }
 
 /// A code action offered to the user: a title plus the edit to apply on selection — the primitive
@@ -37,7 +43,10 @@ pub enum LspRequestKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LspCodeAction {
     pub title: String,
+    /// The edit to apply (possibly empty for a command-only action).
     pub edit: LspWorkspaceEdit,
+    /// A command to run after the edit (command id + arguments), if any.
+    pub command: Option<(String, serde_json::Value)>,
 }
 
 /// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates. `kind`:
@@ -76,6 +85,8 @@ pub struct LspCompletionItem {
     pub is_snippet: bool,
     /// Opaque payload for `completionItem/resolve` (to fetch late additional_edits on accept).
     pub data: Option<serde_json::Value>,
+    /// A command to run after inserting (command id + arguments), via the shim.
+    pub command: Option<(String, serde_json::Value)>,
 }
 
 /// A diagnostic in (line, UTF-16 char) coordinates — the primitive twin of `editor_lsp::Diagnostic`.

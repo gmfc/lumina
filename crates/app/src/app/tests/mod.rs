@@ -62,6 +62,7 @@ fn ci(label: &str, kind: u8) -> editor_plugin::LspCompletionItem {
         additional_edits: Vec::new(),
         is_snippet: false,
         data: None,
+        command: None,
     }
 }
 

@@ -80,7 +80,13 @@ impl Plugin for CodeActionPlugin {
             .and_then(|i| self.actions.get(i))
             .cloned()
         {
-            host.apply_workspace_edit(action.edit);
+            // Execution order: apply the edit, then run the command (§6.3).
+            if !action.edit.changes.is_empty() {
+                host.apply_workspace_edit(action.edit);
+            }
+            if let Some((command, arguments)) = action.command {
+                host.lsp_request(LspRequestKind::ExecuteCommand { command, arguments });
+            }
         }
     }
 }

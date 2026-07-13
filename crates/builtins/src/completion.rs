@@ -271,6 +271,11 @@ impl CompletionPlugin {
                 });
             }
         }
+        // A post-accept command (e.g. `editor.action.triggerSuggest` after a path completion),
+        // routed through the client-command shim.
+        if let Some((command, arguments)) = item.command {
+            host.lsp_request(LspRequestKind::ExecuteCommand { command, arguments });
+        }
     }
 
     /// Expand and insert a snippet at the primary cursor, replacing the typed prefix and placing
@@ -444,6 +449,7 @@ mod tests {
             additional_edits: Vec::new(),
             is_snippet: false,
             data: None,
+            command: None,
         }
     }
 

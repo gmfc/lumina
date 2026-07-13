@@ -209,6 +209,24 @@ impl LspManager {
         )
     }
 
+    /// Run a server-declared command (fire-and-forget: the result is ignored; effects arrive as
+    /// `workspace/applyEdit`). Undeclared commands are dropped rather than eliciting `-32601`.
+    pub fn request_execute_command(
+        &mut self,
+        language: &str,
+        command: &str,
+        arguments: &serde_json::Value,
+    ) -> bool {
+        self.ensure_started(language);
+        if !self.can_execute(language, command) {
+            return false;
+        }
+        if let Some(client) = self.clients.get(language) {
+            return client.execute_command(command, arguments).is_ok();
+        }
+        false
+    }
+
     pub fn request_code_action(
         &mut self,
         path: &Path,

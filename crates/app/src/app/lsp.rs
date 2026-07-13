@@ -106,9 +106,14 @@ impl App {
                 // the code-action plugin, which shows a picker and applies the chosen one.
                 let mut prim = Vec::with_capacity(actions.len());
                 for a in actions {
+                    let edit = a
+                        .edit
+                        .map(|e| self.resolve_workspace_edit(e))
+                        .unwrap_or_default();
                     prim.push(editor_plugin::LspCodeAction {
                         title: a.title,
-                        edit: self.resolve_workspace_edit(a.edit),
+                        edit,
+                        command: a.command.map(|c| (c.command, c.arguments)),
                     });
                 }
                 self.editor
@@ -395,6 +400,29 @@ impl App {
                 }
                 return;
             }
+            K::ExecuteCommand { command, arguments } => {
+                // Client-command shim (§8.4): emulate a few VS Code built-ins client-side; send
+                // everything else to the server if it declared the command.
+                use editor_plugin::LspRequestKind as Kr;
+                match command.as_str() {
+                    "editor.action.triggerSuggest" => {
+                        self.editor.pending_lsp_requests.push(Kr::Completion)
+                    }
+                    "editor.action.triggerParameterHints" => {
+                        self.editor.pending_lsp_requests.push(Kr::SignatureHelp)
+                    }
+                    _ => {
+                        if let Some(lang) = self
+                            .editor
+                            .active_document()
+                            .and_then(|d| d.language.clone())
+                        {
+                            self.lsp.request_execute_command(&lang, command, arguments);
+                        }
+                    }
+                }
+                return;
+            }
             _ => {}
         }
         let Some((p, l, line, ch)) = self.lsp_position() else {
@@ -415,7 +443,8 @@ impl App {
             K::DocumentSymbols
             | K::Formatting
             | K::WorkspaceSymbols(_)
-            | K::ResolveCompletion { .. } => false,
+            | K::ResolveCompletion { .. }
+            | K::ExecuteCommand { .. } => false,
         };
     }
 
@@ -542,6 +571,7 @@ fn to_primitive_completion(it: editor_lsp::CompletionItem) -> editor_plugin::Lsp
             .collect(),
         is_snippet: it.is_snippet,
         data: it.data,
+        command: it.command.map(|c| (c.command, c.arguments)),
     }
 }
 

@@ -245,6 +245,15 @@ impl LspHandle {
         self.request("workspace/symbol", json!({ "query": query }))
     }
 
+    /// Run a server-declared command (§8.4). The result is typically ignored — effects come back
+    /// as `workspace/applyEdit`.
+    pub fn execute_command(&self, command: &str, arguments: &Value) -> io::Result<i64> {
+        self.request(
+            "workspace/executeCommand",
+            json!({ "command": command, "arguments": arguments }),
+        )
+    }
+
     /// Request code actions for a range. `context.diagnostics` is empty for now (quickfixes that
     /// key off it may be limited — see the roadmap); refactor/source actions still apply.
     #[allow(clippy::too_many_arguments)]

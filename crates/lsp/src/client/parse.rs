@@ -6,10 +6,19 @@
 use serde_json::Value;
 
 use crate::{
-    CodeAction, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate, DocEdit,
+    CodeAction, Command, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate, DocEdit,
     DocumentHighlight, DocumentSymbol, Location, PositionEncoding, ServerCaps, Severity,
     SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
+
+/// Parse a `Command`/`{command, arguments}` object.
+fn parse_command(v: &Value) -> Option<Command> {
+    let command = v.get("command")?.as_str()?.to_string();
+    Some(Command {
+        command,
+        arguments: v.get("arguments").cloned().unwrap_or(Value::Null),
+    })
+}
 
 /// Parse an `InitializeResult` into the caps Lumina gates on. Resilient: a provider is
 /// "present" when it is `true` or an options object; absent/`false`/`null` means unsupported.
@@ -48,6 +57,16 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
         document_highlight: present("documentHighlightProvider"),
         workspace_symbol: present("workspaceSymbolProvider"),
         code_action: present("codeActionProvider"),
+        execute_commands: caps
+            .get("executeCommandProvider")
+            .and_then(|e| e.get("commands"))
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -61,8 +80,28 @@ pub fn parse_code_actions(result: &Value) -> Vec<CodeAction> {
     arr.iter()
         .filter_map(|a| {
             let title = a.get("title")?.as_str()?.to_string();
-            let edit = parse_workspace_edit(a.get("edit")?);
-            (!edit.changes.is_empty()).then_some(CodeAction { title, edit })
+            // A bare `Command` has a top-level string `command`; a `CodeAction` has `edit?` and/or
+            // a nested `command` object.
+            if let Some(cmd) = a.get("command").and_then(|c| c.as_str()) {
+                return Some(CodeAction {
+                    title,
+                    edit: None,
+                    command: Some(Command {
+                        command: cmd.to_string(),
+                        arguments: a.get("arguments").cloned().unwrap_or(Value::Null),
+                    }),
+                });
+            }
+            let edit = a
+                .get("edit")
+                .map(parse_workspace_edit)
+                .filter(|e| !e.changes.is_empty());
+            let command = a.get("command").and_then(parse_command);
+            (edit.is_some() || command.is_some()).then_some(CodeAction {
+                title,
+                edit,
+                command,
+            })
         })
         .collect()
 }
@@ -337,6 +376,7 @@ pub fn parse_completion(result: &Value) -> CompletionList {
                 additional_edits,
                 is_snippet,
                 data: it.get("data").cloned(),
+                command: it.get("command").and_then(parse_command),
             })
         })
         .collect();

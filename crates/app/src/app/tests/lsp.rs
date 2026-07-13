@@ -162,6 +162,7 @@ fn snippet_completion_expands_with_tabstop_cursor() {
         additional_edits: Vec::new(),
         is_snippet: true,
         data: None,
+        command: None,
     };
     feed_completion(&mut app, vec![snippet_item]);
     app.on_key(KeyEvent::from(KeyCode::Enter)); // accept

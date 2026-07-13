@@ -21,6 +21,7 @@ fn renders_completion_popup() {
                 additional_edits: Vec::new(),
                 is_snippet: false,
                 data: None,
+                command: None,
             },
             ci("println", 3),
             ci("procedure", 3),

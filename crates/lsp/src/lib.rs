@@ -81,6 +81,8 @@ pub struct CompletionItem {
     pub is_snippet: bool,
     /// Opaque server payload, echoed back to `completionItem/resolve` to fetch lazy fields.
     pub data: Option<serde_json::Value>,
+    /// A command to run *after* inserting (e.g. `editor.action.triggerSuggest`), via the shim.
+    pub command: Option<Command>,
 }
 
 /// A completion response: the items plus whether the list is truncated (`isIncomplete`), which
@@ -216,12 +218,22 @@ pub enum Cap {
     CodeAction,
 }
 
-/// A code action that carries an edit to apply (quickfix / refactor / source action). Command-only
-/// actions (executed via `workspace/executeCommand`) are not modeled yet.
+/// A server command to run via `workspace/executeCommand`, or a VS Code client command emulated
+/// by the client-command shim (§8.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Command {
+    pub command: String,
+    /// The `arguments` array (opaque; passed through to the server or shim), `Null` if none.
+    pub arguments: serde_json::Value,
+}
+
+/// A code action (quickfix / refactor / source): a title plus an edit to apply and/or a command
+/// to execute (execution order: edit, then command, §6.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeAction {
     pub title: String,
-    pub edit: WorkspaceEdit,
+    pub edit: Option<WorkspaceEdit>,
+    pub command: Option<Command>,
 }
 
 /// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates.
@@ -265,6 +277,9 @@ pub struct ServerCaps {
     pub document_highlight: bool,
     pub workspace_symbol: bool,
     pub code_action: bool,
+    /// The command ids the server declared via `executeCommandProvider.commands` — only these may
+    /// be sent to `workspace/executeCommand` (§8.4).
+    pub execute_commands: Vec<String>,
 }
 
 impl ServerCaps {
