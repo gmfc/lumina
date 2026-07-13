@@ -21,19 +21,28 @@ impl App {
             return;
         };
         let rev = doc.revision;
+        // Kick the connection into starting (non-blocking) and wait for the handshake before
+        // sending anything: didOpen/didChange are illegal before `initialized`. Once the
+        // connection is Running the first didOpen goes out with current text via the `None` arm.
+        self.lsp.ensure_started(&lang);
+        if !self.lsp.is_ready(&lang) {
+            return;
+        }
         // Serialize the rope only when we actually have something to send. This runs every
         // frame; materializing a multi-MB document to a String on each unchanged tick would be
-        // needless allocation churn.
+        // needless allocation churn. Record the sent revision only on a real send.
         match self.lsp_sent_revision.get(&id).copied() {
             None => {
                 let text = doc.to_string();
-                self.lsp.did_open(&path, &lang, &text);
-                self.lsp_sent_revision.insert(id, rev);
+                if self.lsp.did_open(&path, &lang, &text) {
+                    self.lsp_sent_revision.insert(id, rev);
+                }
             }
             Some(sent) if sent != rev => {
                 let text = doc.to_string();
-                self.lsp.did_change(&path, &lang, &text);
-                self.lsp_sent_revision.insert(id, rev);
+                if self.lsp.did_change(&path, &lang, &text) {
+                    self.lsp_sent_revision.insert(id, rev);
+                }
             }
             _ => {}
         }

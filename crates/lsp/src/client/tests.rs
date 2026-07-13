@@ -245,3 +245,35 @@ fn parse_capabilities_is_resilient_to_garbage() {
     let c = parse_capabilities(&serde_json::json!({ "capabilities": { "hoverProvider": false } }));
     assert!(!c.hover);
 }
+
+#[test]
+fn initialize_params_are_honest_and_complete() {
+    let p = initialize_params("file:///home/g/proj", "9.9.9");
+    assert_eq!(p["clientInfo"]["name"], "lumina");
+    assert_eq!(p["clientInfo"]["version"], "9.9.9");
+    assert_eq!(p["rootUri"], "file:///home/g/proj");
+    assert_eq!(p["rootPath"], "/home/g/proj");
+    assert_eq!(p["workspaceFolders"][0]["name"], "proj");
+    assert_eq!(p["trace"], "off");
+    assert_eq!(
+        p["capabilities"]["general"]["positionEncodings"][0],
+        "utf-16"
+    );
+    // Honest: no snippet engine, no prepareRename, plaintext hover.
+    assert_eq!(
+        p["capabilities"]["textDocument"]["completion"]["completionItem"]["snippetSupport"],
+        false
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["rename"]["prepareSupport"],
+        false
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["hover"]["contentFormat"][0],
+        "plaintext"
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["definition"]["linkSupport"],
+        true
+    );
+}
