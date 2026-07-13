@@ -64,9 +64,9 @@ fn server_apply_edit_request_mutates_the_buffer() {
 }
 
 #[test]
-fn formatting_response_applies_edits_to_active_doc() {
-    // A textDocument/formatting response's TextEdit[] is applied to the active document through
-    // the Transaction pipeline (invariant #1).
+fn formatting_response_applies_edits_to_the_requested_doc() {
+    // A textDocument/formatting response's TextEdit[] is applied to the document named by the
+    // response uri (not whatever is active) through the Transaction pipeline (invariant #1).
     let path = temp_file("let  x=1 ;");
     let mut app = app_with(&path);
     let edits = vec![editor_lsp::TextEdit {
@@ -76,12 +76,74 @@ fn formatting_response_applies_edits_to_active_doc() {
         end_char16: 10, // the whole line
         new_text: "let x = 1;".into(),
     }];
-    app.handle_lsp_event(crate::lsp::LspEvent::Formatting(edits));
+    app.handle_lsp_event(crate::lsp::LspEvent::Formatting {
+        uri: crate::lsp::uri_for(&path),
+        edits,
+    });
     assert_eq!(
         app.editor.active_document().unwrap().to_string(),
         "let x = 1;"
     );
     std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn formatting_targets_requested_doc_not_active() {
+    // Regression: formatting requested for doc A must land on A even if the user switched to B
+    // before the async response arrived — it must never corrupt the now-active doc.
+    let path_a = temp_file("let  a=1 ;");
+    let path_b = temp_file("let  b=2 ;");
+    let mut app = app_with(&path_a);
+    app.open_path(&path_b); // B is now the active document
+    let edits = vec![editor_lsp::TextEdit {
+        start_line: 0,
+        start_char16: 0,
+        end_line: 0,
+        end_char16: 10,
+        new_text: "let a = 1;".into(),
+    }];
+    app.handle_lsp_event(crate::lsp::LspEvent::Formatting {
+        uri: crate::lsp::uri_for(&path_a),
+        edits,
+    });
+    let a_id = app.editor.workspace.find_by_path(&path_a).unwrap();
+    assert_eq!(
+        app.editor
+            .workspace
+            .documents
+            .get(a_id)
+            .unwrap()
+            .to_string(),
+        "let a = 1;",
+        "A should be formatted"
+    );
+    assert_eq!(
+        app.editor.active_document().unwrap().to_string(),
+        "let  b=2 ;",
+        "the active doc B must be untouched"
+    );
+    std::fs::remove_file(&path_a).ok();
+    std::fs::remove_file(&path_b).ok();
+}
+
+#[test]
+fn switching_tabs_dismisses_the_completion_popup() {
+    // Regression: DidChangeActive is now emitted on a tab switch (it was declared but never
+    // fired), so a stale completion popup clears when the focused document changes.
+    let path_a = temp_file("pr");
+    let path_b = temp_file("xy");
+    let mut app = app_with(&path_a);
+    app.dispatch(Command::Move(Motion::DocEnd));
+    feed_completion(&mut app, vec![ci("print", 3)]);
+    assert!(app.editor.popup.is_some());
+    app.open_path(&path_b); // focus a different document
+    app.drain_workers(); // emits DidChangeActive → completion plugin dismisses
+    assert!(
+        app.editor.popup.is_none(),
+        "popup should clear on tab switch"
+    );
+    std::fs::remove_file(&path_a).ok();
+    std::fs::remove_file(&path_b).ok();
 }
 
 #[test]

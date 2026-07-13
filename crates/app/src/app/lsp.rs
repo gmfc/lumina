@@ -219,10 +219,11 @@ impl App {
                     .collect();
                 self.push_locations("Workspace Symbols", items);
             }
-            LspEvent::Formatting(edits) => {
-                // Apply whole-document formatting to the active doc through the same
-                // Transaction pipeline as rename (one atomic group, invariant #1).
-                let Some(path) = self.editor.active_document().and_then(|d| d.path.clone()) else {
+            LspEvent::Formatting { uri, edits } => {
+                // Apply formatting to the document it was requested against (resolved from the
+                // response's uri, NOT the currently-active doc — a tab switch during the async
+                // round-trip must not misapply the edits elsewhere). One atomic group, inv #1.
+                let Some(path) = crate::lsp::path_from_uri(&uri) else {
                     return;
                 };
                 let edits = edits.into_iter().map(to_primitive_text_edit).collect();
