@@ -60,6 +60,19 @@ pub struct LspHighlight {
     pub kind: u8,
 }
 
+/// One semantic token (§7.1) — an absolute range in (line, UTF-16 char) coordinates plus its
+/// resolved type/modifier names. The primitive twin of `editor_lsp::SemanticToken`; the plugin
+/// resolves the UTF-16 columns to char offsets via [`crate::Host::lsp_pos_to_offset`] and maps the
+/// `token_type`/`modifiers` to a theme scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspSemanticToken {
+    pub line: u32,
+    pub start_char16: u32,
+    pub length: u32,
+    pub token_type: String,
+    pub modifiers: Vec<String>,
+}
+
 /// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own
 /// diagnostics without depending on `editor-lsp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

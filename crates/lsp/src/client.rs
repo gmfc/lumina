@@ -123,7 +123,26 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                 },
                 "rename": { "prepareSupport": false },
                 "formatting": {},
-                "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false }
+                "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false },
+                // Semantic tokens refine tree-sitter, never replace it (§7.1). We request `full`
+                // only, in the standard `relative` encoding, over the standard legend so servers
+                // map their tokens onto names we style.
+                "semanticTokens": {
+                    "dynamicRegistration": false,
+                    "requests": { "range": false, "full": true },
+                    "formats": ["relative"],
+                    "augmentsSyntaxTokens": true,
+                    "tokenTypes": [
+                        "namespace", "type", "class", "enum", "interface", "struct",
+                        "typeParameter", "parameter", "variable", "property", "enumMember",
+                        "event", "function", "method", "macro", "keyword", "modifier", "comment",
+                        "string", "number", "regexp", "operator", "decorator"
+                    ],
+                    "tokenModifiers": [
+                        "declaration", "definition", "readonly", "static", "deprecated",
+                        "abstract", "async", "modification", "documentation", "defaultLibrary"
+                    ]
+                }
             },
             "workspace": {
                 // The client owns file watching and forwards matching changes (§8.1); the rest
@@ -288,6 +307,15 @@ impl LspHandle {
                 },
                 "context": { "diagnostics": context_diagnostics, "triggerKind": 1 }
             }),
+        )
+    }
+
+    /// Request full-document semantic tokens (§7.1). The response is `{ resultId?, data: uint[] }`
+    /// decoded against the server's legend.
+    pub fn semantic_tokens_full(&self, uri: &str) -> io::Result<i64> {
+        self.request(
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": uri } }),
         )
     }
 

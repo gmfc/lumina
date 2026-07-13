@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use editor_lsp::client::{
     parse_capabilities, parse_code_actions, parse_completion,
     parse_completion_item_additional_edits, parse_diagnostic_report, parse_document_highlights,
-    parse_document_symbols, parse_hover, parse_locations, parse_signature_help, parse_text_edits,
-    parse_workspace_edit, parse_workspace_symbols,
+    parse_document_symbols, parse_hover, parse_locations, parse_semantic_tokens,
+    parse_signature_help, parse_text_edits, parse_workspace_edit, parse_workspace_symbols,
 };
 use editor_lsp::{
     Cap, CodeAction, CompletionList, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
@@ -41,6 +41,7 @@ enum Pending {
     CodeAction,
     ResolveCompletion,
     Diagnostic,
+    SemanticTokens,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -54,6 +55,8 @@ fn is_cancelable(kind: Pending) -> bool {
             | Pending::Completion
             | Pending::SignatureHelp
             | Pending::DocumentHighlight
+            // A newer full-doc token request supersedes the older one (typing bursts).
+            | Pending::SemanticTokens
     )
 }
 
@@ -166,6 +169,17 @@ pub enum LspEvent {
     /// Rendered work-done progress for the statusline (§1.5), or `None` when nothing is active.
     /// Aggregates every server's in-flight progress tokens into one line.
     Progress(Option<String>),
+    /// Full-document semantic tokens (§7.1) for the document at `uri` (carried so a tab switch
+    /// during the round-trip paints the right doc). Already decoded against the server legend.
+    SemanticTokens {
+        uri: String,
+        tokens: Vec<editor_lsp::SemanticToken>,
+    },
+    /// The server asked (`workspace/semanticTokens/refresh`) that tokens be recomputed; the app
+    /// re-requests for this language's open docs.
+    SemanticTokensRefresh {
+        lang: String,
+    },
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -362,6 +376,18 @@ impl LspManager {
                     // straight to an event.
                     if entry.kind == Pending::Diagnostic {
                         self.handle_pull_report(&entry.uri, &lang, &result, &mut out);
+                    } else if entry.kind == Pending::SemanticTokens {
+                        // Decode against this connection's legend (fixed at capability time).
+                        let tokens = match self.state.get(&lang) {
+                            Some(ClientState::Running(caps)) => {
+                                parse_semantic_tokens(&result, &caps.semantic_legend)
+                            }
+                            _ => Vec::new(),
+                        };
+                        out.push(LspEvent::SemanticTokens {
+                            uri: entry.uri.clone(),
+                            tokens,
+                        });
                     } else {
                         out.extend(response_event(entry.kind, &entry.uri, &result));
                     }
@@ -387,10 +413,15 @@ impl LspManager {
                             self.respond(&lang, &id, serde_json::Value::Null);
                         }
                         "window/workDoneProgress/create"
-                        | "workspace/semanticTokens/refresh"
                         | "workspace/inlayHint/refresh"
                         | "workspace/codeLens/refresh" => {
                             self.respond(&lang, &id, serde_json::Value::Null)
+                        }
+                        "workspace/semanticTokens/refresh" => {
+                            // Ack, then tell the app to re-request tokens for this language's docs
+                            // (project-wide meaning changed, e.g. a dependency reindexed §7.1).
+                            self.respond(&lang, &id, serde_json::Value::Null);
+                            out.push(LspEvent::SemanticTokensRefresh { lang: lang.clone() });
                         }
                         "workspace/diagnostic/refresh" => {
                             // Ack, then drop cached resultIds (forcing a full re-pull) and tell the
@@ -891,6 +922,12 @@ impl LspManager {
     pub fn supports_pull(&self, language: &str) -> bool {
         self.request_allowed(language, Cap::PullDiagnostics)
     }
+
+    /// Whether `language`'s server is `Running` and advertised full-document semantic tokens
+    /// (§7.1) — the gate for the app requesting them alongside each doc sync.
+    pub fn supports_semantic_tokens(&self, language: &str) -> bool {
+        self.request_allowed(language, Cap::SemanticTokens)
+    }
 }
 
 /// Interpret a successful response `result` against the request `kind` that produced it. Returns
@@ -922,6 +959,8 @@ fn response_event(kind: Pending, uri: &str, result: &serde_json::Value) -> Optio
         Pending::CodeAction => LspEvent::CodeActions(parse_code_actions(result)),
         // Pull-diagnostics reports are handled in `poll` (they need the resultId cache), never here.
         Pending::Diagnostic => return None,
+        // Semantic tokens are decoded in `poll` (they need the connection legend), never here.
+        Pending::SemanticTokens => return None,
     })
 }
 
@@ -1174,7 +1213,7 @@ mod tests {
         let mut mgr = manager();
         for method in [
             "workspace/configuration",
-            "workspace/semanticTokens/refresh",
+            "workspace/inlayHint/refresh",
             "some/unknown/method",
         ] {
             feed(
@@ -1739,6 +1778,59 @@ mod tests {
         let events = mgr.poll();
         assert!(mgr.progress.is_empty(), "progress not cleared on exit");
         assert!(events.iter().any(|e| matches!(e, LspEvent::Progress(None))));
+    }
+
+    #[test]
+    fn semantic_tokens_response_decodes_with_the_connection_legend() {
+        // A `.../full` response is decoded in poll against the Running connection's legend into a
+        // SemanticTokens event for the requested uri.
+        let mut mgr = manager();
+        mgr.state.insert(
+            "rust".into(),
+            ClientState::Running(ServerCaps {
+                semantic_tokens: true,
+                semantic_legend: editor_lsp::SemanticLegend {
+                    token_types: vec!["function".into()],
+                    token_modifiers: Vec::new(),
+                },
+                ..Default::default()
+            }),
+        );
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::SemanticTokens));
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!({ "data": [0, 0, 4, 0, 0] }),
+                error: None,
+            },
+        );
+        let events = mgr.poll();
+        assert!(
+            matches!(events.as_slice(), [LspEvent::SemanticTokens { uri, tokens }]
+                if uri == "file:///x.rs" && tokens.len() == 1 && tokens[0].token_type == "function"),
+            "semantic tokens response did not decode into a SemanticTokens event"
+        );
+    }
+
+    #[test]
+    fn semantic_tokens_refresh_surfaces_an_event() {
+        let mut mgr = manager();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::ServerRequest {
+                id: serde_json::json!(3),
+                method: "workspace/semanticTokens/refresh".into(),
+                params: serde_json::Value::Null,
+            },
+        );
+        assert!(mgr
+            .poll()
+            .iter()
+            .any(|e| matches!(e, LspEvent::SemanticTokensRefresh { lang } if lang == "rust")));
     }
 
     #[test]

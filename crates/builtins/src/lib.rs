@@ -30,6 +30,7 @@ pub mod multicursor;
 pub mod palette;
 pub mod project_search;
 pub mod rename;
+pub mod semantic_tokens;
 pub mod signature_help;
 pub mod snippet;
 pub mod terminal;
@@ -67,6 +68,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(rename::RenamePlugin),
         Box::new(diagnostics::DiagnosticsPlugin::default()),
         Box::new(document_highlight::DocumentHighlightPlugin),
+        Box::new(semantic_tokens::SemanticTokensPlugin),
         Box::new(code_action::CodeActionPlugin::default()),
         Box::new(completion::CompletionPlugin::default()),
         Box::new(clipboard::ClipboardPlugin),

@@ -263,6 +263,19 @@ impl LspManager {
         )
     }
 
+    /// Request full-document semantic tokens (§7.1). Whole-file (no cursor); version-tracked so a
+    /// response that arrives after an edit is dropped, and cancelable so a typing burst supersedes.
+    pub fn request_semantic_tokens(&mut self, path: &Path, language: &str) -> bool {
+        let uri = uri_for(path);
+        self.send_request(
+            language,
+            &uri,
+            Pending::SemanticTokens,
+            Cap::SemanticTokens,
+            |c| c.semantic_tokens_full(&uri),
+        )
+    }
+
     pub fn request_workspace_symbols(&mut self, language: &str, query: &str) -> bool {
         // Workspace symbols aren't tied to a document; tag with an empty uri (version 0).
         self.send_request(
