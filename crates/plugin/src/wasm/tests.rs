@@ -7,8 +7,6 @@ use serde_json::json;
 
 use editor_core::{DocId, Document, Selections, Transaction, Workspace};
 
-use crate::host::DirEntry;
-
 /// A minimal in-memory [`Host`] for exercising a plugin without the full app.
 struct TestHost {
     ws: Workspace,
@@ -50,9 +48,6 @@ impl Host for TestHost {
         }
     }
     fn open_path(&mut self, _path: &Path) {}
-    fn read_dir(&self, _path: &Path) -> Vec<DirEntry> {
-        Vec::new()
-    }
     fn set_panel(&mut self, panel_id: &str, content: PanelContent) {
         self.panels.insert(panel_id.to_string(), content);
     }

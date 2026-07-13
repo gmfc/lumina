@@ -2,14 +2,16 @@
 //! contribution API (CLAUDE.md invariant #3, plan §6A). Nothing here is privileged; each
 //! feature reaches the editor only through `editor_plugin::Host`.
 //!
-//! **Current state (see `docs/AUDIT.md`).** Only the **explorer** is self-hosted as a plugin
-//! today. The editor's other features — find/replace, palette, quick-open, project search, LSP,
-//! git, terminal, vim — still live in `editor-app` as hardcoded commands, because the `Host` port
-//! does not yet expose what they need (overlays, pickers, decorations, background jobs, LSP). The
-//! modularization roadmap in `docs/AUDIT.md` widens `Host` and migrates them here one at a time.
+//! The plugin-system migration is **complete**: every user-facing feature is a plugin here — the
+//! explorer, multi-cursor, git-change nav, find/replace, palette + quick-open + goto-line, project
+//! search, theme toggle, LSP request commands + nav/hover/rename responses, diagnostics,
+//! completion, clipboard, terminal dock, and vim — each reaching the editor only through `Host`.
+//! `editor-app` keeps only the substrate: editing primitives, file/tab IO, the PTY/vt100 + LSP
+//! transports, and the pure renderer.
 //!
-//! The self-hosting test proves the invariant *for the explorer*: disabling that plugin removes
-//! exactly its contributions and nothing else. Generalize it as each feature moves over.
+//! The self-hosting test (`tests/self_hosting.rs`) guards each migrated plugin: with all built-ins
+//! enabled its contributions are in the registry, and dropping the plugin removes exactly those and
+//! nothing else.
 
 use editor_plugin::Plugin;
 

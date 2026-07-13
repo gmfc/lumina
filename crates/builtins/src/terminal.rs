@@ -189,7 +189,6 @@ impl Plugin for TerminalPlugin {
 mod tests {
     use super::*;
     use editor_core::{DocId, Selections, Transaction, Workspace};
-    use editor_plugin::host::DirEntry;
     use editor_plugin::PanelContent;
     use std::path::{Path, PathBuf};
 
@@ -229,9 +228,6 @@ mod tests {
         fn apply_transaction(&mut self, _doc: DocId, _txn: Transaction) {}
         fn set_selections(&mut self, _doc: DocId, _sels: Selections) {}
         fn open_path(&mut self, _path: &Path) {}
-        fn read_dir(&self, _path: &Path) -> Vec<DirEntry> {
-            Vec::new()
-        }
         fn set_panel(&mut self, _panel_id: &str, _content: PanelContent) {}
         fn set_status(&mut self, _item_id: &str, _text: String) {}
         fn notify(&mut self, message: String) {

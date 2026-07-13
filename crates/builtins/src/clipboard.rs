@@ -126,7 +126,6 @@ impl Plugin for ClipboardPlugin {
 mod tests {
     use super::*;
     use editor_core::{DocId, Document, Selection, Selections, Transaction, Workspace};
-    use editor_plugin::host::DirEntry;
     use editor_plugin::PanelContent;
     use std::path::{Path, PathBuf};
 
@@ -181,9 +180,6 @@ mod tests {
             }
         }
         fn open_path(&mut self, _path: &Path) {}
-        fn read_dir(&self, _path: &Path) -> Vec<DirEntry> {
-            Vec::new()
-        }
         fn set_panel(&mut self, _panel_id: &str, _content: PanelContent) {}
         fn set_status(&mut self, _item_id: &str, _text: String) {}
         fn notify(&mut self, _message: String) {}

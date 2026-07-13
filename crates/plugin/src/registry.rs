@@ -41,10 +41,12 @@ pub trait Plugin {
     /// A row in one of this plugin's panels was activated (clicked / Enter).
     fn on_panel_activate(&mut self, _panel_id: &str, _payload: &str, _host: &mut dyn Host) {}
 
-    /// Pre-empt a raw key before chord resolution. A modal layer (vim) or a focused terminal
-    /// returns `true` to consume the key; the default returns `false` so an ordinary plugin is
-    /// never offered raw input. Powerful — a plugin that returns `true` swallows the keystroke —
-    /// so for external guests this is gated behind a `keys:raw` capability.
+    /// Pre-empt a raw key before chord resolution. A modal layer (the `vim` plugin) returns `true`
+    /// to consume the key; the default returns `false` so an ordinary plugin is never offered raw
+    /// input. Powerful — a plugin that returns `true` swallows the keystroke. The external (Rhai /
+    /// Wasm) tiers don't override this method, so they never receive raw keys; there is currently
+    /// NO capability gate here. If an external tier is ever given a `capture_key` override, a
+    /// `keys:raw` capability gate must be added first (none exists today).
     fn capture_key(&mut self, _key: crate::input::Key, _host: &mut dyn Host) -> bool {
         false
     }
@@ -326,9 +328,6 @@ mod tests {
         fn apply_transaction(&mut self, _doc: editor_core::DocId, _txn: editor_core::Transaction) {}
         fn set_selections(&mut self, _doc: editor_core::DocId, _sel: editor_core::Selections) {}
         fn open_path(&mut self, _path: &std::path::Path) {}
-        fn read_dir(&self, _path: &std::path::Path) -> Vec<crate::host::DirEntry> {
-            Vec::new()
-        }
         fn set_panel(&mut self, _panel_id: &str, _content: crate::host::PanelContent) {}
         fn set_status(&mut self, _item_id: &str, _text: String) {}
         fn notify(&mut self, _message: String) {}

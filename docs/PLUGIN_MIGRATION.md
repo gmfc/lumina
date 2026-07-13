@@ -1,9 +1,15 @@
 # Lumina Plugin Migration — Handoff Spec
 
-_This document is the continuation plan for finishing the plugin-system migration on branch
-`claude/codebase-audit-plugin-system-j3q21k` (PR #18). It complements [`AUDIT.md`](AUDIT.md)
-(the audit + 10-step roadmap) and [`ARCHITECTURE.md`](ARCHITECTURE.md) (the invariants). The
-per-feature dossiers below were produced by reading the actual source; they cite `file:line`._
+> **✅ COMPLETE (historical).** This migration is finished: every user-facing feature listed below
+> is now an `editor-builtins` plugin reaching the editor only through `Host`
+> (see `crates/builtins/src/lib.rs`). This document is retained as the **design rationale** — the
+> Host port catalogue (§4) and per-feature dossiers (§6) record why each port exists — but the
+> "remaining / to extract" framing throughout §1 and §6 describes work that has since landed.
+
+_This document was the continuation plan for finishing the plugin-system migration. It complements
+[`AUDIT.md`](AUDIT.md) (the pre-migration audit + roadmap) and [`ARCHITECTURE.md`](ARCHITECTURE.md)
+(the invariants). The per-feature dossiers below were produced by reading the actual source; they
+cite `file:line`._
 
 **Goal:** realize invariants **#3** ("features are plugins") and **#4** ("everything is a
 command through one path"). The endpoint is *not* "every command is a plugin" — the core
@@ -38,25 +44,22 @@ only through `Host`, and the `Command` table shrinks to those primitives.
 - **Features extracted as genuine plugins** (all reach the editor only through `Host`):
   explorer, multi-cursor (incl. add-cursors-to-line-ends), git-change navigation, **find/replace**,
   **command palette + quick-open + goto-line**, **project search**, the **light/dark theme toggle**,
-  the **LSP request commands** (hover/goto\*/completion/references/symbols/rename — transport +
-  responses stay app-side), the **terminal-dock commands** (PTY/vt100/render stay app-side), and
-  the **diagnostics** feature in full (model + rendering: the plugin owns `DocId → LspDiagnostic`,
-  fed by the new `Event::LspDiagnostics`, publishing the `"lsp.diag"` decoration layer + a status
-  item + next/prev-problem nav via `Host::lsp_pos_to_offset`).
-- **Self-hosting guard generalized** to a 13-plugin set (`crates/builtins/tests/self_hosting.rs`),
-  asserting each plugin's commands/panels/keybindings and disable-isolation.
+  the **LSP request commands** (hover/goto\*/completion/references/symbols/rename), the
+  **terminal dock**, and the **diagnostics** feature in full (model + rendering: the plugin owns
+  `DocId → LspDiagnostic`, fed by `Event::LspDiagnostics`, publishing the `"lsp.diag"` decoration
+  layer + a status item + next/prev-problem nav via `Host::lsp_pos_to_offset`).
+- **Self-hosting guard** (`crates/builtins/tests/self_hosting.rs`) asserts each migrated plugin's
+  commands/panels/keybindings and disable-isolation; `all_builtins()` now registers 16 plugins.
 
-**Remaining feature bodies to extract** (the deeply app-coupled cluster — each needs a large new
-port or is a known trap): the **completion widget** (needs the caret-anchored POPUP port + primitive
-LSP completion-item DTOs delivered as events; the LSP completion *request* is already the `lsp`
-plugin, but the response opens the app-side widget);
-the **LSP responses** (goto/hover/refs/symbols/rename application —
-blocked on the popup/info port + sync-open-vs-deferred-open reconciliation, §6.5 risk (3)); the
-**terminal PTY/vt100/grid** body (§6.6 RawPTY port); **vim** (the ~1800-line pre-keymap interceptor
-— `capture_key` exists; the interceptor move is §6.7); and **clipboard** copy/cut/paste (the §5
-"trap": needs a core `edit::insert_transaction` that returns both the transaction *and* the
-re-derived selections, since `Host::apply_transaction` records history with the pre-edit selection
-set). See the per-feature dossiers in §6.
+**Everything below this point landed.** The originally-"remaining" cluster is all shipped: the
+**completion widget** (POPUP port + `Event::LspCompletion`; `completion.rs`), the **LSP responses**
+— navigation `lsp_nav.rs` (`Event::LspGoto`/`LspLocations` + `Host::open_location`), hover
+`hover.rs` (`Event::LspHover` + `Host::show_info`), rename `rename.rs` (`Event::LspWorkspaceEdit` +
+`Host::apply_workspace_edit`); only the JSON-RPC transport stays app-side — the **terminal PTY dock
+lifecycle** (RawPTY port: `terminal_open`/`terminal_close`/`set_terminal_view`/`set_terminal_focus`;
+`terminal.rs`), **vim** (`capture_key` + one-`Change` transactions + `viewport_height`/`move_lines`/
+`set_scroll`/`set_dirty`/`set_vim_view`; `vim.rs`), and **clipboard** copy/cut/paste (unblocked by
+`edit::selection_edit_transaction`; `clipboard.rs`). The per-feature dossiers in §6 are historical.
 
 ---
 

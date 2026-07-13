@@ -1,5 +1,16 @@
 # Lumina Architecture Audit
 
+> **⚠️ Historical snapshot — audited BEFORE the plugin migration.** The central findings below —
+> invariants #3/#4 "aspirational", the Host port "too thin to express find/pickers/LSP/decorations/
+> terminal/vim", "editor-builtins registers only ExplorerPlugin", the "vacuous" self-hosting test,
+> and "three command systems" — are all **RESOLVED**: every user-facing feature is now an
+> `editor-builtins` plugin (16 registered in `crates/builtins/src/lib.rs`), `Host`
+> (`crates/plugin/src/host.rs`) exposes ~40 ports covering find/picker/LSP/decorations/terminal/vim,
+> `exec_id` (`crates/app/src/app/overlay.rs`) is registry-first, and `crates/builtins/tests/self_hosting.rs`
+> guards the whole set with real disable-isolation loops. Findings **not** tied to the migration —
+> encoding/lossy-save fidelity (#6), render purity, atomic-save durability, and the external-guest
+> capability seam — are NOT known-resolved by this and should be re-verified independently.
+
 _A systematic audit of the Lumina codebase against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) —
 its nine load-bearing invariants and thirteen guideline sections — with a focus on the plugin
 system (invariants #3/#4) and overall modularity. Every finding below was produced by an

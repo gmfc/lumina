@@ -1,19 +1,17 @@
 #![cfg(feature = "proptests")]
-//! INVARIANT TEST (not property-based): the editor is genuinely self-hosted on its plugin API.
-//! The explorer is a plugin, not a hardcoded feature. Proof: with all built-ins enabled the
-//! explorer's command + panel are present in the registry; disabling the explorer plugin
-//! removes exactly those and nothing else. This is the guardrail behind invariant #3.
-//! If either half fails, something is wired into `app` directly instead of contributed.
+//! INVARIANT TEST (not property-based): the editor is genuinely self-hosted on its plugin API —
+//! the guardrail behind invariant #3. With the migration complete, this guards every
+//! command/keybinding-contributing built-in (explorer, multi-cursor, git-nav, find, palette,
+//! project-search, lsp, terminal, diagnostics, completion, clipboard, theme, vim): with all
+//! built-ins enabled each plugin's contributions (commands / panels / keybindings) are present in
+//! the registry, and dropping that plugin removes exactly those and nothing else. If either half
+//! fails, something is wired into `app` directly instead of contributed.
 //!
-//! Repo path:   crates/builtins/tests/self_hosting.rs
-//! Activation:  Phase 7 (contribution registry + built-ins as plugins). Enable via CI's `proptests` job.
-//! Requires:    `proptests = []` in editor-builtins's [features].
+//! Purely reactive (event-only) plugins — lsp-nav (`Event::LspGoto`/`LspLocations`), hover
+//! (`Event::LspHover`), rename (`Event::LspWorkspaceEdit`) — contribute no commands/panels/keybindings
+//! and are therefore intentionally exempt from these guards.
 //!
-//! Placeholder API — align with your final crates. Assumed:
-//!   editor_builtins::all_builtins() -> Vec<Box<dyn Plugin>>   // the built-in plugin set
-//!   editor_plugin::Registry::with_plugins(iter) -> Registry
-//!   Registry::command_ids() / Registry::panel_ids() -> impl Iterator<Item = String/&str>
-//!   Plugin::id() -> &str
+//! Activation: enabled via CI's `proptests` job (`proptests = []` in editor-builtins's [features]).
 
 use editor_builtins::all_builtins;
 use editor_plugin::Registry;
@@ -65,6 +63,14 @@ const CLIPBOARD_COMMAND: &str = "edit.paste";
 // The vim modal layer (owns vim.enable/disable/toggle; intercepts keys via capture_key).
 const VIM_ID: &str = "vim";
 const VIM_COMMAND: &str = "vim.toggle";
+
+// Git-change navigation (git.nextHunk/git.prevHunk; also contributes alt+j/alt+k).
+const GIT_ID: &str = "git-nav";
+const GIT_COMMAND: &str = "git.nextHunk";
+
+// The light/dark theme toggle (view.toggleTheme; no keybinding).
+const THEME_ID: &str = "theme";
+const THEME_COMMAND: &str = "view.toggleTheme";
 
 #[test]
 fn builtin_contributes_through_the_public_api() {
@@ -332,6 +338,45 @@ fn vim_contributes_through_the_public_api() {
 }
 
 #[test]
+fn git_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == GIT_COMMAND),
+        "git-nav command missing — is git-change navigation wired as a plugin?"
+    );
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != GIT_ID));
+    assert!(
+        !reduced.command_ids().any(|id| id == GIT_COMMAND),
+        "git command still present after disabling — it is hardcoded, not a plugin"
+    );
+    for id in before.iter().filter(|id| !id.starts_with("git.")) {
+        assert!(
+            reduced.command_ids().any(|c| &c == id),
+            "disabling git-nav wrongly removed unrelated command `{id}`"
+        );
+    }
+}
+
+#[test]
+fn theme_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == THEME_COMMAND),
+        "view.toggleTheme missing — is the theme toggle wired as a plugin?"
+    );
+    // The disable-isolation half is the real coverage gap: only the theme plugin contributes
+    // view.toggleTheme, so dropping it must remove exactly that.
+    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != THEME_ID));
+    assert!(
+        !reduced.command_ids().any(|id| id == THEME_COMMAND),
+        "view.toggleTheme still present after disabling theme — it is hardcoded, not a plugin"
+    );
+    assert!(reduced.command_ids().any(|id| id == EXPLORER_COMMAND));
+}
+
+#[test]
 fn diagnostics_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
     assert!(
@@ -407,6 +452,21 @@ fn migrated_plugins_contribute_their_keybindings() {
     assert!(
         bound(&full, "ctrl+v", "edit.paste"),
         "clipboard's ctrl+v must be contributed through the registry, not the defaults table"
+    );
+    assert!(
+        bound(&full, "ctrl+j", "terminal.toggle"),
+        "terminal's ctrl+j must be contributed through the registry, not the defaults table"
+    );
+    assert!(
+        bound(&full, "ctrl+space", "lsp.completion"),
+        "completion's ctrl+space must be contributed through the registry, not the defaults table"
+    );
+
+    let no_terminal =
+        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != TERMINAL_ID));
+    assert!(
+        !bound(&no_terminal, "ctrl+j", "terminal.toggle"),
+        "disabling terminal must unbind ctrl+j — otherwise the binding is hardcoded"
     );
 
     let no_clipboard = Registry::with_plugins(
