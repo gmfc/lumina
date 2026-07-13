@@ -19,6 +19,19 @@ pub enum LspRequestKind {
     Formatting,
     /// Signature help at the primary cursor (parameter hints while typing a call).
     SignatureHelp,
+    /// Occurrences of the symbol at the primary cursor (read/write highlights).
+    DocumentHighlight,
+}
+
+/// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates. `kind`:
+/// 1 Text, 2 Read, 3 Write — the primitive twin of `editor_lsp::DocumentHighlight`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspHighlight {
+    pub line: u32,
+    pub start_char16: u32,
+    pub end_line: u32,
+    pub end_char16: u32,
+    pub kind: u8,
 }
 
 /// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own

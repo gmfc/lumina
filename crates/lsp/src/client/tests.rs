@@ -201,6 +201,24 @@ fn document_symbols_hierarchical_and_flat() {
 }
 
 #[test]
+fn document_highlights_parse_with_kinds() {
+    let hls = serde_json::json!([
+        {"range":{"start":{"line":1,"character":2},"end":{"line":1,"character":5}},"kind":2},
+        {"range":{"start":{"line":3,"character":0},"end":{"line":3,"character":3}},"kind":3},
+        {"range":{"start":{"line":5,"character":0},"end":{"line":5,"character":3}}} // no kind → 1
+    ]);
+    let parsed = parse_document_highlights(&hls);
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(
+        (parsed[0].line, parsed[0].start_char16, parsed[0].kind),
+        (1, 2, 2)
+    );
+    assert_eq!(parsed[1].kind, 3);
+    assert_eq!(parsed[2].kind, 1); // default Text
+    assert!(parse_document_highlights(&serde_json::json!(null)).is_empty());
+}
+
+#[test]
 fn references_parse_as_locations() {
     let refs = serde_json::json!([
         {"uri":"file:///a.rs","range":{"start":{"line":1,"character":2},"end":{"line":1,"character":5}}},
@@ -243,15 +261,17 @@ fn parse_capabilities_full_and_minimal() {
         "completionProvider": { "triggerCharacters": ["."] },
         "renameProvider": { "prepareProvider": true },
         "documentFormattingProvider": true,
-        "signatureHelpProvider": { "triggerCharacters": ["(", ","] }
+        "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
+        "documentHighlightProvider": true
     }});
     let c = parse_capabilities(&full);
     assert_eq!(c.position_encoding, Some(PositionEncoding::Utf8));
     assert_eq!(c.sync_kind, SyncKind::Incremental);
     assert!(c.hover && c.definition && c.type_definition && c.implementation);
     assert!(c.references && c.document_symbol && c.completion && c.rename && c.formatting);
-    assert!(c.signature_help);
+    assert!(c.signature_help && c.document_highlight);
     assert!(c.allows(Cap::Hover) && c.allows(Cap::Formatting) && c.allows(Cap::SignatureHelp));
+    assert!(c.allows(Cap::DocumentHighlight));
 
     // minimal: providers as bare booleans, sync as a number, no encoding.
     let min = serde_json::json!({ "capabilities": {

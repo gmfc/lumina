@@ -51,6 +51,9 @@ pub enum Event {
     /// Signature help while typing a call: the active signature line with its active parameter
     /// marked, or `None` to clear it. Delivered to the signature-help plugin (statusline).
     LspSignatureHelp(Option<String>),
+    /// Occurrences of the symbol under the cursor. Delivered to the document-highlight plugin,
+    /// which paints them as a decoration layer. Empty clears the highlights.
+    LspHighlights(Vec<crate::lsp::LspHighlight>),
     /// The language server computed a rename's edits (a `WorkspaceEdit`, translated to primitive
     /// paths app-side). Delivered to the rename plugin, which applies them via
     /// [`crate::Host::apply_workspace_edit`].

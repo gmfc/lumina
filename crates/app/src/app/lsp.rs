@@ -91,6 +91,22 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspSignatureHelp(sig));
             }
+            LspEvent::Highlights(hls) => {
+                // Hand the occurrence ranges to the document-highlight plugin (it paints them).
+                let hls = hls
+                    .into_iter()
+                    .map(|h| editor_plugin::LspHighlight {
+                        line: h.line,
+                        start_char16: h.start_char16,
+                        end_line: h.end_line,
+                        end_char16: h.end_char16,
+                        kind: h.kind,
+                    })
+                    .collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspHighlights(hls));
+            }
             LspEvent::Goto(loc) => {
                 // Hand a single navigation target to the `lsp-nav` plugin, which jumps via
                 // `Host::open_location` (the app owns the actual open + caret placement on drain).
@@ -284,6 +300,7 @@ impl App {
             K::TypeDefinition => self.lsp.request_type_definition(&p, &l, line, ch),
             K::Completion => self.lsp.request_completion(&p, &l, line, ch),
             K::SignatureHelp => self.lsp.request_signature_help(&p, &l, line, ch),
+            K::DocumentHighlight => self.lsp.request_document_highlight(&p, &l, line, ch),
             K::References => self.lsp.request_references(&p, &l, line, ch),
             K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
             K::DocumentSymbols | K::Formatting => false, // handled above

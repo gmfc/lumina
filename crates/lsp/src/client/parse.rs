@@ -6,8 +6,8 @@
 use serde_json::Value;
 
 use crate::{
-    CompletionItem, Diagnostic, DiagnosticsUpdate, DocumentSymbol, Location, PositionEncoding,
-    ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
+    CompletionItem, Diagnostic, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol, Location,
+    PositionEncoding, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
 
 /// Parse an `InitializeResult` into the caps Lumina gates on. Resilient: a provider is
@@ -44,7 +44,30 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
         rename: present("renameProvider"),
         formatting: present("documentFormattingProvider"),
         signature_help: present("signatureHelpProvider"),
+        document_highlight: present("documentHighlightProvider"),
     }
+}
+
+/// Parse a `textDocument/documentHighlight` result into occurrence ranges. Malformed entries are
+/// skipped; a missing `kind` defaults to 1 (Text).
+pub fn parse_document_highlights(result: &Value) -> Vec<DocumentHighlight> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|h| {
+            let range = h.get("range")?;
+            let start = range.get("start")?;
+            let end = range.get("end")?;
+            Some(DocumentHighlight {
+                line: start.get("line")?.as_u64()? as u32,
+                start_char16: start.get("character")?.as_u64()? as u32,
+                end_line: end.get("line")?.as_u64()? as u32,
+                end_char16: end.get("character")?.as_u64()? as u32,
+                kind: h.get("kind").and_then(|k| k.as_u64()).unwrap_or(1) as u8,
+            })
+        })
+        .collect()
 }
 
 /// Parse a `textDocument/signatureHelp` result into the active signature + active-parameter

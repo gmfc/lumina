@@ -195,6 +195,14 @@ impl LspHandle {
         )
     }
 
+    /// Request the occurrences of the symbol at a position (read/write highlights).
+    pub fn document_highlight(&self, uri: &str, line: u32, character: u32) -> io::Result<i64> {
+        self.request(
+            "textDocument/documentHighlight",
+            Self::position(uri, line, character),
+        )
+    }
+
     /// Request a rename of the symbol at a position to `new_name`.
     pub fn rename(&self, uri: &str, line: u32, character: u32, new_name: &str) -> io::Result<i64> {
         let mut params = Self::position(uri, line, character);
