@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use editor_lsp::client::{
     parse_capabilities, parse_code_actions, parse_completion,
     parse_completion_item_additional_edits, parse_diagnostic_report, parse_document_highlights,
-    parse_document_symbols, parse_hover, parse_locations, parse_semantic_tokens,
+    parse_document_symbols, parse_hover, parse_inlay_hints, parse_locations, parse_semantic_tokens,
     parse_signature_help, parse_text_edits, parse_workspace_edit, parse_workspace_symbols,
 };
 use editor_lsp::{
@@ -42,6 +42,7 @@ enum Pending {
     ResolveCompletion,
     Diagnostic,
     SemanticTokens,
+    InlayHint,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -55,8 +56,9 @@ fn is_cancelable(kind: Pending) -> bool {
             | Pending::Completion
             | Pending::SignatureHelp
             | Pending::DocumentHighlight
-            // A newer full-doc token request supersedes the older one (typing bursts).
+            // A newer full-doc token / hint request supersedes the older one (typing bursts).
             | Pending::SemanticTokens
+            | Pending::InlayHint
     )
 }
 
@@ -178,6 +180,16 @@ pub enum LspEvent {
     /// The server asked (`workspace/semanticTokens/refresh`) that tokens be recomputed; the app
     /// re-requests for this language's open docs.
     SemanticTokensRefresh {
+        lang: String,
+    },
+    /// Inlay hints (§7.2) for the document at `uri`.
+    InlayHints {
+        uri: String,
+        hints: Vec<editor_lsp::InlayHint>,
+    },
+    /// The server asked (`workspace/inlayHint/refresh`) that hints be recomputed; the app
+    /// re-requests for this language's open docs.
+    InlayHintRefresh {
         lang: String,
     },
     /// The server replied to one of our requests with an error instead of a result.
@@ -412,9 +424,7 @@ impl LspManager {
                             self.unregister_capability(&lang, &params);
                             self.respond(&lang, &id, serde_json::Value::Null);
                         }
-                        "window/workDoneProgress/create"
-                        | "workspace/inlayHint/refresh"
-                        | "workspace/codeLens/refresh" => {
+                        "window/workDoneProgress/create" | "workspace/codeLens/refresh" => {
                             self.respond(&lang, &id, serde_json::Value::Null)
                         }
                         "workspace/semanticTokens/refresh" => {
@@ -422,6 +432,10 @@ impl LspManager {
                             // (project-wide meaning changed, e.g. a dependency reindexed §7.1).
                             self.respond(&lang, &id, serde_json::Value::Null);
                             out.push(LspEvent::SemanticTokensRefresh { lang: lang.clone() });
+                        }
+                        "workspace/inlayHint/refresh" => {
+                            self.respond(&lang, &id, serde_json::Value::Null);
+                            out.push(LspEvent::InlayHintRefresh { lang: lang.clone() });
                         }
                         "workspace/diagnostic/refresh" => {
                             // Ack, then drop cached resultIds (forcing a full re-pull) and tell the
@@ -928,6 +942,11 @@ impl LspManager {
     pub fn supports_semantic_tokens(&self, language: &str) -> bool {
         self.request_allowed(language, Cap::SemanticTokens)
     }
+
+    /// Whether `language`'s server is `Running` and advertised inlay hints (§7.2).
+    pub fn supports_inlay_hints(&self, language: &str) -> bool {
+        self.request_allowed(language, Cap::InlayHint)
+    }
 }
 
 /// Interpret a successful response `result` against the request `kind` that produced it. Returns
@@ -957,6 +976,10 @@ fn response_event(kind: Pending, uri: &str, result: &serde_json::Value) -> Optio
         // Always emit (even empty) so highlights clear when the cursor leaves a symbol.
         Pending::DocumentHighlight => LspEvent::Highlights(parse_document_highlights(result)),
         Pending::CodeAction => LspEvent::CodeActions(parse_code_actions(result)),
+        Pending::InlayHint => LspEvent::InlayHints {
+            uri: uri.to_string(),
+            hints: parse_inlay_hints(result),
+        },
         // Pull-diagnostics reports are handled in `poll` (they need the resultId cache), never here.
         Pending::Diagnostic => return None,
         // Semantic tokens are decoded in `poll` (they need the connection legend), never here.
@@ -1213,7 +1236,7 @@ mod tests {
         let mut mgr = manager();
         for method in [
             "workspace/configuration",
-            "workspace/inlayHint/refresh",
+            "window/workDoneProgress/create",
             "some/unknown/method",
         ] {
             feed(

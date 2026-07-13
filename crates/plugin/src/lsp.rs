@@ -73,6 +73,19 @@ pub struct LspSemanticToken {
     pub modifiers: Vec<String>,
 }
 
+/// One inlay hint (§7.2) — the primitive twin of `editor_lsp::InlayHint`. Virtual text at a
+/// (line, UTF-16 char) position; the plugin resolves the column to a char offset and publishes it
+/// as an inline decoration. `kind`: 1 Type, 2 Parameter, 0 unspecified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspInlayHint {
+    pub line: u32,
+    pub char16: u32,
+    pub label: String,
+    pub kind: u8,
+    pub pad_left: bool,
+    pub pad_right: bool,
+}
+
 /// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own
 /// diagnostics without depending on `editor-lsp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -112,7 +112,15 @@ impl DiagnosticsPlugin {
                 )
             })
             .collect();
-        host.set_decorations(doc, LAYER, DecorationSet { spans, gutter });
+        host.set_decorations(
+            doc,
+            LAYER,
+            DecorationSet {
+                spans,
+                gutter,
+                ..Default::default()
+            },
+        );
     }
 
     /// Update the status item to the diagnostic under the primary caret, or clear it.

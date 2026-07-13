@@ -7,8 +7,9 @@ use serde_json::Value;
 
 use crate::{
     CodeAction, Command, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate, DocEdit,
-    DocumentHighlight, DocumentSymbol, Location, PositionEncoding, PullReport, SemanticLegend,
-    SemanticToken, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
+    DocumentHighlight, DocumentSymbol, InlayHint, Location, PositionEncoding, PullReport,
+    SemanticLegend, SemanticToken, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit,
+    WorkspaceEdit,
 };
 
 /// Parse a `Command`/`{command, arguments}` object.
@@ -74,6 +75,7 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
             .and_then(|p| p.get("legend"))
             .map(parse_semantic_legend)
             .unwrap_or_default(),
+        inlay_hint: present("inlayHintProvider"),
         execute_commands: caps
             .get("executeCommandProvider")
             .and_then(|e| e.get("commands"))
@@ -517,6 +519,44 @@ pub fn parse_diagnostic_report(result: &Value) -> PullReport {
         diagnostics,
         raw,
     }
+}
+
+/// Parse a `textDocument/inlayHint` result into hints (§7.2). `label` is a string or an
+/// `InlayHintLabelPart[]` (we flatten the parts' `value`s). `position` is `{ line, character }`
+/// (UTF-16). Malformed entries are skipped.
+pub fn parse_inlay_hints(result: &Value) -> Vec<InlayHint> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|h| {
+            let pos = h.get("position")?;
+            let line = pos.get("line")?.as_u64()? as u32;
+            let char16 = pos.get("character")?.as_u64()? as u32;
+            let label = match h.get("label")? {
+                Value::String(s) => s.clone(),
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|p| p.get("value").and_then(|v| v.as_str()))
+                    .collect(),
+                _ => return None,
+            };
+            Some(InlayHint {
+                line,
+                char16,
+                label,
+                kind: h.get("kind").and_then(|k| k.as_u64()).unwrap_or(0) as u8,
+                pad_left: h
+                    .get("paddingLeft")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                pad_right: h
+                    .get("paddingRight")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
 }
 
 /// Parse a `semanticTokensProvider.legend` into the ordered type/modifier name lists (§7.1).

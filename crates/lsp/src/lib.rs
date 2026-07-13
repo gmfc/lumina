@@ -223,6 +223,19 @@ pub enum Cap {
     CodeAction,
     PullDiagnostics,
     SemanticTokens,
+    InlayHint,
+}
+
+/// One inlay hint (§7.2): virtual text at a (line, UTF-16 char) position. `kind`: 1 Type, 2
+/// Parameter, 0 unspecified. `label` is the concatenated hint text (label parts flattened).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlayHint {
+    pub line: u32,
+    pub char16: u32,
+    pub label: String,
+    pub kind: u8,
+    pub pad_left: bool,
+    pub pad_right: bool,
 }
 
 /// A server's semantic-tokens legend (§7.1): the ordered name lists a token's numeric `type` index
@@ -329,6 +342,8 @@ pub struct ServerCaps {
     pub semantic_tokens: bool,
     /// The server's semantic-tokens legend, used to decode token type/modifier indices.
     pub semantic_legend: SemanticLegend,
+    /// Inlay hints via `textDocument/inlayHint` (§7.2), gated on `inlayHintProvider`.
+    pub inlay_hint: bool,
     /// The command ids the server declared via `executeCommandProvider.commands` — only these may
     /// be sent to `workspace/executeCommand` (§8.4).
     pub execute_commands: Vec<String>,
@@ -353,6 +368,7 @@ impl ServerCaps {
             Cap::CodeAction => self.code_action,
             Cap::PullDiagnostics => self.diagnostic,
             Cap::SemanticTokens => self.semantic_tokens,
+            Cap::InlayHint => self.inlay_hint,
         }
     }
 }

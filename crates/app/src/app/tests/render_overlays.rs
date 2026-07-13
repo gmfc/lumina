@@ -33,6 +33,30 @@ fn renders_completion_popup() {
     std::fs::remove_file(&path).ok();
 }
 
+/// An inlay hint publishes as inline virtual text and renders between the real characters (§7.2).
+#[test]
+fn renders_inlay_hint_as_inline_virtual_text() {
+    let path = temp_file("let x = 5;\n");
+    let mut app = app_with(&path);
+    let id = app.editor.workspace.active_doc().unwrap();
+    let mut layers = std::collections::HashMap::new();
+    layers.insert(
+        "lsp.inlay".to_string(),
+        editor_plugin::DecorationSet::virtual_text(vec![editor_plugin::VirtualText::new(
+            5, // just after `let x`
+            ": i32",
+            "lsp.inlay.type",
+        )]),
+    );
+    app.editor.decorations.insert(id, layers);
+    let out = render_to_string(&mut app, 100, 10);
+    assert!(
+        out.contains(": i32"),
+        "inlay hint virtual text should render inline"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
 /// LSP work-done progress renders in the status bar (spinner + operation text, §1.5).
 #[test]
 fn renders_lsp_progress_in_statusline() {
