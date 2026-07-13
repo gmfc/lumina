@@ -109,8 +109,12 @@ pub enum LspEvent {
     DocumentSymbols(Vec<DocumentSymbol>),
     /// Workspace symbol search results: `(name, location)` pairs for a picker.
     WorkspaceSymbols(Vec<(String, Location)>),
-    /// Whole-document formatting edits, applied to the active document as one atomic group.
-    Formatting(Vec<TextEdit>),
+    /// Whole-document formatting edits for the document they were requested against (carried as
+    /// a `uri` so a tab switch during the async round-trip can't misapply them to another doc).
+    Formatting {
+        uri: String,
+        edits: Vec<TextEdit>,
+    },
     /// Signature help: the active signature line with its active parameter marked, or `None` to
     /// clear the hint (cursor left the call).
     SignatureHelp(Option<String>),
@@ -284,7 +288,7 @@ impl LspManager {
                     if superseded || current != entry.version {
                         continue;
                     }
-                    out.extend(response_event(entry.kind, &result));
+                    out.extend(response_event(entry.kind, &entry.uri, &result));
                 }
                 Incoming::ServerRequest { id, method, params } => {
                     // Every server→client request MUST be answered (§1.3) — silence deadlocks
@@ -554,7 +558,7 @@ impl LspManager {
 /// Interpret a successful response `result` against the request `kind` that produced it. Returns
 /// `None` when the payload carries nothing to act on (an empty hover / no definition), so the
 /// caller simply drops it.
-fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent> {
+fn response_event(kind: Pending, uri: &str, result: &serde_json::Value) -> Option<LspEvent> {
     Some(match kind {
         Pending::Hover => LspEvent::Hover(parse_hover(result)?),
         Pending::Definition => LspEvent::Goto(parse_locations(result).into_iter().next()?),
@@ -563,7 +567,10 @@ fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent>
         Pending::References => LspEvent::References(parse_locations(result)),
         Pending::DocumentSymbols => LspEvent::DocumentSymbols(parse_document_symbols(result)),
         Pending::WorkspaceSymbols => LspEvent::WorkspaceSymbols(parse_workspace_symbols(result)),
-        Pending::Formatting => LspEvent::Formatting(parse_text_edits(result)),
+        Pending::Formatting => LspEvent::Formatting {
+            uri: uri.to_string(),
+            edits: parse_text_edits(result),
+        },
         // Always emit (even `None`) so the statusline hint clears when the cursor leaves a call.
         Pending::SignatureHelp => {
             LspEvent::SignatureHelp(parse_signature_help(result).map(|s| format_signature(&s)))

@@ -67,6 +67,8 @@ pub struct App {
     lsp: crate::lsp::LspManager,
     /// Last document revision sent to the LSP, per DocId (change debounce).
     lsp_sent_revision: std::collections::HashMap<editor_core::DocId, u64>,
+    /// The doc that was active on the previous tick, to emit `DidChangeActive` on a tab switch.
+    last_active: Option<editor_core::DocId>,
     /// Paths of recently closed tabs, newest last — the "reopen closed editor" stack.
     closed_tabs: Vec<PathBuf>,
     /// The Settings tab's model + UI state, when a settings tab is open.

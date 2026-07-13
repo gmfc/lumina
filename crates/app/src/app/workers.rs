@@ -6,6 +6,16 @@ use super::*;
 
 impl App {
     pub(super) fn drain_workers(&mut self) {
+        // Emit `DidChangeActive` when the focused document changed since last tick, so reactive
+        // plugins clear per-doc UI on a tab switch (completion popup, signature/highlight, the
+        // diagnostics status). Nothing else emits this event.
+        let active = self.editor.workspace.active_doc();
+        if active != self.last_active {
+            self.last_active = active;
+            self.editor
+                .pending_events
+                .push(editor_plugin::event::Event::DidChangeActive(active));
+        }
         // Apply a queued appearance toggle (the theme is app-owned render state).
         if std::mem::take(&mut self.editor.pending_theme_toggle) {
             self.toggle_theme();
