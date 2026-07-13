@@ -211,6 +211,16 @@ impl Registry {
         }
     }
 
+    /// Deliver a `payload` to a plugin by its id via [`Plugin::on_panel_activate`], for a surface
+    /// the app renders specially rather than as a generic contributed panel (the terminal tab bar:
+    /// the app hit-tests the header and hands the plugin `"minimize"` / `"new"` / `"select:N"` /
+    /// `"close:N"`). No-op if no plugin has that id.
+    pub fn dispatch_owned(&mut self, plugin_id: &str, payload: &str, host: &mut dyn Host) {
+        if let Some(idx) = self.plugins.iter().position(|p| p.id() == plugin_id) {
+            self.plugins[idx].on_panel_activate(plugin_id, payload, host);
+        }
+    }
+
     /// Offer a raw key to plugins that intercept input (vim, a focused terminal) before chord
     /// resolution, in load order. Returns `true` as soon as one consumes it. A no-op until a
     /// plugin overrides [`Plugin::capture_key`], so wiring this into the app's key path is

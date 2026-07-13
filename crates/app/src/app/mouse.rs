@@ -63,7 +63,7 @@ impl App {
             .regions
             .panel_content
             .is_some_and(|r| in_rect(r, col, row))
-            && self.panel.active_terminal().is_some()
+            && self.active_terminal().is_some()
         {
             self.editor.focus = Focus::Panel;
         }
@@ -236,7 +236,7 @@ impl App {
             .panel_content
             .is_some_and(|r| in_rect(r, col, row))
         {
-            if let Some(t) = self.panel.active_terminal_mut() {
+            if let Some(t) = self.active_terminal_mut() {
                 t.scroll(delta);
             }
         } else {

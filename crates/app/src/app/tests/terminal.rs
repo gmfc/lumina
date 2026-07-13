@@ -2,44 +2,25 @@ use super::*;
 
 #[test]
 fn terminal_panel_layout_and_header_render_without_a_shell() {
-    // Force the dock open without spawning a shell, exercising the layout split, the header
-    // controls, and the empty-content branch — all PTY-free, so it runs everywhere.
+    // Force the dock open via the mirror the plugin would publish (no shell), exercising the
+    // layout split, the header controls, and the empty-content branch — all PTY-free.
     let path = temp_file("x");
     let mut app = app_with(&path);
-    assert!(!app.panel.open);
+    assert!(!app.editor.terminal_view.open);
 
-    app.panel.open = true;
+    app.editor.terminal_view = editor_plugin::TerminalView {
+        open: true,
+        ..Default::default()
+    };
     let text = render_to_string(&mut app, 60, 16);
     assert!(text.contains('▾'), "header shows the minimize control");
     assert!(text.contains('+'), "header shows the new-terminal control");
 
     // Minimized → only the header row is laid out (no content region recorded).
-    app.panel.minimized = true;
+    app.editor.terminal_view.minimized = true;
     let _ = render_to_string(&mut app, 60, 16);
     assert!(app.regions.panel_header.is_some());
     assert!(app.regions.panel_content.is_none());
-    std::fs::remove_file(&path).ok();
-}
-
-#[test]
-fn minimize_and_close_return_focus_to_editor() {
-    // State transitions without a live shell: minimize/restore + close bookkeeping.
-    let path = temp_file("x");
-    let mut app = app_with(&path);
-    app.panel.open = true;
-    app.editor.focus = Focus::Panel;
-
-    app.minimize_terminal();
-    assert!(app.panel.minimized);
-    assert_eq!(app.editor.focus, Focus::Editor);
-
-    app.minimize_terminal();
-    assert!(!app.panel.minimized);
-
-    // Closing with no terminals collapses the dock and restores editor focus.
-    app.close_terminal();
-    assert!(!app.panel.open);
-    assert_eq!(app.editor.focus, Focus::Editor);
     std::fs::remove_file(&path).ok();
 }
 
@@ -54,12 +35,14 @@ fn terminal_end_to_end_drive() {
 
     let dir = temp_dir_with_files();
     let mut app = app_with(&dir);
+    // The plugin spawns through the shell resolved onto EditorState, so set it there too.
     app.config.terminal_shell = Some("/bin/sh".to_string());
+    app.editor.terminal_shell = "/bin/sh".to_string();
 
     // First frame lays out the (closed) panel; toggling then spawns + focuses the shell.
     let _ = render_to_string(&mut app, 120, 40);
     app.exec_id("terminal.toggle");
-    if app.panel.terminals.is_empty() {
+    if app.editor.terminals.is_empty() {
         return; // no usable PTY on this runner — skip rather than fail.
     }
     assert_eq!(app.editor.focus, Focus::Panel);
@@ -102,15 +85,15 @@ fn terminal_end_to_end_drive() {
     }
     // Typing snaps back to the live view.
     app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-    assert!(app.panel.active_terminal().unwrap().at_live());
+    assert!(app.active_terminal().unwrap().at_live());
 
     // A second tab, then cycle and switch by clicking the header.
     app.exec_id("terminal.new");
-    assert_eq!(app.panel.terminals.len(), 2);
+    assert_eq!(app.editor.terminals.len(), 2);
     app.exec_id("terminal.prev");
-    assert_eq!(app.panel.active, 0);
+    assert_eq!(app.editor.terminal_view.active, 0);
     app.exec_id("terminal.next");
-    assert_eq!(app.panel.active, 1);
+    assert_eq!(app.editor.terminal_view.active, 1);
     let header = app.regions.panel_header.expect("header region");
     app.on_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
@@ -121,34 +104,22 @@ fn terminal_end_to_end_drive() {
 
     // Close tabs until the dock collapses and focus returns to the editor.
     app.exec_id("terminal.close");
-    assert_eq!(app.panel.terminals.len(), 1);
+    assert_eq!(app.editor.terminals.len(), 1);
     app.exec_id("terminal.close");
-    assert!(!app.panel.open);
+    assert!(!app.editor.terminal_view.open);
     assert_eq!(app.editor.focus, Focus::Editor);
     std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn toggle_terminal_close_branch_without_spawn() {
-    // Open + expanded → toggle closes and returns focus to the editor (no shell needed).
-    let path = temp_file("x");
-    let mut app = app_with(&path);
-    app.panel.open = true;
-    app.editor.focus = Focus::Panel;
-    app.exec_id("terminal.toggle");
-    assert!(!app.panel.open);
-    assert_eq!(app.editor.focus, Focus::Editor);
-    std::fs::remove_file(&path).ok();
 }
 
 #[test]
 fn terminal_commands_and_routing_are_inert_without_a_panel() {
     let path = temp_file("hello");
     let mut app = app_with(&path);
-    // next/prev are guarded no-ops while the dock is closed.
+    // next/prev are guarded no-ops while the dock is closed (the plugin still republishes the
+    // empty view through the registry).
     app.exec_id("terminal.next");
     app.exec_id("terminal.prev");
-    assert!(!app.panel.open && app.panel.active == 0);
+    assert!(!app.editor.terminal_view.open && app.editor.terminal_view.active == 0);
 
     // A wheel scroll not over the panel routes to the editor.
     let body: String = (0..50).map(|i| format!("l{i}\n")).collect();

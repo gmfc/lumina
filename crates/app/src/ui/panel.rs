@@ -23,7 +23,7 @@ pub(super) fn render_terminal_panel(
     }
     let header = Rect::new(area.x, area.y, area.width, 1);
     render_terminal_header(f, app, header);
-    if app.panel.minimized || area.height <= 1 {
+    if app.editor.terminal_view.minimized || area.height <= 1 {
         return (Some(header), None);
     }
     let content = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
@@ -35,7 +35,7 @@ pub(super) fn render_terminal_panel(
 fn render_terminal_header(f: &mut Frame, app: &App, area: Rect) {
     let focused = app.editor.focus == Focus::Panel;
     let bg = Style::default().bg(Color::Rgb(30, 33, 39));
-    let active = app.panel.active;
+    let active = app.editor.terminal_view.active;
     let buf = f.buffer_mut();
     // Paint the whole row with the header background first.
     for x in area.x..area.right() {
@@ -45,7 +45,7 @@ fn render_terminal_header(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     let mut x = area.x;
-    for (label, hit) in app.panel.header_segments() {
+    for (label, hit) in app.terminal_header_segments() {
         if x >= area.right() {
             break;
         }
@@ -82,7 +82,7 @@ fn header_seg_style(hit: HeaderHit, active: usize, focused: bool) -> Style {
 /// cursor at the shell's cursor when the panel is focused.
 fn render_terminal_content(f: &mut Frame, app: &App, area: Rect) {
     let focused = app.editor.focus == Focus::Panel;
-    let Some(term) = app.panel.active_terminal() else {
+    let Some(term) = app.active_terminal() else {
         fill_blank(f.buffer_mut(), area);
         return;
     };

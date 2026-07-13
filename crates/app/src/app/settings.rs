@@ -323,11 +323,13 @@ impl App {
             }
             ("terminal_height", SettingValue::Int(n)) => {
                 self.config.terminal_height = n.clamp(3, 60) as u16;
-                self.panel.height = self.config.terminal_height;
+                self.editor.terminal_height = self.config.terminal_height;
             }
             ("terminal_shell", SettingValue::Text(s)) => {
                 let t = s.trim();
                 self.config.terminal_shell = (!t.is_empty()).then(|| t.to_string());
+                self.editor.terminal_shell =
+                    crate::terminal::default_shell(self.config.terminal_shell.as_deref());
             }
             ("follow_mode", SettingValue::Bool(b)) => {
                 self.config.follow_mode = b;

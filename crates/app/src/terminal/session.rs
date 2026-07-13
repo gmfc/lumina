@@ -15,8 +15,6 @@ const SCROLLBACK: usize = 2000;
 
 /// One shell session, shown as a tab in the terminal panel.
 pub struct Terminal {
-    /// Stable id, used to route reader-thread output back to the right terminal.
-    pub id: u64,
     /// Display name in the tab (the shell's basename, e.g. `bash`).
     pub title: String,
     /// Set once the child process has exited (reported by the reader thread).
@@ -103,7 +101,6 @@ impl Terminal {
         }
 
         Some(Terminal {
-            id,
             title,
             exited: false,
             parser: vt100::Parser::new(rows, cols, SCROLLBACK),

@@ -106,7 +106,7 @@ impl App {
             Command::FocusEditor => self.editor.focus = Focus::Editor,
 
             // terminal-dock commands are the `terminal` builtin plugin, dispatched through the
-            // registry; the app applies the queued `TerminalOp`s to the PTY panel on drain.
+            // registry; it owns the dock lifecycle and drives the PTYs through the RawPTY Host port.
 
             // A plugin-contributed command referenced by id.
             Command::Run(id) => {
