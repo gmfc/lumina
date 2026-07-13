@@ -140,6 +140,10 @@ pub struct LspManager {
     /// Latest in-flight request id per (language, cancelable kind), for supersede/cancel (§1.4)
     /// and dropping superseded responses (§9.4).
     inflight: HashMap<(String, Pending), i64>,
+    /// The open-document set per server (its attach set): URIs we've sent `didOpen` for and not
+    /// yet closed. Gates `didClose` (no stray close for a doc this session never opened) and is
+    /// cleared on crash.
+    open_docs: HashMap<String, HashSet<String>>,
     /// URIs each server has published diagnostics for, so they can be cleared on a crash.
     published: HashMap<String, HashSet<String>>,
     /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
@@ -168,6 +172,7 @@ impl LspManager {
             versions: HashMap::new(),
             pending: HashMap::new(),
             inflight: HashMap::new(),
+            open_docs: HashMap::new(),
             published: HashMap::new(),
             crash_times: HashMap::new(),
             restart_after: HashMap::new(),
@@ -338,6 +343,9 @@ impl LspManager {
             self.pending.remove(&key);
         }
         self.inflight.retain(|(l, _), _| l != lang);
+        // The restarted server starts with an empty mirror — forget the old attach set (the app
+        // replays didOpen for its docs on resync).
+        self.open_docs.remove(lang);
 
         // Clear this server's stale diagnostics from the UI.
         if let Some(uris) = self.published.remove(lang) {
@@ -454,7 +462,14 @@ impl LspManager {
         let uri = uri_for(path);
         self.versions.insert(uri.clone(), 1);
         if let Some(client) = self.clients.get(language) {
-            return client.did_open(&uri, language, 1, text).is_ok();
+            let sent = client.did_open(&uri, language, 1, text).is_ok();
+            if sent {
+                self.open_docs
+                    .entry(language.to_string())
+                    .or_default()
+                    .insert(uri);
+            }
+            return sent;
         }
         false
     }
@@ -474,25 +489,38 @@ impl LspManager {
         false
     }
 
-    /// Notify the server that a document closed (§4.1): its truth reverts to disk. Sends only
-    /// once `Running`; drops the per-doc version so a later reopen restarts its counter.
+    /// Notify the server that a document closed (§4.1): its truth reverts to disk. Sends
+    /// `didClose` only for a document this session actually opened (no stray close after a
+    /// crash/restart) and drops the doc's per-server bookkeeping.
     pub fn did_close(&mut self, path: &Path, language: &str) {
         let uri = uri_for(path);
         self.versions.remove(&uri);
-        if self.is_ready(language) {
+        if let Some(p) = self.published.get_mut(language) {
+            p.remove(&uri);
+        }
+        let was_open = self
+            .open_docs
+            .get_mut(language)
+            .is_some_and(|open| open.remove(&uri));
+        if was_open && self.is_ready(language) {
             if let Some(client) = self.clients.get(language) {
                 let _ = client.did_close(&uri);
             }
         }
     }
 
-    /// Gracefully stop all connections (ordered shutdown with a per-server deadline), e.g. on
-    /// editor quit. Never blocks longer than `deadline` per server.
+    /// Gracefully stop all connections on quit, running the per-server teardowns **concurrently**
+    /// under one global deadline (§3.8): every server gets the full `deadline` in parallel, so a
+    /// hung server can't make quit wait `deadline × N` — total quit time stays ~`deadline`.
     pub fn stop_all(&mut self, deadline: Duration) {
-        for (_lang, client) in self.clients.iter_mut() {
-            client.stop(deadline);
+        let threads: Vec<_> = self
+            .clients
+            .drain()
+            .map(|(_lang, mut client)| std::thread::spawn(move || client.stop(deadline)))
+            .collect();
+        for t in threads {
+            let _ = t.join();
         }
-        self.clients.clear();
         self.state.clear();
     }
 
@@ -917,6 +945,29 @@ mod tests {
         // First crash → scheduled for restart, breaker not tripped.
         assert!(mgr.restart_after.contains_key("rust"));
         assert!(!mgr.failed.contains_key("rust"));
+    }
+
+    #[test]
+    fn did_close_only_for_opened_docs_and_prunes_bookkeeping() {
+        let mut mgr = manager();
+        let uri = uri_for(Path::new("/x.rs"));
+        // Never opened this session → no stray close, nothing to prune (no panic).
+        mgr.did_close(Path::new("/x.rs"), "rust");
+        assert!(mgr.open_docs.get("rust").is_none_or(|s| s.is_empty()));
+
+        // Simulate an opened doc with diagnostics (as did_open / a publish would record).
+        mgr.open_docs
+            .entry("rust".into())
+            .or_default()
+            .insert(uri.clone());
+        mgr.published
+            .entry("rust".into())
+            .or_default()
+            .insert(uri.clone());
+        mgr.did_close(Path::new("/x.rs"), "rust");
+        // Closing removes it from the attach set and the published set (no unbounded growth).
+        assert!(mgr.open_docs.get("rust").is_none_or(|s| !s.contains(&uri)));
+        assert!(mgr.published.get("rust").is_none_or(|s| !s.contains(&uri)));
     }
 
     #[test]
