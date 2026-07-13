@@ -16,6 +16,7 @@
 use editor_plugin::Plugin;
 
 pub mod clipboard;
+pub mod code_action;
 pub mod completion;
 pub mod diagnostics;
 pub mod document_highlight;
@@ -65,6 +66,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(rename::RenamePlugin),
         Box::new(diagnostics::DiagnosticsPlugin::default()),
         Box::new(document_highlight::DocumentHighlightPlugin),
+        Box::new(code_action::CodeActionPlugin::default()),
         Box::new(completion::CompletionPlugin::default()),
         Box::new(clipboard::ClipboardPlugin),
         Box::new(terminal::TerminalPlugin::default()),

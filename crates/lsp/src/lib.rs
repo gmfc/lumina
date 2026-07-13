@@ -187,6 +187,15 @@ pub enum Cap {
     SignatureHelp,
     DocumentHighlight,
     WorkspaceSymbol,
+    CodeAction,
+}
+
+/// A code action that carries an edit to apply (quickfix / refactor / source action). Command-only
+/// actions (executed via `workspace/executeCommand`) are not modeled yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeAction {
+    pub title: String,
+    pub edit: WorkspaceEdit,
 }
 
 /// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates.
@@ -229,6 +238,7 @@ pub struct ServerCaps {
     pub signature_help: bool,
     pub document_highlight: bool,
     pub workspace_symbol: bool,
+    pub code_action: bool,
 }
 
 impl ServerCaps {
@@ -247,6 +257,7 @@ impl ServerCaps {
             Cap::SignatureHelp => self.signature_help,
             Cap::DocumentHighlight => self.document_highlight,
             Cap::WorkspaceSymbol => self.workspace_symbol,
+            Cap::CodeAction => self.code_action,
         }
     }
 }

@@ -6,8 +6,9 @@
 use serde_json::Value;
 
 use crate::{
-    CompletionItem, Diagnostic, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol, Location,
-    PositionEncoding, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
+    CodeAction, CompletionItem, Diagnostic, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
+    Location, PositionEncoding, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit,
+    WorkspaceEdit,
 };
 
 /// Parse an `InitializeResult` into the caps Lumina gates on. Resilient: a provider is
@@ -46,7 +47,24 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
         signature_help: present("signatureHelpProvider"),
         document_highlight: present("documentHighlightProvider"),
         workspace_symbol: present("workspaceSymbolProvider"),
+        code_action: present("codeActionProvider"),
     }
+}
+
+/// Parse a `textDocument/codeAction` result (`(Command | CodeAction)[]`), keeping the actions that
+/// carry an `edit` we can apply directly. Command-only actions (executed server-side via
+/// `workspace/executeCommand`) and edit-less resolve actions are skipped for now.
+pub fn parse_code_actions(result: &Value) -> Vec<CodeAction> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|a| {
+            let title = a.get("title")?.as_str()?.to_string();
+            let edit = parse_workspace_edit(a.get("edit")?);
+            (!edit.changes.is_empty()).then_some(CodeAction { title, edit })
+        })
+        .collect()
 }
 
 /// Parse a `workspace/symbol` result (`WorkspaceSymbol[]` / `SymbolInformation[]`) into

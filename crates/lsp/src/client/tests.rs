@@ -248,6 +248,25 @@ fn references_parse_as_locations() {
 }
 
 #[test]
+fn code_actions_keep_only_edit_carrying() {
+    let actions = serde_json::json!([
+        // A CodeAction with an edit → kept.
+        {"title":"Add import","kind":"quickfix","edit":{"changes":{"file:///a.rs":[
+            {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"use x;\n"}
+        ]}}},
+        // A Command-only action (no edit) → skipped for now.
+        {"title":"Run rustfmt","command":{"command":"rustfmt","arguments":[]}},
+        // A CodeAction whose edit is empty → skipped.
+        {"title":"noop","edit":{"changes":{}}}
+    ]);
+    let parsed = parse_code_actions(&actions);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].title, "Add import");
+    assert_eq!(parsed[0].edit.changes[0].0, "file:///a.rs");
+    assert!(parse_code_actions(&serde_json::json!(null)).is_empty());
+}
+
+#[test]
 fn workspace_edit_parses_changes_map() {
     let edit = serde_json::json!({
         "changes": {
@@ -280,16 +299,21 @@ fn parse_capabilities_full_and_minimal() {
         "documentFormattingProvider": true,
         "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
         "documentHighlightProvider": true,
-        "workspaceSymbolProvider": true
+        "workspaceSymbolProvider": true,
+        "codeActionProvider": { "codeActionKinds": ["quickfix", "refactor"] }
     }});
     let c = parse_capabilities(&full);
     assert_eq!(c.position_encoding, Some(PositionEncoding::Utf8));
     assert_eq!(c.sync_kind, SyncKind::Incremental);
     assert!(c.hover && c.definition && c.type_definition && c.implementation);
     assert!(c.references && c.document_symbol && c.completion && c.rename && c.formatting);
-    assert!(c.signature_help && c.document_highlight && c.workspace_symbol);
+    assert!(c.signature_help && c.document_highlight && c.workspace_symbol && c.code_action);
     assert!(c.allows(Cap::Hover) && c.allows(Cap::Formatting) && c.allows(Cap::SignatureHelp));
-    assert!(c.allows(Cap::DocumentHighlight) && c.allows(Cap::WorkspaceSymbol));
+    assert!(
+        c.allows(Cap::DocumentHighlight)
+            && c.allows(Cap::WorkspaceSymbol)
+            && c.allows(Cap::CodeAction)
+    );
 
     // minimal: providers as bare booleans, sync as a number, no encoding.
     let min = serde_json::json!({ "capabilities": {

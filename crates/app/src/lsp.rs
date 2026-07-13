@@ -11,13 +11,13 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
-    parse_capabilities, parse_completion, parse_document_highlights, parse_document_symbols,
-    parse_hover, parse_locations, parse_signature_help, parse_text_edits, parse_workspace_edit,
-    parse_workspace_symbols,
+    parse_capabilities, parse_code_actions, parse_completion, parse_document_highlights,
+    parse_document_symbols, parse_hover, parse_locations, parse_signature_help, parse_text_edits,
+    parse_workspace_edit, parse_workspace_symbols,
 };
 use editor_lsp::{
-    Cap, CompletionItem, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol, Incoming, Location,
-    LspClient, LspHandle, ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
+    Cap, CodeAction, CompletionItem, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
+    Incoming, Location, LspClient, LspHandle, ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
 };
 
 mod requests;
@@ -35,6 +35,7 @@ enum Pending {
     SignatureHelp,
     DocumentHighlight,
     WorkspaceSymbols,
+    CodeAction,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -115,6 +116,8 @@ pub enum LspEvent {
     SignatureHelp(Option<String>),
     /// Occurrences of the symbol under the cursor (read/write highlights).
     Highlights(Vec<DocumentHighlight>),
+    /// Code actions offered for the cursor/selection (title + edit).
+    CodeActions(Vec<CodeAction>),
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -567,6 +570,7 @@ fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent>
         }
         // Always emit (even empty) so highlights clear when the cursor leaves a symbol.
         Pending::DocumentHighlight => LspEvent::Highlights(parse_document_highlights(result)),
+        Pending::CodeAction => LspEvent::CodeActions(parse_code_actions(result)),
     })
 }
 

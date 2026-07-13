@@ -91,6 +91,20 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspSignatureHelp(sig));
             }
+            LspEvent::CodeActions(actions) => {
+                // Resolve each action's edit URIs to paths and hand the list to the code-action
+                // plugin, which shows a picker and applies the chosen one.
+                let actions = actions
+                    .into_iter()
+                    .map(|a| editor_plugin::LspCodeAction {
+                        title: a.title,
+                        edit: to_primitive_workspace_edit(a.edit),
+                    })
+                    .collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspCodeActions(actions));
+            }
             LspEvent::Highlights(hls) => {
                 // Hand the occurrence ranges to the document-highlight plugin (it paints them).
                 let hls = hls
@@ -326,6 +340,7 @@ impl App {
             K::Completion => self.lsp.request_completion(&p, &l, line, ch),
             K::SignatureHelp => self.lsp.request_signature_help(&p, &l, line, ch),
             K::DocumentHighlight => self.lsp.request_document_highlight(&p, &l, line, ch),
+            K::CodeAction => self.lsp.request_code_action(&p, &l, line, ch),
             K::References => self.lsp.request_references(&p, &l, line, ch),
             K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
             K::DocumentSymbols | K::Formatting | K::WorkspaceSymbols(_) => false, // handled above
