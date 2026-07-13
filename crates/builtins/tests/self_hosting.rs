@@ -356,55 +356,30 @@ fn migrated_plugins_contribute_their_keybindings() {
             .iter()
             .any(|kb| kb.chord == chord && kb.command == command)
     };
-    assert!(
-        bound(&full, "ctrl+d", "cursor.addNextMatch"),
-        "multi-cursor's ctrl+d must be contributed through the registry, not the defaults table"
-    );
-    assert!(
-        bound(&full, "alt+j", "git.nextHunk"),
-        "git-nav's alt+j must be contributed through the registry, not the defaults table"
-    );
-    assert!(
-        bound(&full, "ctrl+f", "search.find"),
-        "find's ctrl+f must be contributed through the registry, not the defaults table"
-    );
-    assert!(
-        bound(&full, "ctrl+v", "edit.paste"),
-        "clipboard's ctrl+v must be contributed through the registry, not the defaults table"
-    );
-    assert!(
-        bound(&full, "ctrl+j", "terminal.toggle"),
-        "terminal's ctrl+j must be contributed through the registry, not the defaults table"
-    );
-    assert!(
-        bound(&full, "ctrl+space", "lsp.completion"),
-        "completion's ctrl+space must be contributed through the registry, not the defaults table"
-    );
-
-    let no_terminal =
-        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != TERMINAL_ID));
-    assert!(
-        !bound(&no_terminal, "ctrl+j", "terminal.toggle"),
-        "disabling terminal must unbind ctrl+j — otherwise the binding is hardcoded"
-    );
-
-    let no_clipboard = Registry::with_plugins(
-        all_builtins()
-            .into_iter()
-            .filter(|p| p.id() != CLIPBOARD_ID),
-    );
-    assert!(
-        !bound(&no_clipboard, "ctrl+v", "edit.paste"),
-        "disabling clipboard must unbind ctrl+v — otherwise the binding is hardcoded"
-    );
-
-    let no_multicursor = Registry::with_plugins(
-        all_builtins()
-            .into_iter()
-            .filter(|p| p.id() != MULTICURSOR_ID),
-    );
-    assert!(
-        !bound(&no_multicursor, "ctrl+d", "cursor.addNextMatch"),
-        "disabling multi-cursor must unbind its chord — otherwise the binding is hardcoded"
-    );
+    // Each migrated plugin contributes its chord through the registry, not the defaults table.
+    for (who, chord, command) in [
+        ("multi-cursor", "ctrl+d", "cursor.addNextMatch"),
+        ("git-nav", "alt+j", "git.nextHunk"),
+        ("find", "ctrl+f", "search.find"),
+        ("clipboard", "ctrl+v", "edit.paste"),
+        ("terminal", "ctrl+j", "terminal.toggle"),
+        ("completion", "ctrl+space", "lsp.completion"),
+    ] {
+        assert!(
+            bound(&full, chord, command),
+            "{who}'s {chord} must be contributed through the registry, not the defaults table"
+        );
+    }
+    // … and disabling the owning plugin unbinds its chord — proof the binding is not hardcoded.
+    for (id, chord, command) in [
+        (TERMINAL_ID, "ctrl+j", "terminal.toggle"),
+        (CLIPBOARD_ID, "ctrl+v", "edit.paste"),
+        (MULTICURSOR_ID, "ctrl+d", "cursor.addNextMatch"),
+    ] {
+        let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != id));
+        assert!(
+            !bound(&reduced, chord, command),
+            "disabling {id} must unbind {chord} — otherwise the binding is hardcoded"
+        );
+    }
 }
