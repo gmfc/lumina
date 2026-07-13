@@ -235,9 +235,12 @@ impl LspManager {
         character: u32,
     ) -> bool {
         let uri = uri_for(path);
-        // Cursor as an empty range (selection-range support is a later refinement).
+        // Cursor as an empty range (selection-range support is a later refinement). Echo the
+        // diagnostics overlapping that point into the request context so the server can offer
+        // their quickfixes (§6.1).
+        let ctx = self.context_diagnostics(&uri, (line, character), (line, character));
         self.send_request(language, &uri, Pending::CodeAction, Cap::CodeAction, |c| {
-            c.code_action(&uri, line, character, line, character)
+            c.code_action(&uri, line, character, line, character, &ctx)
         })
     }
 

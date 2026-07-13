@@ -254,8 +254,9 @@ impl LspHandle {
         )
     }
 
-    /// Request code actions for a range. `context.diagnostics` is empty for now (quickfixes that
-    /// key off it may be limited — see the roadmap); refactor/source actions still apply.
+    /// Request code actions for a range. `context.diagnostics` carries the diagnostics overlapping
+    /// the range verbatim (echoed from `publishDiagnostics`) so the server can offer quickfixes
+    /// bound to them (§6.1); refactor/source actions apply regardless. `triggerKind: 1` = invoked.
     #[allow(clippy::too_many_arguments)]
     pub fn code_action(
         &self,
@@ -264,6 +265,7 @@ impl LspHandle {
         start_char: u32,
         end_line: u32,
         end_char: u32,
+        context_diagnostics: &[Value],
     ) -> io::Result<i64> {
         self.request(
             "textDocument/codeAction",
@@ -273,7 +275,7 @@ impl LspHandle {
                     "start": { "line": start_line, "character": start_char },
                     "end": { "line": end_line, "character": end_char }
                 },
-                "context": { "diagnostics": [], "triggerKind": 1 }
+                "context": { "diagnostics": context_diagnostics, "triggerKind": 1 }
             }),
         )
     }

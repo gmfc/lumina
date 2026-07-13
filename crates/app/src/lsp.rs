@@ -179,6 +179,10 @@ pub struct LspManager {
     open_docs: HashMap<String, HashSet<String>>,
     /// URIs each server has published diagnostics for, so they can be cleared on a crash.
     published: HashMap<String, HashSet<String>>,
+    /// The latest raw diagnostic JSON per document URI, so a `codeAction` request can echo the
+    /// diagnostics overlapping its range into `context.diagnostics` (§6.1). Replaced on each
+    /// publish; cleared on close/crash.
+    diag_raw: HashMap<String, Vec<serde_json::Value>>,
     /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
     crash_times: HashMap<String, Vec<Instant>>,
     /// Earliest instant a language may be respawned, enforcing restart backoff.
@@ -207,6 +211,7 @@ impl LspManager {
             inflight: HashMap::new(),
             open_docs: HashMap::new(),
             published: HashMap::new(),
+            diag_raw: HashMap::new(),
             crash_times: HashMap::new(),
             restart_after: HashMap::new(),
             root_uri: uri_for(root),
@@ -234,6 +239,13 @@ impl LspManager {
                         .entry(lang.clone())
                         .or_default()
                         .insert(u.uri.clone());
+                    // Snapshot the raw diagnostics for this URI (replacing the prior batch) so a
+                    // later codeAction request can echo the overlapping ones into its context.
+                    if u.raw.is_empty() {
+                        self.diag_raw.remove(&u.uri);
+                    } else {
+                        self.diag_raw.insert(u.uri.clone(), u.raw.clone());
+                    }
                     out.push(LspEvent::Diagnostics(u));
                 }
                 Incoming::Response { id, result, error } => {
@@ -380,12 +392,14 @@ impl LspManager {
         // replays didOpen for its docs on resync).
         self.open_docs.remove(lang);
 
-        // Clear this server's stale diagnostics from the UI.
+        // Clear this server's stale diagnostics from the UI (and forget their raw snapshots).
         if let Some(uris) = self.published.remove(lang) {
             for uri in uris {
+                self.diag_raw.remove(&uri);
                 out.push(LspEvent::Diagnostics(DiagnosticsUpdate {
                     uri,
                     diagnostics: Vec::new(),
+                    raw: Vec::new(),
                 }));
             }
         }
@@ -535,6 +549,7 @@ impl LspManager {
     pub fn did_close(&mut self, path: &Path, language: &str) {
         let uri = uri_for(path);
         self.versions.remove(&uri);
+        self.diag_raw.remove(&uri);
         if let Some(p) = self.published.get_mut(language) {
             p.remove(&uri);
         }
@@ -568,6 +583,26 @@ impl LspManager {
     /// server-computed `WorkspaceEdit` must match to be safe to apply (§2.4).
     pub fn doc_version(&self, uri: &str) -> Option<i64> {
         self.versions.get(uri).copied()
+    }
+
+    /// The raw diagnostics for `uri` whose range overlaps the (LSP, UTF-16) range `[start, end]`,
+    /// to echo into a `codeAction` request's `context.diagnostics` (§6.1) so the server can offer
+    /// quickfixes bound to them.
+    fn context_diagnostics(
+        &self,
+        uri: &str,
+        start: (u32, u32),
+        end: (u32, u32),
+    ) -> Vec<serde_json::Value> {
+        self.diag_raw
+            .get(uri)
+            .map(|ds| {
+                ds.iter()
+                    .filter(|d| diag_overlaps(d, start, end))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// True if any server is configured (so the app knows whether to bother notifying).
@@ -649,6 +684,29 @@ fn folder_name(root_uri: &str) -> String {
         .find(|s| !s.is_empty())
         .unwrap_or("root")
         .to_string()
+}
+
+/// Whether a raw diagnostic's `range` intersects the (LSP, UTF-16) range `[start, end]` — the
+/// test for including it in a `codeAction` request's `context.diagnostics` (§6.1). Positions are
+/// compared as lexicographic `(line, character)` tuples; a missing/malformed range means "don't
+/// include" (it can't be positioned against the request).
+fn diag_overlaps(raw: &serde_json::Value, start: (u32, u32), end: (u32, u32)) -> bool {
+    let pos = |obj: &serde_json::Value, key: &str| -> Option<(u32, u32)> {
+        let p = obj.get(key)?;
+        Some((
+            p.get("line")?.as_u64()? as u32,
+            p.get("character")?.as_u64()? as u32,
+        ))
+    };
+    let Some(range) = raw.get("range") else {
+        return false;
+    };
+    let (Some(ds), Some(de)) = (pos(range, "start"), pos(range, "end")) else {
+        return false;
+    };
+    // Intersection of [ds, de] with [start, end] in lexicographic (line, char) order. Touching
+    // endpoints count (a point request on a diagnostic boundary still surfaces its fix).
+    ds <= end && start <= de
 }
 
 /// A `file://` URI for a path (best-effort; no percent-encoding of exotic chars).
@@ -1062,6 +1120,80 @@ mod tests {
         // Closing removes it from the attach set and the published set (no unbounded growth).
         assert!(mgr.open_docs.get("rust").is_none_or(|s| !s.contains(&uri)));
         assert!(mgr.published.get("rust").is_none_or(|s| !s.contains(&uri)));
+    }
+
+    #[test]
+    fn diag_overlaps_matches_point_and_range() {
+        let d = |sl, sc, el, ec| {
+            serde_json::json!({
+                "range": {
+                    "start": {"line": sl, "character": sc},
+                    "end": {"line": el, "character": ec}
+                }
+            })
+        };
+        let diag = d(1, 4, 1, 9); // line 1, cols 4..9
+                                  // Point inside → overlaps; on either boundary → overlaps (touching counts).
+        assert!(diag_overlaps(&diag, (1, 6), (1, 6)));
+        assert!(diag_overlaps(&diag, (1, 4), (1, 4)));
+        assert!(diag_overlaps(&diag, (1, 9), (1, 9)));
+        // Point before/after the range on the same line → no.
+        assert!(!diag_overlaps(&diag, (1, 3), (1, 3)));
+        assert!(!diag_overlaps(&diag, (1, 10), (1, 10)));
+        // A different line → no.
+        assert!(!diag_overlaps(&diag, (2, 6), (2, 6)));
+        // A wider selection that straddles the range → yes.
+        assert!(diag_overlaps(&diag, (0, 0), (5, 0)));
+        // A diagnostic with no range is never included.
+        assert!(!diag_overlaps(&serde_json::json!({}), (0, 0), (9, 9)));
+    }
+
+    #[test]
+    fn code_action_context_echoes_overlapping_diagnostics() {
+        // A publish snapshots raw diagnostics per URI; a codeAction at a point echoes only the
+        // ones overlapping it (preserving `data`), and a re-publish replaces the snapshot.
+        let mut mgr = manager();
+        let uri = "file:///x.rs";
+        let raw = vec![
+            serde_json::json!({
+                "range":{"start":{"line":1,"character":4},"end":{"line":1,"character":9}},
+                "severity":1,"message":"here","data":{"fix":1}
+            }),
+            serde_json::json!({
+                "range":{"start":{"line":3,"character":0},"end":{"line":3,"character":2}},
+                "severity":2,"message":"elsewhere"
+            }),
+        ];
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Diagnostics(DiagnosticsUpdate {
+                uri: uri.into(),
+                diagnostics: Vec::new(), // model diagnostics irrelevant to this path
+                raw: raw.clone(),
+            }),
+        );
+        let _ = mgr.poll(); // stores the raw snapshot
+                            // A point on line 1 col 6 sees only the first diagnostic.
+        let ctx = mgr.context_diagnostics(uri, (1, 6), (1, 6));
+        assert_eq!(ctx.len(), 1);
+        assert_eq!(ctx[0].get("data"), Some(&serde_json::json!({"fix":1})));
+        // A point on line 3 sees only the second.
+        assert_eq!(mgr.context_diagnostics(uri, (3, 1), (3, 1)).len(), 1);
+        // A point on an empty line sees none.
+        assert!(mgr.context_diagnostics(uri, (2, 0), (2, 0)).is_empty());
+        // An empty publish clears the snapshot.
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Diagnostics(DiagnosticsUpdate {
+                uri: uri.into(),
+                diagnostics: Vec::new(),
+                raw: Vec::new(),
+            }),
+        );
+        let _ = mgr.poll();
+        assert!(mgr.context_diagnostics(uri, (1, 6), (1, 6)).is_empty());
     }
 
     #[test]

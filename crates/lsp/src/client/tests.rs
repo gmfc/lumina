@@ -26,6 +26,35 @@ fn parses_publish_diagnostics_notification() {
 }
 
 #[test]
+fn raw_diagnostics_stay_in_lockstep_and_preserve_data() {
+    // `raw` holds the original JSON of each diagnostic that parsed (skipping the malformed one),
+    // so a codeAction context can echo it verbatim — including opaque `data` a quickfix keys off.
+    let value: Value = serde_json::from_str(
+        r#"{
+                "jsonrpc":"2.0",
+                "method":"textDocument/publishDiagnostics",
+                "params":{
+                    "uri":"file:///x/a.rs",
+                    "diagnostics":[
+                        {"severity":1,"message":"malformed - no range"},
+                        {"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}},
+                         "severity":1,"message":"real","data":{"fix":"import foo"}}
+                    ]
+                }
+            }"#,
+    )
+    .unwrap();
+    let update = parse_diagnostics(&value).unwrap();
+    assert_eq!(update.diagnostics.len(), 1);
+    assert_eq!(update.raw.len(), 1, "raw must match the parsed count");
+    assert_eq!(
+        update.raw[0].get("data").and_then(|d| d.get("fix")),
+        Some(&Value::String("import foo".into())),
+        "opaque `data` must survive verbatim in raw"
+    );
+}
+
+#[test]
 fn malformed_diagnostic_is_skipped_not_whole_batch() {
     // One entry is missing its `range`; the valid entry must still survive.
     let value: Value = serde_json::from_str(
@@ -537,10 +566,16 @@ fn initialize_params_are_honest_and_complete() {
         p["capabilities"]["general"]["positionEncodings"][0],
         "utf-16"
     );
-    // Honest: no snippet engine, no prepareRename, plaintext hover.
+    // Honest: we have a real snippet expander, so we declare snippetSupport and the resolve
+    // properties we actually apply. Still no prepareRename, plaintext hover.
     assert_eq!(
         p["capabilities"]["textDocument"]["completion"]["completionItem"]["snippetSupport"],
-        false
+        true
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["completion"]["completionItem"]["resolveSupport"]
+            ["properties"],
+        serde_json::json!(["documentation", "detail", "additionalTextEdits"])
     );
     assert_eq!(
         p["capabilities"]["textDocument"]["rename"]["prepareSupport"],
