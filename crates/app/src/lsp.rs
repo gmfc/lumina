@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
     parse_capabilities, parse_completion, parse_document_symbols, parse_hover, parse_locations,
-    parse_workspace_edit,
+    parse_text_edits, parse_workspace_edit,
 };
 use editor_lsp::{
     Cap, CompletionItem, DiagnosticsUpdate, DocumentSymbol, Incoming, Location, LspClient,
-    LspHandle, ServerCaps, WorkspaceEdit,
+    LspHandle, ServerCaps, TextEdit, WorkspaceEdit,
 };
 
 mod requests;
@@ -30,6 +30,7 @@ enum Pending {
     Rename,
     References,
     DocumentSymbols,
+    Formatting,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -97,6 +98,8 @@ pub enum LspEvent {
     Rename(WorkspaceEdit),
     References(Vec<Location>),
     DocumentSymbols(Vec<DocumentSymbol>),
+    /// Whole-document formatting edits, applied to the active document as one atomic group.
+    Formatting(Vec<TextEdit>),
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -541,6 +544,7 @@ fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent>
         Pending::Rename => LspEvent::Rename(parse_workspace_edit(result)),
         Pending::References => LspEvent::References(parse_locations(result)),
         Pending::DocumentSymbols => LspEvent::DocumentSymbols(parse_document_symbols(result)),
+        Pending::Formatting => LspEvent::Formatting(parse_text_edits(result)),
     })
 }
 

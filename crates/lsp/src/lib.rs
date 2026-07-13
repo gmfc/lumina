@@ -179,6 +179,7 @@ pub enum Cap {
     DocumentSymbol,
     Completion,
     Rename,
+    Formatting,
 }
 
 /// The subset of `ServerCapabilities` Lumina currently gates on. Grows as features land
@@ -196,6 +197,7 @@ pub struct ServerCaps {
     pub document_symbol: bool,
     pub completion: bool,
     pub rename: bool,
+    pub formatting: bool,
 }
 
 impl ServerCaps {
@@ -210,6 +212,7 @@ impl ServerCaps {
             Cap::DocumentSymbol => self.document_symbol,
             Cap::Completion => self.completion,
             Cap::Rename => self.rename,
+            Cap::Formatting => self.formatting,
         }
     }
 }

@@ -15,6 +15,8 @@ pub enum LspRequestKind {
     References,
     DocumentSymbols,
     Rename(String),
+    /// Whole-document formatting; the app applies the returned edits to the active document.
+    Formatting,
 }
 
 /// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own

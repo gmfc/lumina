@@ -217,14 +217,15 @@ fn parse_capabilities_full_and_minimal() {
         "referencesProvider": true,
         "documentSymbolProvider": true,
         "completionProvider": { "triggerCharacters": ["."] },
-        "renameProvider": { "prepareProvider": true }
+        "renameProvider": { "prepareProvider": true },
+        "documentFormattingProvider": true
     }});
     let c = parse_capabilities(&full);
     assert_eq!(c.position_encoding, Some(PositionEncoding::Utf8));
     assert_eq!(c.sync_kind, SyncKind::Incremental);
     assert!(c.hover && c.definition && c.type_definition && c.implementation);
-    assert!(c.references && c.document_symbol && c.completion && c.rename);
-    assert!(c.allows(Cap::Hover) && c.allows(Cap::Rename));
+    assert!(c.references && c.document_symbol && c.completion && c.rename && c.formatting);
+    assert!(c.allows(Cap::Hover) && c.allows(Cap::Rename) && c.allows(Cap::Formatting));
 
     // minimal: providers as bare booleans, sync as a number, no encoding.
     let min = serde_json::json!({ "capabilities": {
@@ -236,8 +237,24 @@ fn parse_capabilities_full_and_minimal() {
     assert_eq!(c.position_encoding, None); // => utf-16 default
     assert_eq!(c.sync_kind, SyncKind::Full);
     assert!(c.hover && c.completion);
-    assert!(!c.definition && !c.rename);
-    assert!(!c.allows(Cap::Definition));
+    assert!(!c.definition && !c.rename && !c.formatting);
+    assert!(!c.allows(Cap::Definition) && !c.allows(Cap::Formatting));
+}
+
+#[test]
+fn parse_text_edits_reads_formatting_result() {
+    // textDocument/formatting returns a bare TextEdit[]; malformed entries are skipped.
+    let result = serde_json::json!([
+        {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":2}},"newText":""},
+        {"bad":"missing range"},
+        {"range":{"start":{"line":3,"character":0},"end":{"line":3,"character":0}},"newText":"\n"}
+    ]);
+    let edits = parse_text_edits(&result);
+    assert_eq!(edits.len(), 2);
+    assert_eq!(edits[0].start_char16, 0);
+    assert_eq!(edits[0].end_char16, 2);
+    assert_eq!(edits[1].new_text, "\n");
+    assert!(parse_text_edits(&serde_json::json!(null)).is_empty());
 }
 
 #[test]
