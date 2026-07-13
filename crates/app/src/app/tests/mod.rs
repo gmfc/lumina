@@ -84,6 +84,8 @@ fn diag(line: u32, sc: u32, el: u32, ec: u32, msg: &str) -> editor_plugin::LspDi
         end_char16: ec,
         severity: editor_plugin::LspSeverity::Error,
         message: msg.to_string(),
+        source: None,
+        code: None,
     }
 }
 

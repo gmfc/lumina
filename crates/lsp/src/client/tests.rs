@@ -49,6 +49,30 @@ fn malformed_diagnostic_is_skipped_not_whole_batch() {
 }
 
 #[test]
+fn diagnostic_parses_source_and_code_forms() {
+    let make = |diags: serde_json::Value| {
+        serde_json::json!({
+            "jsonrpc":"2.0","method":"textDocument/publishDiagnostics",
+            "params": { "uri":"file:///a.rs", "diagnostics": diags }
+        })
+    };
+    let v = make(serde_json::json!([
+        {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},
+         "severity":1,"message":"bad","source":"rustc","code":"E0425"},
+        {"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},
+         "severity":2,"message":"n","code":42},
+        {"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":1}},
+         "severity":2,"message":"o","code":{"value":"TS2304","target":"http://x"}}
+    ]));
+    let ds = parse_diagnostics(&v).unwrap().diagnostics;
+    assert_eq!(ds[0].source.as_deref(), Some("rustc"));
+    assert_eq!(ds[0].code.as_deref(), Some("E0425"));
+    assert_eq!(ds[1].code.as_deref(), Some("42")); // numeric → string
+    assert_eq!(ds[2].code.as_deref(), Some("TS2304")); // { value, target } form
+    assert!(ds[1].source.is_none());
+}
+
+#[test]
 fn classify_distinguishes_notification_and_response() {
     let notif = serde_json::from_str::<Value>(
         r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///a","diagnostics":[]}}"#,
