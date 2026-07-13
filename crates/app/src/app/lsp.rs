@@ -92,18 +92,18 @@ impl App {
                     .push(editor_plugin::event::Event::LspSignatureHelp(sig));
             }
             LspEvent::CodeActions(actions) => {
-                // Resolve each action's edit URIs to paths and hand the list to the code-action
-                // plugin, which shows a picker and applies the chosen one.
-                let actions = actions
-                    .into_iter()
-                    .map(|a| editor_plugin::LspCodeAction {
+                // Resolve each action's edit URIs to paths (version-checked) and hand the list to
+                // the code-action plugin, which shows a picker and applies the chosen one.
+                let mut prim = Vec::with_capacity(actions.len());
+                for a in actions {
+                    prim.push(editor_plugin::LspCodeAction {
                         title: a.title,
-                        edit: to_primitive_workspace_edit(a.edit),
-                    })
-                    .collect();
+                        edit: self.resolve_workspace_edit(a.edit),
+                    });
+                }
                 self.editor
                     .pending_events
-                    .push(editor_plugin::event::Event::LspCodeActions(actions));
+                    .push(editor_plugin::event::Event::LspCodeActions(prim));
             }
             LspEvent::Highlights(hls) => {
                 // Hand the occurrence ranges to the document-highlight plugin (it paints them).
@@ -138,13 +138,12 @@ impl App {
                     .push(editor_plugin::event::Event::LspCompletion(items));
             }
             LspEvent::Rename(edit) => {
-                // Resolve each file's URI to a path and hand the edit to the `rename` plugin, which
-                // forwards it back through `Host::apply_workspace_edit` (applied on drain).
+                // Resolve each file's URI to a path (version-checked) and hand the edit to the
+                // `rename` plugin, which forwards it back through `Host::apply_workspace_edit`.
+                let we = self.resolve_workspace_edit(edit);
                 self.editor
                     .pending_events
-                    .push(editor_plugin::event::Event::LspWorkspaceEdit(
-                        to_primitive_workspace_edit(edit),
-                    ));
+                    .push(editor_plugin::event::Event::LspWorkspaceEdit(we));
             }
             LspEvent::Message(text) => {
                 self.editor.status_message = Some(format!("LSP: {text}"));
@@ -238,6 +237,34 @@ impl App {
                 self.editor.status_message = Some(format!("LSP: {message}"));
             }
         }
+    }
+
+    /// Resolve an `editor-lsp` `WorkspaceEdit`'s URIs to filesystem paths and convert to the kernel
+    /// primitive, **dropping any file whose server-declared version no longer matches the buffer**
+    /// (§2.4 staleness — applying stale edits at drifted offsets would corrupt the file). Shared by
+    /// rename, code actions, and server-initiated `workspace/applyEdit`; non-`file:` URIs dropped.
+    fn resolve_workspace_edit(
+        &mut self,
+        edit: editor_lsp::WorkspaceEdit,
+    ) -> editor_plugin::LspWorkspaceEdit {
+        let mut stale = 0usize;
+        let changes = edit
+            .changes
+            .into_iter()
+            .filter_map(|d| {
+                if edit_is_stale(d.version, self.lsp.doc_version(&d.uri)) {
+                    stale += 1;
+                    return None;
+                }
+                let path = crate::lsp::path_from_uri(&d.uri)?;
+                let edits = d.edits.into_iter().map(to_primitive_text_edit).collect();
+                Some((path.to_string_lossy().into_owned(), edits))
+            })
+            .collect();
+        if stale > 0 {
+            self.editor.status_message = Some(format!("Skipped {stale} stale edit(s)"));
+        }
+        editor_plugin::LspWorkspaceEdit { changes }
     }
 
     /// Hand a navigation location set (references / document symbols) to the `lsp-nav` plugin,
@@ -365,7 +392,7 @@ impl App {
                     .get("edit")
                     .map(editor_lsp::client::parse_workspace_edit)
                     .unwrap_or_default();
-                let primitive = to_primitive_workspace_edit(edit);
+                let primitive = self.resolve_workspace_edit(edit);
                 // Report what actually landed, not just what was requested (a stale/missing
                 // target file changes nothing).
                 let applied = self.apply_workspace_edit(primitive) > 0;
@@ -468,6 +495,13 @@ fn to_primitive_completion(it: editor_lsp::CompletionItem) -> editor_plugin::Lsp
 }
 
 /// Translate an `editor-lsp` text edit into the kernel's primitive `LspTextEdit` (same coordinates).
+/// Whether a `WorkspaceEdit` entry is stale and must be dropped (§2.4): it declares a version and
+/// the buffer's last-synced version has moved past it. No declared version, or an unknown current
+/// version, means don't reject (best-effort — the legacy `changes` map is unversioned).
+fn edit_is_stale(edit_version: Option<i64>, current: Option<i64>) -> bool {
+    matches!((edit_version, current), (Some(v), Some(c)) if v != c)
+}
+
 fn to_primitive_text_edit(te: editor_lsp::TextEdit) -> editor_plugin::LspTextEdit {
     editor_plugin::LspTextEdit {
         start_line: te.start_line,
@@ -476,22 +510,6 @@ fn to_primitive_text_edit(te: editor_lsp::TextEdit) -> editor_plugin::LspTextEdi
         end_char16: te.end_char16,
         new_text: te.new_text,
     }
-}
-
-/// Resolve an `editor-lsp` `WorkspaceEdit`'s URIs to filesystem paths and convert its edits to
-/// the kernel primitive. Shared by rename responses and server-initiated `workspace/applyEdit`;
-/// non-`file:` URIs are dropped.
-fn to_primitive_workspace_edit(edit: editor_lsp::WorkspaceEdit) -> editor_plugin::LspWorkspaceEdit {
-    let changes = edit
-        .changes
-        .into_iter()
-        .filter_map(|(uri, edits)| {
-            let path = crate::lsp::path_from_uri(&uri)?;
-            let edits = edits.into_iter().map(to_primitive_text_edit).collect();
-            Some((path.to_string_lossy().into_owned(), edits))
-        })
-        .collect();
-    editor_plugin::LspWorkspaceEdit { changes }
 }
 
 /// Resolve an `editor-lsp` location's URI to a filesystem path and package it as the primitive
@@ -511,4 +529,17 @@ fn location_label(loc: &editor_lsp::Location) -> String {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| loc.uri.clone());
     format!("{file}:{}:{}", loc.line + 1, loc.character + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::edit_is_stale;
+
+    #[test]
+    fn edit_staleness_matrix() {
+        assert!(edit_is_stale(Some(5), Some(7))); // buffer moved past the edit's version → drop
+        assert!(!edit_is_stale(Some(5), Some(5))); // versions match → apply
+        assert!(!edit_is_stale(None, Some(7))); // unversioned (legacy changes map) → apply
+        assert!(!edit_is_stale(Some(5), None)); // current version unknown → best-effort apply
+    }
 }

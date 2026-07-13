@@ -86,10 +86,21 @@ pub struct TextEdit {
     pub new_text: String,
 }
 
-/// A set of edits grouped by document URI — a `WorkspaceEdit` (used by rename).
+/// One document's edits within a `WorkspaceEdit`, with the version the server computed them
+/// against (from `documentChanges`' `OptionalVersionedTextDocumentIdentifier`). `Some(v)` that
+/// no longer matches the buffer means the edit is stale and must not be applied (§2.4); `None`
+/// (the legacy `changes` map) means don't version-check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocEdit {
+    pub uri: String,
+    pub version: Option<i64>,
+    pub edits: Vec<TextEdit>,
+}
+
+/// A set of per-document edits — a `WorkspaceEdit` (used by rename, code actions, applyEdit).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceEdit {
-    pub changes: Vec<(String, Vec<TextEdit>)>,
+    pub changes: Vec<DocEdit>,
 }
 
 /// Severity of a diagnostic (simplified from `lsp_types::DiagnosticSeverity`).

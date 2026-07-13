@@ -6,9 +6,10 @@ fn workspace_edit_applies_rename_across_occurrences() {
     let mut app = app_with(&path);
     let uri = crate::lsp::uri_for(&path);
     let edit = editor_lsp::WorkspaceEdit {
-        changes: vec![(
+        changes: vec![editor_lsp::DocEdit {
             uri,
-            vec![
+            version: None,
+            edits: vec![
                 editor_lsp::TextEdit {
                     start_line: 0,
                     start_char16: 4,
@@ -24,7 +25,7 @@ fn workspace_edit_applies_rename_across_occurrences() {
                     new_text: "bar".into(),
                 },
             ],
-        )],
+        }],
     };
     app.handle_lsp_event(crate::lsp::LspEvent::Rename(edit));
     app.drain_workers(); // broadcast LspWorkspaceEdit → rename plugin → apply on drain
