@@ -80,7 +80,9 @@ fn classify_preserves_error_message() {
     match classify(&err) {
         Some(Incoming::Response { id, error, .. }) => {
             assert_eq!(id, 4);
-            assert_eq!(error.as_deref(), Some("rename failed"));
+            let error = error.expect("error preserved");
+            assert_eq!(error.code, -32603);
+            assert_eq!(error.message, "rename failed");
         }
         other => panic!("expected error response, got {other:?}"),
     }
@@ -281,6 +283,39 @@ fn classify_server_request_and_notification() {
         classify(&resp),
         Some(Incoming::Response { id: 7, .. })
     ));
+}
+
+#[test]
+fn response_error_droppable_matrix() {
+    use crate::ResponseError;
+    let drop = |code| {
+        ResponseError {
+            code,
+            message: String::new(),
+        }
+        .is_droppable()
+    };
+    assert!(drop(ResponseError::REQUEST_CANCELLED));
+    assert!(drop(ResponseError::CONTENT_MODIFIED));
+    assert!(drop(ResponseError::SERVER_CANCELLED));
+    assert!(!drop(ResponseError::REQUEST_FAILED)); // a real failure is surfaced
+    assert!(!drop(-32603)); // InternalError is surfaced
+}
+
+#[test]
+fn classify_preserves_error_code() {
+    let err = serde_json::from_str::<Value>(
+        r#"{"jsonrpc":"2.0","id":9,"error":{"code":-32801,"message":"content modified"}}"#,
+    )
+    .unwrap();
+    match classify(&err) {
+        Some(Incoming::Response { error, .. }) => {
+            let e = error.unwrap();
+            assert_eq!(e.code, -32801);
+            assert!(e.is_droppable());
+        }
+        other => panic!("expected response, got {other:?}"),
+    }
 }
 
 #[test]

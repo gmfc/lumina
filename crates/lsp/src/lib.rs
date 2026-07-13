@@ -24,10 +24,11 @@ pub enum Incoming {
     Response {
         id: i64,
         result: serde_json::Value,
-        /// `Some(message)` when the server replied with a JSON-RPC `error` object instead of a
+        /// `Some(err)` when the server replied with a JSON-RPC `error` object instead of a
         /// result. Kept distinct from a `null` result so a failed request (rename, goto, …) can
-        /// be surfaced to the user rather than silently degrading to "no result".
-        error: Option<String>,
+        /// be surfaced to the user rather than silently degrading to "no result". The `code`
+        /// drives the error matrix (§9.5) — cancellations are dropped, real failures surfaced.
+        error: Option<ResponseError>,
     },
     /// A server→client **request** (has both `method` and `id`). Every one must be answered
     /// (§1.3) — silence deadlocks servers that await the reply. `id` is kept as a raw JSON value
@@ -116,6 +117,35 @@ pub struct Diagnostic {
 pub struct DiagnosticsUpdate {
     pub uri: String,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// A JSON-RPC error object from a response. The `code` drives the client's error matrix (§9.5):
+/// `RequestCancelled`/`ContentModified`/`ServerCancelled` are dropped silently (not real
+/// failures), while `RequestFailed` and everything else is surfaced to the user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponseError {
+    pub code: i64,
+    pub message: String,
+}
+
+impl ResponseError {
+    /// The reply to a request the client itself cancelled — expected, drop it.
+    pub const REQUEST_CANCELLED: i64 = -32800;
+    /// The result would be stale (the document changed) — not a user error, drop it.
+    pub const CONTENT_MODIFIED: i64 = -32801;
+    /// The server shed load — safe to re-send once.
+    pub const SERVER_CANCELLED: i64 = -32802;
+    /// A legitimate failure with a user-relevant message — surface it.
+    pub const REQUEST_FAILED: i64 = -32803;
+
+    /// Whether this error is a cancellation/staleness signal that should be dropped silently
+    /// rather than shown to the user.
+    pub fn is_droppable(&self) -> bool {
+        matches!(
+            self.code,
+            Self::REQUEST_CANCELLED | Self::CONTENT_MODIFIED | Self::SERVER_CANCELLED
+        )
+    }
 }
 
 /// The position encoding negotiated for a connection. LSP defaults to UTF-16; a server may
