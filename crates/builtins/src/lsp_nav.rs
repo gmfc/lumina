@@ -75,7 +75,6 @@ impl Plugin for LspNavPlugin {
 mod tests {
     use super::*;
     use editor_core::{DocId, Selections, Transaction, Workspace};
-    use editor_plugin::host::DirEntry;
     use editor_plugin::{LspNavItem, PanelContent};
     use std::path::{Path, PathBuf};
 
@@ -116,9 +115,6 @@ mod tests {
         }
         fn open_picker(&mut self, request: PickerRequest) {
             self.rec.picker = Some(request);
-        }
-        fn read_dir(&self, _path: &Path) -> Vec<DirEntry> {
-            Vec::new()
         }
         fn set_panel(&mut self, _panel_id: &str, _content: PanelContent) {}
         fn set_status(&mut self, _item_id: &str, _text: String) {}

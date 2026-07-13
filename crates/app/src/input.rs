@@ -1,17 +1,15 @@
-//! The `Command` vocabulary — every action the editor can take. Input, the palette, and
-//! plugins all funnel through this into the single dispatcher in `app.rs` (plan §5,
-//! "everything is a command"). Key → command id resolution lives in `keymap` + `commands`.
-
-use std::path::PathBuf;
+//! The `Command` vocabulary — the editing/selection/history primitives plus the file/tab/UI
+//! actions the app dispatches directly in `app.rs` `dispatch()`. Every user-facing *feature* is a
+//! builtin plugin routed through the registry, not a variant here; command ids resolve
+//! registry-first in `exec_id` (`registry.dispatch_command`), then fall back to `command_for_id`
+//! for these primitives. Key → id resolution lives in `keymap` + `commands`.
 
 use editor_core::Motion;
 
-/// Every action the editor can take. Input, menus, and the palette all funnel through this.
-///
-/// The full VS Code-style vocabulary is declared up front; variants are wired to input and
-/// the dispatcher phase by phase (find/replace in Phase 6, palette/quick-open in Phase 7,
-/// project search in Phase 8), so some are not yet constructed.
-#[allow(dead_code)]
+/// The editing/selection/history primitives + file/tab/UI actions dispatched directly by
+/// `dispatch()`. Feature commands (find, palette, project-search, LSP, diagnostics, git-nav,
+/// terminal, vim, clipboard, multicursor) are plugin-contributed and reach the editor through the
+/// registry + `Host`, not through variants here.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     // editing
@@ -45,7 +43,6 @@ pub enum Command {
     Undo,
     Redo,
     // files / tabs
-    OpenFile(PathBuf),
     Save,
     SaveAs,
     SaveAll,
@@ -65,7 +62,5 @@ pub enum Command {
     FocusEditor,
     // Command palette, quick-open, and goto-line are the `palette` plugin now.
     // terminal-dock commands are the `terminal` plugin now (PTY/render stay app-side).
-    // registry command by id (plugin-contributed)
-    Run(String),
     Quit,
 }

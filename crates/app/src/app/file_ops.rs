@@ -221,7 +221,7 @@ impl App {
             return;
         };
         let Some(path) = doc.path.clone() else {
-            self.editor.status_message = Some("No path (Save As not yet wired)".into());
+            self.editor.status_message = Some("No path — use Save As".into());
             return;
         };
         // On-save hygiene runs as an undoable Transaction before the write (plan §1.4).

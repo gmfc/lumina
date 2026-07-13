@@ -20,8 +20,9 @@ pub enum Focus {
     Panel,
 }
 
-/// A modal overlay drawn on top of the body, capturing input while active. The same
-/// machinery backs the find widget (Phase 6) and command palette (Phase 7).
+/// A modal overlay drawn on top of the body, capturing input while active. The generic prompt +
+/// picker ports (which the find/palette plugins drive) replaced most bespoke overlays; only
+/// confirm-close, the LSP hover info box, and save-as remain here.
 #[derive(Debug, Clone)]
 pub enum Overlay {
     /// Closing a dirty tab: save / discard / cancel.
@@ -285,24 +286,6 @@ impl Host for EditorState {
             let payload = work();
             let _ = tx.send(crate::worker::WorkerMsg::JobComplete { id, payload });
         });
-    }
-
-    fn read_dir(&self, path: &Path) -> Vec<DirEntry> {
-        // Honor ignore rules; hidden by default off is handled by the explorer plugin.
-        let mut entries = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(path) {
-            for e in rd.flatten() {
-                let p = e.path();
-                let is_dir = p.is_dir();
-                entries.push(DirEntry { path: p, is_dir });
-            }
-        }
-        entries.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.path.file_name().cmp(&b.path.file_name()))
-        });
-        entries
     }
 
     fn changed_lines(&self, doc: DocId) -> Vec<usize> {

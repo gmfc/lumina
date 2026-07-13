@@ -84,7 +84,6 @@ impl App {
             Command::SaveAs => self.open_save_as(),
             Command::SaveAll => self.save_all(),
             Command::NewFile => self.new_file(),
-            Command::OpenFile(p) => self.open_path(&p),
             Command::CloseTab => self.request_close(self.editor.workspace.active_tab),
             Command::CloseAllTabs => self.close_all_tabs(),
             Command::ReopenClosedTab => self.reopen_closed_tab(),
@@ -104,16 +103,10 @@ impl App {
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
             Command::FocusSidebar => self.editor.focus = Focus::Sidebar,
             Command::FocusEditor => self.editor.focus = Focus::Editor,
-
             // terminal-dock commands are the `terminal` builtin plugin, dispatched through the
             // registry; it owns the dock lifecycle and drives the PTYs through the RawPTY Host port.
-
-            // A plugin-contributed command referenced by id.
-            Command::Run(id) => {
-                if !self.registry.dispatch_command(&id, &mut self.editor) {
-                    self.editor.status_message = Some(format!("Unknown command: {id}"));
-                }
-            }
+            // Plugin-contributed command ids resolve registry-first in `exec_id`, never through
+            // this table.
         }
 
         // Broadcast any events queued by the edit, and run queued commands/opens.

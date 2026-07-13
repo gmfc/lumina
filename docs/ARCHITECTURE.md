@@ -41,7 +41,7 @@ numbering stable — code cites it.
 |---|---|---|
 | **1** | **All buffer mutation goes through a reversible `Transaction`.** Nothing outside `editor-core` touches the rope directly; the raw `apply_raw_*` helpers are private to `core`. This is what makes undo/redo total and multi-cursor edits atomic. | `Transaction` is the only public mutation path; `Host::apply_transaction` is the sole edit entry for plugins. |
 | **2** | **A document holds a *set* of selections, not one cursor.** Multi-cursor is the default shape, not a bolted-on mode. | `Selections` is a normalized (sorted, non-overlapping) set; every edit op maps over it. |
-| **3** | **Features are plugins.** Built-ins (the explorer) register through the *same* contribution API as third-party plugins — no privileged back doors. | `editor-builtins` reaches the editor only through `editor_plugin::Host`; the self-hosting test proves it. |
+| **3** | **Features are plugins.** Built-ins register through the *same* contribution API as third-party plugins — no privileged back doors. | `editor-builtins` reaches the editor only through `editor_plugin::Host`; the self-hosting test proves it. |
 | **4** | **Everything is a command.** Every user-visible action is a named command with an id, invokable from the palette, a keybinding, or another command. | `CommandSpec { id, title }` + `Host::execute(id)` for composition. |
 | **5** | **`editor-core` stays headless.** Pure editing logic (auto-pairs, motions, screen↔buffer column math) lives in library crates with zero terminal/UI deps. | `core` depends only on rope/unicode/slotmap; no `crossterm`/`ratatui`. |
 | **6** | **Coordinate mapping is a pure function; file fidelity is preserved.** `screen_to_char`/`char_to_screen` are pure; a file's detected encoding and line ending are re-emitted verbatim on save, never silently rewritten. | Pure functions in `core`; `files.rs` records and re-emits the original line ending. |
@@ -53,13 +53,13 @@ The one-line creed (from the README): *everything is a command; a document holds
 a set of selections; features are plugins; render is a pure function of state;
 all buffer mutation goes through the transaction API.*
 
-> **Reality check (2026 audit — see [`AUDIT.md`](AUDIT.md)).** Invariants #1, #2, #5–#9 hold
-> today. Invariants **#3 and #4 are currently aspirational**: only the *explorer* is a genuine
-> plugin, and built-in commands are dispatched by a hardcoded table (`commands.rs` →
-> `dispatch()`) rather than through the registry — so the "same path for built-ins and third
-> parties" the invariants describe is the target, not the present. `AUDIT.md` has the gap
-> analysis and an ordered migration roadmap that widens `Host` and moves each feature into
-> `editor-builtins` as a plugin.
+> **Status.** All nine invariants now hold. Invariants **#3 and #4** — once aspirational (see the
+> pre-migration [`AUDIT.md`](AUDIT.md)) — are realized: every user-facing feature is an
+> `editor-builtins` plugin (16 registered in `crates/builtins/src/lib.rs`) reaching the editor only
+> through `Host`, and every command id resolves registry-first through `exec_id`
+> (`registry.dispatch_command`, then the app's editing-primitive `Command` table, then a handful of
+> app-level actions). `editor-app`'s `dispatch()` now holds only editing primitives + file/tab/UI
+> actions; features route through the registry.
 
 ---
 
@@ -86,7 +86,7 @@ lower crate literally cannot `use` a higher one because it isn't in its
 | `editor-syntax` | tree-sitter parse + highlight-query → capture spans, cached, viewport-only. UI-free. | core, tree-sitter |
 | `editor-lsp` | LSP client: JSON-RPC framing, UTF-16 position conversion, diagnostics. | serde, lsp-types |
 | `editor-plugin` | The contribution API (traits + registries + event bus), the `Host` surface, and the external plugin runtimes. **The kernel.** | core, rhai, wasmi |
-| `editor-builtins` | Core features implemented **as plugins** (the explorer). | core, plugin |
+| `editor-builtins` | All core features implemented **as plugins** — explorer, multi-cursor, git-nav, find/replace, palette, project search, theme, LSP requests + nav/hover/rename responses, diagnostics, completion, clipboard, terminal dock, vim. | core, plugin |
 | `editor-app` | The `lmn` binary: event loop, ratatui rendering, keymap, wiring. | all of the above |
 
 **Why the split earns its keep here** (not just to have small crates):
@@ -215,24 +215,26 @@ pub trait Plugin { /* declares Contributions, handles events */ }
 ```
 
 - **The app implements `Host`.** Business features (`editor-builtins`) depend on
-  the `Host` *trait*, never on the app. That's why the explorer is a plugin and
-  not a hardcoded panel (invariant #3). The trait is intentionally small — but
-  today it is small because it is *incomplete*: it cannot yet express find,
-  pickers, LSP, decorations, terminal, or git, which is why those features are not
-  plugins yet (see [`AUDIT.md`](AUDIT.md) — widening `Host` is the roadmap's spine).
+  the `Host` *trait*, never on the app. That's why every feature — explorer, find,
+  palette, LSP, diagnostics, completion, clipboard, terminal, vim — is a plugin, not
+  a hardcoded panel (invariant #3). The trait is a focused-but-complete surface
+  (~40 single-purpose methods, of which the excerpt above shows a few) spanning
+  workspace/edit, prompt/picker/popup, decorations, background jobs, LSP,
+  PTY/terminal, clipboard, view control, and command composition — everything the
+  built-ins drive.
 - **The capability seam is the guest action boundary.** An external guest never
   touches `std::fs` or the editor directly: it returns a list of *actions*, and the
   host applies only those its manifest was granted — the `has_cap` gate in each
   runtime's dispatch. The grantable capabilities are `edit`, `ui`, `fs:read`, and
   `commands:run`; an ungranted action is silently dropped (deny-by-default).
-  (`Host::read_dir` itself is an internal, native-only helper the explorer uses to
-  list directories honoring ignore rules — not the external capability gate.)
+  `commands:run` is transitively the broadest grant (it can `execute` any command,
+  including builtins that open terminals / issue LSP requests / spawn jobs), so it
+  is granted deliberately.
 - **Two substrates, one API.** Rhai scripts and WebAssembly guests both drive the
   same `Registry`/`Host`. WASM guests run with **no host imports**, fuel-metered
   against runaway loops (plan §11) on `wasmi`. There is no privileged path — the
-  self-hosting test asserts that disabling the explorer removes exactly its
-  contributions and nothing else (it guards invariant #3 for the one feature that
-  is a plugin today; generalize it as more features migrate).
+  self-hosting test asserts that disabling any built-in plugin removes exactly its
+  contributions and nothing else, guarding invariant #3 across the whole feature set.
 
 Static vs dynamic dispatch: the registry stores `Vec<Box<dyn Plugin>>` (a
 heterogeneous collection — dynamic dispatch is the correct tool there). Hot,

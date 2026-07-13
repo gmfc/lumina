@@ -6,7 +6,9 @@
 //! physically cannot touch the filesystem, network, or clock. It communicates only by
 //! returning a JSON list of *actions*; the host applies only the ones the manifest was granted
 //! (`edit`, `ui`, `fs:read`, `commands:run`). A per-call **fuel** budget bounds runaway loops
-//! without killing the editor.
+//! without killing the editor. Note `commands:run` is transitively the broadest grant — it lets a
+//! guest execute any registered command, including builtins that open terminals, issue LSP
+//! requests, or spawn jobs — so grant it deliberately.
 //!
 //! ## Engine choice
 //! The plan recommends WebAssembly as the strong-sandbox substrate (wasmtime/extism). We use

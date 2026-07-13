@@ -12,9 +12,15 @@
 //!
 //! ## Capability model (deny by default)
 //! A script never touches the editor directly. Its command handler returns a list of
-//! **actions**; the host applies only the ones the manifest was granted (`edit`, `ui`,
-//! `fs:read`). Rhai itself exposes no filesystem or network, and operation/among limits bound
+//! **actions**; the host applies only the ones the manifest was granted (`edit`, `ui`, `fs:read`,
+//! `commands:run`). Rhai itself exposes no filesystem or network, and operation/among limits bound
 //! runaway loops — the guest physically cannot do what we don't wire up.
+//!
+//! `commands:run` is transitively the broadest grant: it lets a guest `execute` **any** registered
+//! command id, including builtin commands that open terminals (`terminal_open`), issue LSP requests
+//! (`lsp_request`) / apply workspace edits (`apply_workspace_edit`), or spawn background jobs
+//! (`spawn_job`). Those Host ports are not otherwise reachable by a guest, so they need no separate
+//! grant — but `commands:run` should be granted deliberately.
 
 use std::path::Path;
 

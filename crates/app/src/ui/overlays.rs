@@ -179,8 +179,8 @@ fn render_prompt_top_right(f: &mut Frame, prompt: &Prompt, editor_area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// A centered single-column prompt (title + fields + footer hint) for rename/save-as-shaped
-/// inputs. Currently unused by any migrated feature, but keeps the port complete.
+/// A centered single-column prompt (title + fields + footer hint). Used by the palette's
+/// goto-line prompt and the LSP rename prompt (both `PromptPlacement::Center`).
 fn render_prompt_centered(f: &mut Frame, prompt: &Prompt, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     if let Some(title) = &prompt.title {

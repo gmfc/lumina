@@ -112,9 +112,6 @@ pub trait Host {
     /// the threading + bounded channel. Default no-op, so a host without a worker loop ignores it.
     fn spawn_job(&mut self, _id: String, _work: Box<dyn FnOnce() -> Vec<u8> + Send + 'static>) {}
 
-    /// List a directory, honoring ignore rules. Capability-gated for external plugins.
-    fn read_dir(&self, path: &Path) -> Vec<DirEntry>;
-
     /// The 0-based line numbers of `doc` that have an uncommitted git change (added / modified /
     /// or a deletion marker), sorted ascending. Empty when the git gutter is off, the file is
     /// clean/untracked, or the host doesn't track git — the default returns none, so only a host
