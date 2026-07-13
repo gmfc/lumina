@@ -272,21 +272,33 @@ fn references_parse_as_locations() {
 }
 
 #[test]
-fn code_actions_keep_only_edit_carrying() {
+fn code_actions_keep_edit_and_command_actions() {
     let actions = serde_json::json!([
-        // A CodeAction with an edit → kept.
+        // A CodeAction with an edit.
         {"title":"Add import","kind":"quickfix","edit":{"changes":{"file:///a.rs":[
             {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"use x;\n"}
         ]}}},
-        // A Command-only action (no edit) → skipped for now.
-        {"title":"Run rustfmt","command":{"command":"rustfmt","arguments":[]}},
-        // A CodeAction whose edit is empty → skipped.
+        // A bare Command (top-level string `command`) → kept as a command action.
+        {"title":"Organize Imports","command":"source.organizeImports","arguments":[1]},
+        // A CodeAction with a nested command object.
+        {"title":"Fix all","command":{"command":"fixAll","arguments":["x"]}},
+        // Neither an edit nor a command → skipped.
         {"title":"noop","edit":{"changes":{}}}
     ]);
     let parsed = parse_code_actions(&actions);
-    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed.len(), 3);
     assert_eq!(parsed[0].title, "Add import");
-    assert_eq!(parsed[0].edit.changes[0].uri, "file:///a.rs");
+    assert_eq!(
+        parsed[0].edit.as_ref().unwrap().changes[0].uri,
+        "file:///a.rs"
+    );
+    assert!(parsed[0].command.is_none());
+    assert_eq!(
+        parsed[1].command.as_ref().unwrap().command,
+        "source.organizeImports"
+    );
+    assert!(parsed[1].edit.is_none());
+    assert_eq!(parsed[2].command.as_ref().unwrap().command, "fixAll");
     assert!(parse_code_actions(&serde_json::json!(null)).is_empty());
 }
 
