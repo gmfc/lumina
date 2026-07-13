@@ -11,15 +11,16 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
-    parse_capabilities, parse_code_actions, parse_completion,
-    parse_completion_item_additional_edits, parse_diagnostic_report, parse_document_highlights,
-    parse_document_symbols, parse_hover, parse_inlay_hints, parse_locations, parse_semantic_tokens,
-    parse_signature_help, parse_text_edits, parse_workspace_edit, parse_workspace_symbols,
+    parse_capabilities, parse_code_actions, parse_code_lens_resolve, parse_code_lenses,
+    parse_completion, parse_completion_item_additional_edits, parse_diagnostic_report,
+    parse_document_highlights, parse_document_symbols, parse_hover, parse_inlay_hints,
+    parse_locations, parse_semantic_tokens, parse_signature_help, parse_text_edits,
+    parse_workspace_edit, parse_workspace_symbols,
 };
 use editor_lsp::{
-    Cap, CodeAction, CompletionList, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
-    Incoming, Location, LspClient, LspHandle, PullReport, ServerCaps, SignatureHelp, TextEdit,
-    WorkspaceEdit,
+    Cap, CodeAction, CodeLens, CompletionList, DiagnosticsUpdate, DocumentHighlight,
+    DocumentSymbol, Incoming, Location, LspClient, LspHandle, PullReport, ServerCaps,
+    SignatureHelp, TextEdit, WorkspaceEdit,
 };
 
 mod requests;
@@ -43,6 +44,8 @@ enum Pending {
     Diagnostic,
     SemanticTokens,
     InlayHint,
+    CodeLens,
+    CodeLensResolve,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -56,9 +59,10 @@ fn is_cancelable(kind: Pending) -> bool {
             | Pending::Completion
             | Pending::SignatureHelp
             | Pending::DocumentHighlight
-            // A newer full-doc token / hint request supersedes the older one (typing bursts).
+            // A newer full-doc token / hint / lens request supersedes the older one (typing bursts).
             | Pending::SemanticTokens
             | Pending::InlayHint
+            | Pending::CodeLens
     )
 }
 
@@ -192,6 +196,16 @@ pub enum LspEvent {
     InlayHintRefresh {
         lang: String,
     },
+    /// Resolved code lenses (§6.4) for the document at `uri` (all carry a `title`).
+    CodeLenses {
+        uri: String,
+        lenses: Vec<CodeLens>,
+    },
+    /// The server asked (`workspace/codeLens/refresh`) that lenses be recomputed; the app
+    /// re-requests for this language's open docs.
+    CodeLensRefresh {
+        lang: String,
+    },
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -255,6 +269,10 @@ pub struct LspManager {
     /// Active work-done progress tokens across all servers (§1.5), in `begin` order for a stable
     /// statusline render. Entries are added on `begin`, updated on `report`, dropped on `end`/crash.
     progress: Vec<ProgressItem>,
+    /// Resolved code lenses per document URI (§6.4), accumulated as `codeLens/resolve` responses
+    /// arrive (only title-bearing lenses). Replaced on the next `textDocument/codeLens`; cleared on
+    /// close/crash.
+    code_lens: HashMap<String, Vec<CodeLens>>,
     /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
     crash_times: HashMap<String, Vec<Instant>>,
     /// Earliest instant a language may be respawned, enforcing restart backoff.
@@ -287,6 +305,7 @@ impl LspManager {
             diag_result_id: HashMap::new(),
             file_watchers: HashMap::new(),
             progress: Vec::new(),
+            code_lens: HashMap::new(),
             crash_times: HashMap::new(),
             restart_after: HashMap::new(),
             root_uri: uri_for(root),
@@ -388,6 +407,10 @@ impl LspManager {
                     // straight to an event.
                     if entry.kind == Pending::Diagnostic {
                         self.handle_pull_report(&entry.uri, &lang, &result, &mut out);
+                    } else if entry.kind == Pending::CodeLens {
+                        self.handle_code_lens(&entry.uri, &lang, &result, &mut out);
+                    } else if entry.kind == Pending::CodeLensResolve {
+                        self.handle_code_lens_resolve(&entry.uri, &result, &mut out);
                     } else if entry.kind == Pending::SemanticTokens {
                         // Decode against this connection's legend (fixed at capability time).
                         let tokens = match self.state.get(&lang) {
@@ -424,8 +447,12 @@ impl LspManager {
                             self.unregister_capability(&lang, &params);
                             self.respond(&lang, &id, serde_json::Value::Null);
                         }
-                        "window/workDoneProgress/create" | "workspace/codeLens/refresh" => {
+                        "window/workDoneProgress/create" => {
                             self.respond(&lang, &id, serde_json::Value::Null)
+                        }
+                        "workspace/codeLens/refresh" => {
+                            self.respond(&lang, &id, serde_json::Value::Null);
+                            out.push(LspEvent::CodeLensRefresh { lang: lang.clone() });
                         }
                         "workspace/semanticTokens/refresh" => {
                             // Ack, then tell the app to re-request tokens for this language's docs
@@ -524,6 +551,57 @@ impl LspManager {
                 }
             }
         }
+    }
+
+    /// Handle a `textDocument/codeLens` response (§6.4): reset the per-uri lens set to the lenses
+    /// that arrived already resolved (with a `title`), fire `codeLens/resolve` for the rest (when
+    /// the server resolves lazily), and emit the resolved-so-far set. Later resolves append + re-emit.
+    fn handle_code_lens(
+        &mut self,
+        uri: &str,
+        lang: &str,
+        result: &serde_json::Value,
+        out: &mut Vec<LspEvent>,
+    ) {
+        let mut resolved = Vec::new();
+        let mut to_resolve = Vec::new();
+        for lens in parse_code_lenses(result) {
+            if lens.title.is_some() {
+                resolved.push(lens);
+            } else {
+                to_resolve.push(lens.raw);
+            }
+        }
+        self.code_lens.insert(uri.to_string(), resolved.clone());
+        let can_resolve = matches!(self.state.get(lang),
+            Some(ClientState::Running(caps)) if caps.code_lens_resolve);
+        if can_resolve {
+            for raw in to_resolve {
+                self.request_code_lens_resolve(lang, uri, &raw);
+            }
+        }
+        out.push(LspEvent::CodeLenses {
+            uri: uri.to_string(),
+            lenses: resolved,
+        });
+    }
+
+    /// Handle a `codeLens/resolve` response: append the now-titled lens to the uri's set and re-emit.
+    fn handle_code_lens_resolve(
+        &mut self,
+        uri: &str,
+        result: &serde_json::Value,
+        out: &mut Vec<LspEvent>,
+    ) {
+        let Some(lens) = parse_code_lens_resolve(result).filter(|l| l.title.is_some()) else {
+            return;
+        };
+        let set = self.code_lens.entry(uri.to_string()).or_default();
+        set.push(lens);
+        out.push(LspEvent::CodeLenses {
+            uri: uri.to_string(),
+            lenses: set.clone(),
+        });
     }
 
     /// Fold a `$/progress` notification into the active work-done set and return the re-rendered
@@ -716,6 +794,7 @@ impl LspManager {
             for uri in uris {
                 self.diag_raw.remove(&uri);
                 self.diag_result_id.remove(&uri);
+                self.code_lens.remove(&uri);
                 out.push(LspEvent::Diagnostics(DiagnosticsUpdate {
                     uri,
                     diagnostics: Vec::new(),
@@ -871,6 +950,7 @@ impl LspManager {
         self.versions.remove(&uri);
         self.diag_raw.remove(&uri);
         self.diag_result_id.remove(&uri);
+        self.code_lens.remove(&uri);
         if let Some(p) = self.published.get_mut(language) {
             p.remove(&uri);
         }
@@ -947,6 +1027,11 @@ impl LspManager {
     pub fn supports_inlay_hints(&self, language: &str) -> bool {
         self.request_allowed(language, Cap::InlayHint)
     }
+
+    /// Whether `language`'s server is `Running` and advertised code lens (§6.4).
+    pub fn supports_code_lens(&self, language: &str) -> bool {
+        self.request_allowed(language, Cap::CodeLens)
+    }
 }
 
 /// Interpret a successful response `result` against the request `kind` that produced it. Returns
@@ -984,6 +1069,8 @@ fn response_event(kind: Pending, uri: &str, result: &serde_json::Value) -> Optio
         Pending::Diagnostic => return None,
         // Semantic tokens are decoded in `poll` (they need the connection legend), never here.
         Pending::SemanticTokens => return None,
+        // Code lenses accumulate resolve responses in `poll` (they need the per-uri set), not here.
+        Pending::CodeLens | Pending::CodeLensResolve => return None,
     })
 }
 
@@ -1854,6 +1941,78 @@ mod tests {
             .poll()
             .iter()
             .any(|e| matches!(e, LspEvent::SemanticTokensRefresh { lang } if lang == "rust")));
+    }
+
+    #[test]
+    fn code_lens_response_emits_resolved_then_accumulates() {
+        // The initial response emits its already-resolved lenses; a later resolve response appends
+        // the newly-titled lens and re-emits the growing set.
+        let mut mgr = manager();
+        mgr.state.insert(
+            "rust".into(),
+            ClientState::Running(ServerCaps {
+                code_lens: true,
+                code_lens_resolve: true,
+                ..Default::default()
+            }),
+        );
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::CodeLens));
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!([
+                    {"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":1}},
+                     "command":{"title":"Run"}},
+                    {"range":{"start":{"line":5,"character":0},"end":{"line":5,"character":1}},
+                     "data":{"id":9}}
+                ]),
+                error: None,
+            },
+        );
+        assert!(
+            matches!(mgr.poll().as_slice(), [LspEvent::CodeLenses { uri, lenses }]
+                if uri == "file:///x.rs" && lenses.len() == 1 && lenses[0].title.as_deref() == Some("Run"))
+        );
+        // Simulate the resolve response landing (no client in tests, so pend it by hand).
+        mgr.pending
+            .insert(("rust".into(), 2), pend(Pending::CodeLensResolve));
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 2,
+                result: serde_json::json!(
+                    {"range":{"start":{"line":5,"character":0},"end":{"line":5,"character":1}},
+                     "command":{"title":"Debug"}}
+                ),
+                error: None,
+            },
+        );
+        assert!(
+            matches!(mgr.poll().as_slice(), [LspEvent::CodeLenses { lenses, .. }]
+                if lenses.len() == 2 && lenses[1].title.as_deref() == Some("Debug"))
+        );
+    }
+
+    #[test]
+    fn code_lens_refresh_surfaces_an_event() {
+        let mut mgr = manager();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::ServerRequest {
+                id: serde_json::json!(4),
+                method: "workspace/codeLens/refresh".into(),
+                params: serde_json::Value::Null,
+            },
+        );
+        assert!(mgr
+            .poll()
+            .iter()
+            .any(|e| matches!(e, LspEvent::CodeLensRefresh { lang } if lang == "rust")));
     }
 
     #[test]

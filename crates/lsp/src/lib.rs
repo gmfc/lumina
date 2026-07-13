@@ -224,6 +224,18 @@ pub enum Cap {
     PullDiagnostics,
     SemanticTokens,
     InlayHint,
+    CodeLens,
+}
+
+/// One code lens (§6.4): an actionable annotation at a (line, UTF-16 char) position. `title` is
+/// the rendered command label — `None` until resolved via `codeLens/resolve`. `raw` is the
+/// original lens JSON, echoed to resolve. The primitive twin drops `raw` (display-only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeLens {
+    pub line: u32,
+    pub char16: u32,
+    pub title: Option<String>,
+    pub raw: serde_json::Value,
 }
 
 /// One inlay hint (§7.2): virtual text at a (line, UTF-16 char) position. `kind`: 1 Type, 2
@@ -344,6 +356,10 @@ pub struct ServerCaps {
     pub semantic_legend: SemanticLegend,
     /// Inlay hints via `textDocument/inlayHint` (§7.2), gated on `inlayHintProvider`.
     pub inlay_hint: bool,
+    /// Code lens via `textDocument/codeLens` (§6.4), gated on `codeLensProvider`.
+    pub code_lens: bool,
+    /// Whether the server resolves lens commands lazily (`codeLensProvider.resolveProvider`).
+    pub code_lens_resolve: bool,
     /// The command ids the server declared via `executeCommandProvider.commands` — only these may
     /// be sent to `workspace/executeCommand` (§8.4).
     pub execute_commands: Vec<String>,
@@ -369,6 +385,7 @@ impl ServerCaps {
             Cap::PullDiagnostics => self.diagnostic,
             Cap::SemanticTokens => self.semantic_tokens,
             Cap::InlayHint => self.inlay_hint,
+            Cap::CodeLens => self.code_lens,
         }
     }
 }

@@ -73,6 +73,12 @@ pub enum Event {
         doc: Option<DocId>,
         hints: Vec<crate::lsp::LspInlayHint>,
     },
+    /// Resolved code lenses for `doc` (§6.4), delivered to the code-lens plugin, which paints them
+    /// as inline virtual text. Empty clears the layer.
+    LspCodeLenses {
+        doc: Option<DocId>,
+        lenses: Vec<crate::lsp::LspCodeLens>,
+    },
     /// Code actions offered for the cursor/selection. Delivered to the code-action plugin, which
     /// shows them in a picker and applies the chosen one. Empty means none were offered.
     LspCodeActions(Vec<crate::lsp::LspCodeAction>),

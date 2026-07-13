@@ -17,6 +17,7 @@ use editor_plugin::Plugin;
 
 pub mod clipboard;
 pub mod code_action;
+pub mod code_lens;
 pub mod completion;
 pub mod diagnostics;
 pub mod document_highlight;
@@ -71,6 +72,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(document_highlight::DocumentHighlightPlugin),
         Box::new(semantic_tokens::SemanticTokensPlugin),
         Box::new(inlay_hints::InlayHintsPlugin),
+        Box::new(code_lens::CodeLensPlugin),
         Box::new(code_action::CodeActionPlugin::default()),
         Box::new(completion::CompletionPlugin::default()),
         Box::new(clipboard::ClipboardPlugin),

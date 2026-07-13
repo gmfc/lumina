@@ -116,6 +116,34 @@ fn parses_diagnostic_provider_capability() {
 }
 
 #[test]
+fn parses_code_lenses_resolved_and_unresolved() {
+    let result = serde_json::json!([
+        { "range": {"start": {"line": 3, "character": 0}, "end": {"line": 3, "character": 2}},
+          "command": { "title": "▶ Run", "command": "rust-analyzer.run" } },
+        { "range": {"start": {"line": 9, "character": 0}, "end": {"line": 9, "character": 2}},
+          "data": { "id": 1 } } // unresolved: no command yet
+    ]);
+    let lenses = parse_code_lenses(&result);
+    assert_eq!(lenses.len(), 2);
+    assert_eq!(lenses[0].line, 3);
+    assert_eq!(lenses[0].title.as_deref(), Some("▶ Run"));
+    assert!(lenses[1].title.is_none(), "unresolved lens has no title");
+    // The raw JSON round-trips so it can be echoed to codeLens/resolve.
+    assert_eq!(
+        lenses[1].raw.get("data").and_then(|d| d.get("id")),
+        Some(&serde_json::json!(1))
+    );
+    // Resolving yields the titled lens.
+    let resolved = serde_json::json!({
+        "range": {"start": {"line": 9, "character": 0}, "end": {"line": 9, "character": 2}},
+        "command": { "title": "▶ Debug", "command": "rust-analyzer.debug" }
+    });
+    let r = parse_code_lens_resolve(&resolved).unwrap();
+    assert_eq!(r.title.as_deref(), Some("▶ Debug"));
+    assert_eq!(r.line, 9);
+}
+
+#[test]
 fn parses_inlay_hints_string_and_parts_labels() {
     // A string label, an InlayHintLabelPart[] label (flattened), padding + kind.
     let result = serde_json::json!([
@@ -743,5 +771,13 @@ fn initialize_params_are_honest_and_complete() {
     assert_eq!(
         p["capabilities"]["textDocument"]["inlayHint"]["dynamicRegistration"],
         false
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["codeLens"]["dynamicRegistration"],
+        false
+    );
+    assert_eq!(
+        p["capabilities"]["workspace"]["codeLens"]["refreshSupport"],
+        true
     );
 }
