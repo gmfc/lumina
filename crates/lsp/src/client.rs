@@ -123,6 +123,15 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                 "rename": { "prepareSupport": false },
                 "formatting": {},
                 "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false }
+            },
+            "workspace": {
+                // The client owns file watching and forwards matching changes (§8.1); the rest
+                // are honestly declared because the manager/app already answer them.
+                "applyEdit": true,
+                "configuration": true,
+                "workspaceFolders": true,
+                "didChangeWatchedFiles": { "dynamicRegistration": true, "relativePatternSupport": true },
+                "executeCommand": { "dynamicRegistration": false }
             }
         }
     })
@@ -278,6 +287,15 @@ impl LspHandle {
                 },
                 "context": { "diagnostics": context_diagnostics, "triggerKind": 1 }
             }),
+        )
+    }
+
+    /// Notify the server of watched-file changes it registered for (§8.1). `changes` is a
+    /// pre-built `FileEvent[]` (`{ uri, type }`); a fire-and-forget notification.
+    pub fn did_change_watched_files(&self, changes: &[Value]) -> io::Result<()> {
+        self.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({ "changes": changes }),
         )
     }
 

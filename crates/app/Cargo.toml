@@ -30,6 +30,7 @@ serde_json.workspace = true
 directories.workspace = true
 regex.workspace = true
 ignore.workspace = true
+globset.workspace = true
 grep-searcher.workspace = true
 grep-regex.workspace = true
 notify.workspace = true

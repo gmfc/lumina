@@ -23,6 +23,7 @@ use editor_lsp::{
 };
 
 mod requests;
+mod watchers;
 
 /// What a pending request was, so its response can be interpreted when it arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -193,6 +194,10 @@ pub struct LspManager {
     /// The last pull-diagnostics `resultId` per document URI, echoed as `previousResultId` so the
     /// server can answer `unchanged` (§5.1). Dropped on close/crash/refresh.
     diag_result_id: HashMap<String, String>,
+    /// Dynamic `didChangeWatchedFiles` registrations, per language then registration id (§8.1).
+    /// The client forwards matching disk changes as `workspace/didChangeWatchedFiles`.
+    /// Connection-scoped: cleared when a server exits.
+    file_watchers: HashMap<String, HashMap<String, Vec<watchers::FileWatcher>>>,
     /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
     crash_times: HashMap<String, Vec<Instant>>,
     /// Earliest instant a language may be respawned, enforcing restart backoff.
@@ -223,6 +228,7 @@ impl LspManager {
             published: HashMap::new(),
             diag_raw: HashMap::new(),
             diag_result_id: HashMap::new(),
+            file_watchers: HashMap::new(),
             crash_times: HashMap::new(),
             restart_after: HashMap::new(),
             root_uri: uri_for(root),
@@ -340,9 +346,15 @@ impl LspManager {
                             let folders = workspace_folders_response(&self.root_uri);
                             self.respond(&lang, &id, folders)
                         }
-                        "client/registerCapability"
-                        | "client/unregisterCapability"
-                        | "window/workDoneProgress/create"
+                        "client/registerCapability" => {
+                            self.register_capability(&lang, &params);
+                            self.respond(&lang, &id, serde_json::Value::Null);
+                        }
+                        "client/unregisterCapability" => {
+                            self.unregister_capability(&lang, &params);
+                            self.respond(&lang, &id, serde_json::Value::Null);
+                        }
+                        "window/workDoneProgress/create"
                         | "workspace/semanticTokens/refresh"
                         | "workspace/inlayHint/refresh"
                         | "workspace/codeLens/refresh" => {
@@ -433,6 +445,81 @@ impl LspManager {
         }
     }
 
+    /// Store dynamic capability registrations for `language` (§3.6). Today only
+    /// `workspace/didChangeWatchedFiles` is acted on — its watchers are compiled and kept by
+    /// registration id; other methods are accepted (and answered `null` by the caller) but not yet
+    /// routed. Registrations are connection-scoped (cleared on exit).
+    fn register_capability(&mut self, language: &str, params: &serde_json::Value) {
+        let Some(regs) = params.get("registrations").and_then(|r| r.as_array()) else {
+            return;
+        };
+        for reg in regs {
+            let (Some(id), Some(method)) = (
+                reg.get("id").and_then(|v| v.as_str()),
+                reg.get("method").and_then(|v| v.as_str()),
+            ) else {
+                continue;
+            };
+            if method == "workspace/didChangeWatchedFiles" {
+                let opts = reg
+                    .get("registerOptions")
+                    .unwrap_or(&serde_json::Value::Null);
+                let ws = watchers::parse_watchers(opts);
+                if !ws.is_empty() {
+                    self.file_watchers
+                        .entry(language.to_string())
+                        .or_default()
+                        .insert(id.to_string(), ws);
+                }
+            }
+        }
+    }
+
+    /// Remove dynamic registrations by id (§3.6). The spec misspells the key as `unregisterations`
+    /// — deserialize that exact key.
+    fn unregister_capability(&mut self, language: &str, params: &serde_json::Value) {
+        let Some(unregs) = params.get("unregisterations").and_then(|r| r.as_array()) else {
+            return;
+        };
+        if let Some(by_id) = self.file_watchers.get_mut(language) {
+            for u in unregs {
+                if let Some(id) = u.get("id").and_then(|v| v.as_str()) {
+                    by_id.remove(id);
+                }
+            }
+        }
+    }
+
+    /// Forward a project-tree change to every server that dynamically registered a matching
+    /// watcher (§8.1). The change type is inferred from the path's current existence — the
+    /// editor's watcher doesn't distinguish create from modify, so a freshly created file is
+    /// reported as `Changed`, which servers treat the same (they re-read the file). Sent only to
+    /// `Running` connections; no-op when no watchers are registered.
+    pub fn notify_watched_file_change(&self, path: &Path) {
+        if self.file_watchers.is_empty() {
+            return;
+        }
+        let change_type = if path.exists() {
+            watchers::CHANGED
+        } else {
+            watchers::DELETED
+        };
+        for (lang, by_id) in &self.file_watchers {
+            if !self.is_ready(lang) {
+                continue;
+            }
+            if watchers::any_match(by_id.values().flatten(), path, change_type) {
+                if let Some(client) = self.clients.get(lang) {
+                    let change = serde_json::json!({
+                        "uri": uri_for(path),
+                        "type": change_type,
+                    });
+                    let _ = client.did_change_watched_files(&[change]);
+                }
+            }
+        }
+    }
+
     /// Answer a server→client request for `language`, echoing its raw `id`. Public so the app
     /// can reply after acting on a routed [`LspEvent::ServerRequest`].
     pub fn respond(&self, language: &str, id: &serde_json::Value, result: serde_json::Value) {
@@ -464,6 +551,8 @@ impl LspManager {
         // The restarted server starts with an empty mirror — forget the old attach set (the app
         // replays didOpen for its docs on resync).
         self.open_docs.remove(lang);
+        // Dynamic registrations are connection-scoped: the restarted server re-registers (§3.6).
+        self.file_watchers.remove(lang);
 
         // Clear this server's stale diagnostics from the UI (and forget their raw + resultId
         // caches — the restarted server recomputes from scratch).
@@ -1377,6 +1466,85 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, LspEvent::DiagnosticsRefresh { lang } if lang == "rust")),
             "refresh did not surface a DiagnosticsRefresh event"
+        );
+    }
+
+    #[test]
+    fn register_capability_request_stores_watchers_and_answers_locally() {
+        // A `client/registerCapability` for didChangeWatchedFiles is answered locally (no app
+        // event) and compiles + stores the watchers by registration id (§3.6/§8.1).
+        let mut mgr = manager();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::ServerRequest {
+                id: serde_json::json!(1),
+                method: "client/registerCapability".into(),
+                params: serde_json::json!({ "registrations": [{
+                    "id": "w1",
+                    "method": "workspace/didChangeWatchedFiles",
+                    "registerOptions": { "watchers": [{ "globPattern": "**/*.rs" }] }
+                }]}),
+            },
+        );
+        assert!(
+            mgr.poll().is_empty(),
+            "registration must not surface an app event"
+        );
+        assert!(
+            mgr.file_watchers
+                .get("rust")
+                .is_some_and(|m| m.contains_key("w1")),
+            "watchers were not stored"
+        );
+    }
+
+    #[test]
+    fn unregister_capability_removes_by_misspelled_key() {
+        let mut mgr = manager();
+        mgr.register_capability(
+            "rust",
+            &serde_json::json!({ "registrations": [{
+                "id": "w1",
+                "method": "workspace/didChangeWatchedFiles",
+                "registerOptions": { "watchers": [{ "globPattern": "**/*.rs" }] }
+            }]}),
+        );
+        assert!(mgr
+            .file_watchers
+            .get("rust")
+            .is_some_and(|m| m.contains_key("w1")));
+        // The spec misspells the params key as `unregisterations`.
+        mgr.unregister_capability(
+            "rust",
+            &serde_json::json!({ "unregisterations": [{
+                "id": "w1", "method": "workspace/didChangeWatchedFiles"
+            }]}),
+        );
+        assert!(mgr
+            .file_watchers
+            .get("rust")
+            .is_none_or(|m| !m.contains_key("w1")));
+    }
+
+    #[test]
+    fn server_exit_clears_dynamic_registrations() {
+        // Dynamic registrations are connection-scoped: a crash drops them (the restart re-registers).
+        let mut mgr = manager();
+        mgr.register_capability(
+            "rust",
+            &serde_json::json!({ "registrations": [{
+                "id": "w1",
+                "method": "workspace/didChangeWatchedFiles",
+                "registerOptions": { "watchers": [{ "globPattern": "**/*.rs" }] }
+            }]}),
+        );
+        assert!(mgr.file_watchers.contains_key("rust"));
+        feed_exit(&mgr, "rust");
+        let _ = mgr.poll();
+        assert!(
+            !mgr.file_watchers.contains_key("rust"),
+            "registrations not cleared on exit"
         );
     }
 

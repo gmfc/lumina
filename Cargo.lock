@@ -339,6 +339,7 @@ dependencies = [
  "editor-lsp",
  "editor-plugin",
  "editor-syntax",
+ "globset",
  "grep-regex",
  "grep-searcher",
  "ignore",

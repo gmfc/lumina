@@ -645,4 +645,10 @@ fn initialize_params_are_honest_and_complete() {
         p["capabilities"]["textDocument"]["diagnostic"]["relatedDocumentSupport"],
         false
     );
+    // The client owns file watching and answers configuration/workspaceFolders/applyEdit.
+    assert_eq!(
+        p["capabilities"]["workspace"]["didChangeWatchedFiles"]["dynamicRegistration"],
+        true
+    );
+    assert_eq!(p["capabilities"]["workspace"]["configuration"], true);
 }
