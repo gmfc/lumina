@@ -5,11 +5,19 @@ use super::*;
 use editor_lsp::Cap;
 
 impl LspManager {
-    /// Send a request for the active document, recording its kind for response correlation.
-    /// Starts the connection if needed and gates on the advertised capability — an unsupported
-    /// request degrades silently (no `-32601` noise) and returns `false`.
+    /// Send a request for `uri`, recording its kind + the buffer version it was asked against
+    /// (for staleness detection). Starts the connection if needed and gates on the advertised
+    /// capability — an unsupported request degrades silently (no `-32601` noise) and returns
+    /// `false`. Supersedes any prior in-flight request of the same cancelable kind (§1.4).
     /// `line`/`character` are LSP coordinates (character is a UTF-16 column).
-    fn send_request<F>(&mut self, language: &str, kind: Pending, cap: Cap, build: F) -> bool
+    fn send_request<F>(
+        &mut self,
+        language: &str,
+        uri: &str,
+        kind: Pending,
+        cap: Cap,
+        build: F,
+    ) -> bool
     where
         F: FnOnce(&LspHandle) -> std::io::Result<i64>,
     {
@@ -17,12 +25,32 @@ impl LspManager {
         if !self.request_allowed(language, cap) {
             return false;
         }
+        let version = self.versions.get(uri).copied().unwrap_or(0);
+        // Cancel a prior in-flight request of this cancelable kind; its pending entry stays until
+        // the (cancelled) response arrives, then drops as superseded.
+        if is_cancelable(kind) {
+            if let Some(&old) = self.inflight.get(&(language.to_string(), kind)) {
+                if let Some(client) = self.clients.get(language) {
+                    client.cancel(old);
+                }
+            }
+        }
         let Some(client) = self.clients.get(language) else {
             return false;
         };
         match build(client) {
             Ok(id) => {
-                self.pending.insert((language.to_string(), id), kind);
+                self.pending.insert(
+                    (language.to_string(), id),
+                    PendingEntry {
+                        kind,
+                        uri: uri.to_string(),
+                        version,
+                    },
+                );
+                if is_cancelable(kind) {
+                    self.inflight.insert((language.to_string(), kind), id);
+                }
                 true
             }
             Err(_) => false,
@@ -37,7 +65,7 @@ impl LspManager {
         character: u32,
     ) -> bool {
         let uri = uri_for(path);
-        self.send_request(language, Pending::Hover, Cap::Hover, |c| {
+        self.send_request(language, &uri, Pending::Hover, Cap::Hover, |c| {
             c.hover(&uri, line, character)
         })
     }
@@ -50,7 +78,7 @@ impl LspManager {
         character: u32,
     ) -> bool {
         let uri = uri_for(path);
-        self.send_request(language, Pending::Definition, Cap::Definition, |c| {
+        self.send_request(language, &uri, Pending::Definition, Cap::Definition, |c| {
             c.definition(&uri, line, character)
         })
     }
@@ -64,9 +92,13 @@ impl LspManager {
     ) -> bool {
         let uri = uri_for(path);
         // Reuses the Definition correlation: the response is location(s) we jump to.
-        self.send_request(language, Pending::Definition, Cap::Implementation, |c| {
-            c.implementation(&uri, line, character)
-        })
+        self.send_request(
+            language,
+            &uri,
+            Pending::Definition,
+            Cap::Implementation,
+            |c| c.implementation(&uri, line, character),
+        )
     }
 
     pub fn request_type_definition(
@@ -77,9 +109,13 @@ impl LspManager {
         character: u32,
     ) -> bool {
         let uri = uri_for(path);
-        self.send_request(language, Pending::Definition, Cap::TypeDefinition, |c| {
-            c.type_definition(&uri, line, character)
-        })
+        self.send_request(
+            language,
+            &uri,
+            Pending::Definition,
+            Cap::TypeDefinition,
+            |c| c.type_definition(&uri, line, character),
+        )
     }
 
     pub fn request_completion(
@@ -90,7 +126,7 @@ impl LspManager {
         character: u32,
     ) -> bool {
         let uri = uri_for(path);
-        self.send_request(language, Pending::Completion, Cap::Completion, |c| {
+        self.send_request(language, &uri, Pending::Completion, Cap::Completion, |c| {
             c.completion(&uri, line, character)
         })
     }
@@ -104,7 +140,7 @@ impl LspManager {
         new_name: &str,
     ) -> bool {
         let uri = uri_for(path);
-        self.send_request(language, Pending::Rename, Cap::Rename, |c| {
+        self.send_request(language, &uri, Pending::Rename, Cap::Rename, |c| {
             c.rename(&uri, line, character, new_name)
         })
     }
@@ -117,7 +153,7 @@ impl LspManager {
         character: u32,
     ) -> bool {
         let uri = uri_for(path);
-        self.send_request(language, Pending::References, Cap::References, |c| {
+        self.send_request(language, &uri, Pending::References, Cap::References, |c| {
             c.references(&uri, line, character)
         })
     }
@@ -126,6 +162,7 @@ impl LspManager {
         let uri = uri_for(path);
         self.send_request(
             language,
+            &uri,
             Pending::DocumentSymbols,
             Cap::DocumentSymbol,
             |c| c.document_symbols(&uri),

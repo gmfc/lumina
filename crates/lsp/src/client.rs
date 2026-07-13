@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::transport;
-use crate::Incoming;
+use crate::{Incoming, ResponseError};
 
 mod parse;
 pub use parse::*;
@@ -267,6 +267,13 @@ impl LspHandle {
         )
     }
 
+    /// Ask the server to cancel an in-flight request (§1.4). Advisory: the server still sends a
+    /// response (conventionally error `-32800`), so the caller keeps the pending entry until it
+    /// arrives.
+    pub fn cancel(&self, id: i64) {
+        let _ = self.notify("$/cancelRequest", json!({ "id": id }));
+    }
+
     /// Ask the server to shut down cleanly (fire-and-forget: `shutdown` request + `exit`).
     pub fn shutdown(&self) {
         let _ = self.request("shutdown", Value::Null);
@@ -331,14 +338,16 @@ fn classify(value: &Value) -> Option<Incoming> {
     if let Some(id) = value.get("id").and_then(|v| v.as_i64()) {
         if value.get("result").is_some() || value.get("error").is_some() {
             let result = value.get("result").cloned().unwrap_or(Value::Null);
-            // Preserve the server's error message so the app can report the failure rather than
-            // treating it as an empty result (a `null` result and a real error look identical
-            // otherwise, silently turning e.g. a failed rename into a no-op).
-            let error = value.get("error").map(|e| {
-                e.get("message")
+            // Preserve the server's error code + message so the app can apply the error matrix
+            // (§9.5) instead of surfacing every failure — a `null` result and a real error look
+            // identical otherwise, silently turning e.g. a failed rename into a no-op.
+            let error = value.get("error").map(|e| ResponseError {
+                code: e.get("code").and_then(|c| c.as_i64()).unwrap_or(0),
+                message: e
+                    .get("message")
                     .and_then(|m| m.as_str())
                     .map(str::to_string)
-                    .unwrap_or_else(|| e.to_string())
+                    .unwrap_or_else(|| e.to_string()),
             });
             return Some(Incoming::Response { id, result, error });
         }

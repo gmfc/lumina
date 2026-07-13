@@ -22,7 +22,7 @@ use editor_lsp::{
 mod requests;
 
 /// What a pending request was, so its response can be interpreted when it arrives.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Pending {
     Hover,
     Definition,
@@ -30,6 +30,24 @@ enum Pending {
     Rename,
     References,
     DocumentSymbols,
+}
+
+/// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
+/// (§9.3): passive, cursor-driven lookups are; explicit user actions (rename, references,
+/// symbols) run to completion.
+fn is_cancelable(kind: Pending) -> bool {
+    matches!(
+        kind,
+        Pending::Hover | Pending::Definition | Pending::Completion
+    )
+}
+
+/// A pending request tagged for staleness detection (§9.4): the document + the version it was
+/// asked against, so a response that arrives after the buffer moved can be dropped.
+struct PendingEntry {
+    kind: Pending,
+    uri: String,
+    version: i64,
 }
 
 /// Per-connection lifecycle gate. The Crashed terminal state is represented by removal from
@@ -116,8 +134,12 @@ pub struct LspManager {
     failed: HashMap<String, ()>,
     /// Per-document version counter for didChange.
     versions: HashMap<String, i64>,
-    /// In-flight requests by (language, JSON-RPC id), so responses can be interpreted.
-    pending: HashMap<(String, i64), Pending>,
+    /// In-flight requests by (language, JSON-RPC id), so responses can be interpreted + staleness
+    /// checked.
+    pending: HashMap<(String, i64), PendingEntry>,
+    /// Latest in-flight request id per (language, cancelable kind), for supersede/cancel (§1.4)
+    /// and dropping superseded responses (§9.4).
+    inflight: HashMap<(String, Pending), i64>,
     /// URIs each server has published diagnostics for, so they can be cleared on a crash.
     published: HashMap<String, HashSet<String>>,
     /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
@@ -145,6 +167,7 @@ impl LspManager {
             failed: HashMap::new(),
             versions: HashMap::new(),
             pending: HashMap::new(),
+            inflight: HashMap::new(),
             published: HashMap::new(),
             crash_times: HashMap::new(),
             restart_after: HashMap::new(),
@@ -188,7 +211,10 @@ impl LspManager {
                                 self.clients.remove(&lang);
                                 self.state.remove(&lang);
                                 self.failed.insert(lang.clone(), ());
-                                out.push(LspEvent::Error(format!("initialize failed: {err}")));
+                                out.push(LspEvent::Error(format!(
+                                    "initialize failed: {}",
+                                    err.message
+                                )));
                             }
                             None => {
                                 // Capabilities in hand → send `initialized` and start serving.
@@ -201,17 +227,38 @@ impl LspManager {
                         }
                         continue;
                     }
-                    let Some(kind) = self.pending.remove(&(lang.clone(), id)) else {
+                    let Some(entry) = self.pending.remove(&(lang.clone(), id)) else {
                         continue;
                     };
-                    // A JSON-RPC error response is reported as-is rather than parsing a null
-                    // result as "no results" (which would make a failed rename/goto a silent
-                    // no-op). Otherwise interpret the result against the request kind.
-                    if let Some(message) = error {
-                        out.push(LspEvent::Error(message));
-                    } else {
-                        out.extend(response_event(kind, &result));
+                    // Superseded? A newer request of the same cancelable kind is now in flight,
+                    // so this (older) answer is stale even if the buffer never changed (§9.4).
+                    let key = (lang.clone(), entry.kind);
+                    let superseded = is_cancelable(entry.kind)
+                        && self.inflight.get(&key).is_some_and(|&latest| latest != id);
+                    if !superseded {
+                        self.inflight.remove(&key); // this request resolved its kind's slot
                     }
+                    if let Some(err) = error {
+                        // Error matrix (§9.5): cancellations/staleness (-32800/-32801/-32802) and
+                        // superseded replies are not user errors — drop silently. A real failure
+                        // (RequestFailed, etc.) is surfaced.
+                        if !superseded && !err.is_droppable() {
+                            out.push(LspEvent::Error(err.message));
+                        }
+                        continue;
+                    }
+                    // Drop a result that no longer matches the buffer it was computed against — a
+                    // stale answer would render/apply at shifted positions (§9.4). Edit-producing
+                    // results (rename) must never apply across versions; display results just drop.
+                    let current = self
+                        .versions
+                        .get(&entry.uri)
+                        .copied()
+                        .unwrap_or(entry.version);
+                    if superseded || current != entry.version {
+                        continue;
+                    }
+                    out.extend(response_event(entry.kind, &result));
                 }
                 Incoming::ServerRequest { id, method, params } => {
                     // Every server→client request MUST be answered (§1.3) — silence deadlocks
@@ -290,6 +337,7 @@ impl LspManager {
         for key in dead {
             self.pending.remove(&key);
         }
+        self.inflight.retain(|(l, _), _| l != lang);
 
         // Clear this server's stale diagnostics from the UI.
         if let Some(uris) = self.published.remove(lang) {
@@ -508,10 +556,19 @@ pub fn path_from_uri(uri: &str) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use editor_lsp::{Cap, Incoming, ServerCaps};
+    use editor_lsp::{Cap, Incoming, ResponseError, ServerCaps};
 
     fn manager() -> LspManager {
         LspManager::new(Path::new("/tmp"), HashMap::new(), "test".into())
+    }
+
+    /// A pending entry for a request kind (staleness fields default to a fresh doc at version 0).
+    fn pend(kind: Pending) -> PendingEntry {
+        PendingEntry {
+            kind,
+            uri: "file:///x.rs".into(),
+            version: 0,
+        }
     }
 
     /// Push an inbound message onto the merged channel as the forwarding thread would.
@@ -569,8 +626,9 @@ mod tests {
     fn colliding_ids_route_per_language() {
         // Two servers both use id 1; the (language, id) key keeps their responses distinct.
         let mut mgr = manager();
-        mgr.pending.insert(("rust".into(), 1), Pending::Rename);
-        mgr.pending.insert(("py".into(), 1), Pending::Hover);
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::Rename));
+        mgr.pending.insert(("py".into(), 1), pend(Pending::Hover));
         feed(
             &mgr,
             "py",
@@ -695,14 +753,18 @@ mod tests {
         // A server error reply to a tracked request becomes an `Error` event, not a parsed
         // (empty) result that would read as "nothing found".
         let mut mgr = manager();
-        mgr.pending.insert(("rust".into(), 1), Pending::Rename);
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::Rename));
         feed(
             &mgr,
             "rust",
             Incoming::Response {
                 id: 1,
                 result: Default::default(), // Null; irrelevant on the error path
-                error: Some("rename failed".into()),
+                error: Some(ResponseError {
+                    code: -32603,
+                    message: "rename failed".into(),
+                }),
             },
         );
         let events = mgr.poll();
@@ -715,7 +777,8 @@ mod tests {
     #[test]
     fn success_response_still_parses_result() {
         let mut mgr = manager();
-        mgr.pending.insert(("rust".into(), 2), Pending::Rename);
+        mgr.pending
+            .insert(("rust".into(), 2), pend(Pending::Rename));
         feed(
             &mgr,
             "rust",
@@ -727,6 +790,81 @@ mod tests {
         );
         let events = mgr.poll();
         assert!(matches!(events.as_slice(), [LspEvent::Rename(_)]));
+    }
+
+    #[test]
+    fn stale_response_by_version_is_dropped() {
+        // The buffer moved (v3 → v5) after we asked; the answer is for the old text → drop it.
+        let mut mgr = manager();
+        mgr.versions.insert("file:///x.rs".into(), 5);
+        mgr.pending.insert(
+            ("rust".into(), 1),
+            PendingEntry {
+                kind: Pending::Hover,
+                uri: "file:///x.rs".into(),
+                version: 3,
+            },
+        );
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!({ "contents": "doc" }),
+                error: None,
+            },
+        );
+        assert!(mgr.poll().is_empty());
+    }
+
+    #[test]
+    fn superseded_cancelable_response_is_dropped() {
+        // Two hovers in flight; id 2 supersedes id 1. The late id-1 answer is dropped; id 2 wins.
+        let mut mgr = manager();
+        mgr.pending.insert(("rust".into(), 1), pend(Pending::Hover));
+        mgr.pending.insert(("rust".into(), 2), pend(Pending::Hover));
+        mgr.inflight.insert(("rust".into(), Pending::Hover), 2);
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!({ "contents": "old" }),
+                error: None,
+            },
+        );
+        assert!(mgr.poll().is_empty(), "superseded response was not dropped");
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 2,
+                result: serde_json::json!({ "contents": "new" }),
+                error: None,
+            },
+        );
+        assert!(matches!(mgr.poll().as_slice(), [LspEvent::Hover(m)] if m == "new"));
+    }
+
+    #[test]
+    fn content_modified_error_is_dropped_silently() {
+        // -32801 ContentModified (and -32800/-32802) are not user errors — no Error event.
+        let mut mgr = manager();
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::Rename));
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: Default::default(),
+                error: Some(ResponseError {
+                    code: ResponseError::CONTENT_MODIFIED,
+                    message: "stale".into(),
+                }),
+            },
+        );
+        assert!(mgr.poll().is_empty());
     }
 
     #[test]
@@ -756,7 +894,7 @@ mod tests {
         let mut mgr = manager();
         mgr.state
             .insert("rust".into(), ClientState::Running(ServerCaps::default()));
-        mgr.pending.insert(("rust".into(), 5), Pending::Hover);
+        mgr.pending.insert(("rust".into(), 5), pend(Pending::Hover));
         mgr.published
             .entry("rust".into())
             .or_default()
