@@ -17,7 +17,20 @@ impl App {
 
     /// Close the tab at `idx` and drop the removed document's per-doc state (see [`forget_doc`]).
     pub(super) fn close_and_forget(&mut self, idx: usize) {
+        // Capture the doc's LSP identity before the tab is removed, so we can tell the server the
+        // document closed (§4.1) once we confirm it was actually dropped.
+        let closing = self
+            .editor
+            .workspace
+            .tabs
+            .get(idx)
+            .copied()
+            .and_then(|id| self.editor.workspace.documents.get(id))
+            .and_then(|d| Some((d.path.clone()?, d.language.clone()?)));
         if let Some(id) = self.editor.workspace.close_tab(idx) {
+            if let Some((path, lang)) = closing {
+                self.lsp.did_close(&path, &lang);
+            }
             self.forget_doc(id);
         }
     }
