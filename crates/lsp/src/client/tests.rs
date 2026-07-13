@@ -116,6 +116,26 @@ fn parses_diagnostic_provider_capability() {
 }
 
 #[test]
+fn parses_inlay_hints_string_and_parts_labels() {
+    // A string label, an InlayHintLabelPart[] label (flattened), padding + kind.
+    let result = serde_json::json!([
+        { "position": {"line": 1, "character": 8}, "label": ": i32", "kind": 1, "paddingLeft": true },
+        { "position": {"line": 2, "character": 4},
+          "label": [ {"value": "name"}, {"value": ": "} ], "kind": 2 },
+        { "position": {"line": 3, "character": 0} } // no label → skipped
+    ]);
+    let hints = parse_inlay_hints(&result);
+    assert_eq!(hints.len(), 2);
+    assert_eq!((hints[0].line, hints[0].char16), (1, 8));
+    assert_eq!(hints[0].label, ": i32");
+    assert_eq!(hints[0].kind, 1);
+    assert!(hints[0].pad_left);
+    assert!(!hints[0].pad_right);
+    assert_eq!(hints[1].label, "name: "); // parts concatenated
+    assert_eq!(hints[1].kind, 2);
+}
+
+#[test]
 fn parses_semantic_tokens_provider_and_legend() {
     let caps = serde_json::json!({
         "capabilities": { "semanticTokensProvider": {
@@ -719,5 +739,9 @@ fn initialize_params_are_honest_and_complete() {
     assert_eq!(
         p["capabilities"]["textDocument"]["semanticTokens"]["augmentsSyntaxTokens"],
         true
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["inlayHint"]["dynamicRegistration"],
+        false
     );
 }

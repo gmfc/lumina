@@ -205,6 +205,15 @@ impl Theme {
                 Style::default().bg(Color::Rgb(58, 58, 78))
             }
             "lsp.highlight.write" => Style::default().bg(Color::Rgb(82, 62, 62)),
+            // Inlay hints (§7.2): dim virtual text; parameter names a touch dimmer than type hints.
+            "lsp.inlay.type" => Style::default().fg(Color::Rgb(120, 130, 145)),
+            "lsp.inlay.param" => Style::default()
+                .fg(Color::Rgb(110, 118, 130))
+                .add_modifier(Modifier::ITALIC),
+            // Code lens (§6.4): dim italic virtual text, distinct from inlay hints.
+            "lsp.lens" => Style::default()
+                .fg(Color::Rgb(92, 120, 140))
+                .add_modifier(Modifier::ITALIC),
             _ => self.style_for(key).unwrap_or_default(),
         }
     }

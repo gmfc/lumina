@@ -8,8 +8,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::Frame;
 
 use editor_core::Document;
-use editor_plugin::{Decoration, GutterMark};
+use editor_plugin::{Decoration, GutterMark, VirtualText};
 use editor_syntax::DocHighlighter;
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::App;
 use crate::editor::Focus;
@@ -39,6 +40,9 @@ struct EditorCtx<'a> {
     /// Published gutter marks for the active doc, flattened across layers (same order): the git
     /// change-bar is separate, but diagnostic severity markers arrive here.
     deco_gutter: Vec<&'a GutterMark>,
+    /// Published inline virtual text (inlay hints §7.2, code lens §6.4), flattened across layers.
+    /// Rendered between the real characters, displacing them right on screen.
+    deco_virtual: Vec<&'a VirtualText>,
     sels: &'a [editor_core::Selection],
     /// `(bracket, partner)` char offsets to highlight, precomputed in `EditorState`.
     bracket_match: Option<(usize, usize)>,
@@ -57,9 +61,10 @@ struct EditorCtx<'a> {
 fn collect_decorations(
     app: &App,
     active: Option<editor_core::DocId>,
-) -> (Vec<&Decoration>, Vec<&GutterMark>) {
+) -> (Vec<&Decoration>, Vec<&GutterMark>, Vec<&VirtualText>) {
     let mut spans = Vec::new();
     let mut gutter = Vec::new();
+    let mut virtual_text = Vec::new();
     if let Some(layers) = active.and_then(|id| app.editor.decorations.get(&id)) {
         let mut keys: Vec<&String> = layers.keys().collect();
         keys.sort();
@@ -67,9 +72,10 @@ fn collect_decorations(
             let set = &layers[k];
             spans.extend(set.spans.iter());
             gutter.extend(set.gutter.iter());
+            virtual_text.extend(set.virtual_text.iter());
         }
     }
-    (spans, gutter)
+    (spans, gutter, virtual_text)
 }
 
 /// The editor pane: gutter + line numbers + text + selections + cursor.
@@ -85,7 +91,7 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     let gutter = gutter_width(doc);
     // Syntax highlighting for the active document (cached, viewport-only).
     let active_id = app.editor.workspace.active_doc();
-    let (deco_spans, deco_gutter) = collect_decorations(app, active_id);
+    let (deco_spans, deco_gutter, deco_virtual) = collect_decorations(app, active_id);
     let ctx = EditorCtx {
         doc,
         area,
@@ -99,6 +105,7 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         gutter_fg: app.theme.gutter_fg,
         deco_spans,
         deco_gutter,
+        deco_virtual,
         // Selection spans, precomputed for quick membership tests.
         sels: doc.selections.ranges(),
         bracket_match: app.editor.bracket_match,
@@ -197,11 +204,27 @@ fn render_editor_row(
     let mut primary_screen = None;
     // Text cells available after the gutter (the horizontal viewport).
     let view_width = ctx.area.width.saturating_sub(ctx.gutter) as usize;
+    // Inline virtual text anchored on this line (inlay hints / code lens), sorted by offset so we
+    // can emit each just before the character it anchors before (the tail trails the line end).
+    let eol_off = line_start + ctx.doc.line_len_chars(line_idx);
+    let mut vts: Vec<&VirtualText> = ctx
+        .deco_virtual
+        .iter()
+        .copied()
+        .filter(|v| v.offset >= line_start && v.offset <= eol_off)
+        .collect();
+    vts.sort_by_key(|v| v.offset);
+    let mut vi = 0;
     // `col` tracks the absolute display column from the line start (tab stops are absolute);
     // the on-screen position is that column shifted left by the horizontal scroll offset.
     let mut col: usize = 0;
     for (ci, ch) in line_text.chars().enumerate() {
         let char_off = line_start + ci;
+        // Emit any virtual text anchored just before this character, displacing it rightward.
+        while vi < vts.len() && vts[vi].offset == char_off {
+            col = emit_virtual(buf, ctx, y, vts[vi], col, view_width);
+            vi += 1;
+        }
         let cells = char_cells(ch, col, ctx.doc.tab_width);
         let end = col + cells;
         // Wholly left of the viewport (a tab/wide char may straddle the left edge).
@@ -213,7 +236,13 @@ fn render_editor_row(
         let skip = ctx.hscroll.saturating_sub(col);
         let delta = col + skip - ctx.hscroll; // == max(col, hscroll) - hscroll
         if delta >= view_width {
-            break; // reached the right edge
+            // Off the right edge. Stop unless virtual text still trails this line, in which case
+            // keep advancing `col` (without drawing) so the trailing emit lands correctly.
+            if vi >= vts.len() {
+                break;
+            }
+            col = end;
+            continue;
         }
         let sx = ctx.text_x + delta as u16;
         if ctx.doc.selections.primary().head == char_off {
@@ -224,13 +253,18 @@ fn render_editor_row(
         col = end;
     }
 
-    // Cursor at end-of-line (past last char).
-    let eol_off = line_start + ctx.doc.line_len_chars(line_idx);
+    // Cursor at end-of-line (past last char), placed at the real line width — before any trailing
+    // virtual text.
     if ctx.doc.selections.primary().head == eol_off && col >= ctx.hscroll {
         let delta = col - ctx.hscroll;
         if delta <= view_width {
             primary_screen = Some((ctx.text_x + delta as u16, y));
         }
+    }
+    // Trailing virtual text anchored at the line end (end-of-line inlay hints, code lens).
+    while vi < vts.len() {
+        col = emit_virtual(buf, ctx, y, vts[vi], col, view_width);
+        vi += 1;
     }
     primary_screen
 }
@@ -347,6 +381,35 @@ fn cell_style(ctx: &EditorCtx, char_styles: &[Option<Style>], ci: usize, char_of
 /// by horizontal scroll: when non-zero the glyph itself is off-screen, so only its
 /// trailing (blank) cells are drawn — which is exactly right for tabs and acceptable for a
 /// wide char whose first cell is scrolled away.
+/// Draw one inline virtual-text run at display column `col` (with the same horizontal-scroll
+/// clipping as real characters), returning the column just past it. The text carries no tabs, so
+/// each char is its plain display width; the theme resolves `vt.style` to a concrete style.
+fn emit_virtual(
+    buf: &mut ratatui::buffer::Buffer,
+    ctx: &EditorCtx,
+    y: u16,
+    vt: &VirtualText,
+    mut col: usize,
+    view_width: usize,
+) -> usize {
+    let style = ctx.theme.decoration_style(&vt.style);
+    for ch in vt.display().chars() {
+        let cells = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+        let end = col + cells;
+        if end <= ctx.hscroll {
+            col = end;
+            continue;
+        }
+        let skip = ctx.hscroll.saturating_sub(col);
+        let delta = col + skip - ctx.hscroll;
+        if delta < view_width {
+            draw_char_cells(buf, ctx.text_x + delta as u16, y, ch, style, cells, skip);
+        }
+        col = end;
+    }
+    col
+}
+
 fn draw_char_cells(
     buf: &mut ratatui::buffer::Buffer,
     sx: u16,

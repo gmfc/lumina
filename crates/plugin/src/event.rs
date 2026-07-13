@@ -66,6 +66,13 @@ pub enum Event {
         doc: Option<DocId>,
         tokens: Vec<crate::lsp::LspSemanticToken>,
     },
+    /// Inlay hints for `doc` (§7.2), delivered to the inlay-hints plugin, which paints them as
+    /// inline virtual text. Empty clears the layer. `None` doc = a response for a URI with no open
+    /// document (dropped).
+    LspInlayHints {
+        doc: Option<DocId>,
+        hints: Vec<crate::lsp::LspInlayHint>,
+    },
     /// Code actions offered for the cursor/selection. Delivered to the code-action plugin, which
     /// shows them in a picker and applies the chosen one. Empty means none were offered.
     LspCodeActions(Vec<crate::lsp::LspCodeAction>),

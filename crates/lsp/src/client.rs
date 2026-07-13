@@ -142,7 +142,9 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                         "declaration", "definition", "readonly", "static", "deprecated",
                         "abstract", "async", "modification", "documentation", "defaultLibrary"
                     ]
-                }
+                },
+                // Inlay hints as virtual text (§7.2). We resolve nothing lazily yet.
+                "inlayHint": { "dynamicRegistration": false }
             },
             "workspace": {
                 // The client owns file watching and forwards matching changes (§8.1); the rest
@@ -316,6 +318,27 @@ impl LspHandle {
         self.request(
             "textDocument/semanticTokens/full",
             json!({ "textDocument": { "uri": uri } }),
+        )
+    }
+
+    /// Request inlay hints for a range (§7.2). The response is `InlayHint[]`.
+    pub fn inlay_hint(
+        &self,
+        uri: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) -> io::Result<i64> {
+        self.request(
+            "textDocument/inlayHint",
+            json!({
+                "textDocument": { "uri": uri },
+                "range": {
+                    "start": { "line": start_line, "character": start_char },
+                    "end": { "line": end_line, "character": end_char }
+                }
+            }),
         )
     }
 

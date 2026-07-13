@@ -69,6 +69,17 @@ impl App {
             if synced && self.lsp.supports_semantic_tokens(&lang) {
                 self.lsp.request_semantic_tokens(&path, &lang);
             }
+            // Likewise re-request whole-document inlay hints on each sync (§7.2).
+            if synced && self.lsp.supports_inlay_hints(&lang) {
+                let end_line = self
+                    .editor
+                    .workspace
+                    .documents
+                    .get(id)
+                    .map(|d| d.len_lines() as u32)
+                    .unwrap_or(0);
+                self.lsp.request_inlay_hints(&path, &lang, end_line);
+            }
             // Debounced diagnostics pull (§5.1): only for servers that declared pull. Re-arm the
             // timer on each revision change; fire once the buffer has been quiet for PULL_DEBOUNCE.
             // Push-diagnostic servers never enter here (the gate is off), so nothing double-fires.
@@ -255,6 +266,30 @@ impl App {
                     .collect();
                 for (p, l) in docs {
                     self.lsp.request_semantic_tokens(&p, &l);
+                }
+            }
+            LspEvent::InlayHints { uri, hints } => {
+                let doc = crate::lsp::path_from_uri(&uri)
+                    .and_then(|path| self.editor.workspace.find_by_path(&path));
+                let hints = hints.into_iter().map(to_primitive_inlay_hint).collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspInlayHints { doc, hints });
+            }
+            LspEvent::InlayHintRefresh { lang } => {
+                // Re-request hints for every open doc of this language (§7.2).
+                let docs: Vec<(PathBuf, String, u32)> = self
+                    .editor
+                    .workspace
+                    .documents
+                    .iter()
+                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
+                    .filter_map(|(_, d)| {
+                        Some((d.path.clone()?, d.language.clone()?, d.len_lines() as u32))
+                    })
+                    .collect();
+                for (p, l, end_line) in docs {
+                    self.lsp.request_inlay_hints(&p, &l, end_line);
                 }
             }
             LspEvent::ServerExited { lang } => {
@@ -659,6 +694,18 @@ fn to_primitive_semantic_token(t: editor_lsp::SemanticToken) -> editor_plugin::L
         length: t.length,
         token_type: t.token_type,
         modifiers: t.modifiers,
+    }
+}
+
+/// Translate an `editor-lsp` inlay hint into the kernel's primitive `LspInlayHint`.
+fn to_primitive_inlay_hint(h: editor_lsp::InlayHint) -> editor_plugin::LspInlayHint {
+    editor_plugin::LspInlayHint {
+        line: h.line,
+        char16: h.char16,
+        label: h.label,
+        kind: h.kind,
+        pad_left: h.pad_left,
+        pad_right: h.pad_right,
     }
 }
 

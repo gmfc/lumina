@@ -276,6 +276,16 @@ impl LspManager {
         )
     }
 
+    /// Request inlay hints for the whole document (§7.2) — `end_line` is the doc's line count, so
+    /// the range covers everything (viewport-only fetching is a later refinement). Version-tracked
+    /// + cancelable like semantic tokens.
+    pub fn request_inlay_hints(&mut self, path: &Path, language: &str, end_line: u32) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, &uri, Pending::InlayHint, Cap::InlayHint, |c| {
+            c.inlay_hint(&uri, 0, 0, end_line, 0)
+        })
+    }
+
     pub fn request_workspace_symbols(&mut self, language: &str, query: &str) -> bool {
         // Workspace symbols aren't tied to a document; tag with an empty uri (version 0).
         self.send_request(

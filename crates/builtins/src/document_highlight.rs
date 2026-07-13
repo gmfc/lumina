@@ -64,14 +64,7 @@ impl DocumentHighlightPlugin {
                 Decoration::new((start, end), scope.to_string())
             })
             .collect();
-        host.set_decorations(
-            doc,
-            LAYER,
-            DecorationSet {
-                spans,
-                gutter: Vec::new(),
-            },
-        );
+        host.set_decorations(doc, LAYER, DecorationSet::spans(spans));
     }
 }
 
