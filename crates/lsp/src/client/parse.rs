@@ -7,9 +7,9 @@ use serde_json::Value;
 
 use crate::{
     CodeAction, CodeLens, Command, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate,
-    DocEdit, DocumentHighlight, DocumentSymbol, InlayHint, Location, PositionEncoding, PullReport,
-    SemanticLegend, SemanticToken, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit,
-    WorkspaceEdit,
+    DocEdit, DocumentHighlight, DocumentSymbol, FoldingRange, InlayHint, Location,
+    PositionEncoding, PullReport, SemanticLegend, SemanticToken, ServerCaps, Severity,
+    SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
 
 /// Parse a `Command`/`{command, arguments}` object.
@@ -82,6 +82,7 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
             .and_then(|p| p.get("resolveProvider"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        folding_range: present("foldingRangeProvider"),
         execute_commands: caps
             .get("executeCommandProvider")
             .and_then(|e| e.get("commands"))
@@ -525,6 +526,23 @@ pub fn parse_diagnostic_report(result: &Value) -> PullReport {
         diagnostics,
         raw,
     }
+}
+
+/// Parse a `textDocument/foldingRange` result (`FoldingRange[]`) into foldable regions (§7.3).
+/// We declared `lineFoldingOnly`, so char columns are ignored. Malformed entries are skipped.
+pub fn parse_folding_ranges(result: &Value) -> Vec<FoldingRange> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|r| {
+            Some(FoldingRange {
+                start_line: r.get("startLine")?.as_u64()? as u32,
+                end_line: r.get("endLine")?.as_u64()? as u32,
+                kind: r.get("kind").and_then(|k| k.as_str()).map(String::from),
+            })
+        })
+        .collect()
 }
 
 /// Parse one `CodeLens` object into the model (§6.4): its start position, the resolved `title`

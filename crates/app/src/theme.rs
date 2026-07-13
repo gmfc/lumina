@@ -214,6 +214,8 @@ impl Theme {
             "lsp.lens" => Style::default()
                 .fg(Color::Rgb(92, 120, 140))
                 .add_modifier(Modifier::ITALIC),
+            // Folding (§7.3): a dim gutter chevron marking a foldable region's start.
+            "lsp.fold" => Style::default().fg(Color::Rgb(110, 118, 130)),
             _ => self.style_for(key).unwrap_or_default(),
         }
     }
