@@ -337,43 +337,39 @@ fn vim_contributes_through_the_public_api() {
     assert!(reduced.command_ids().any(|id| id == CLIPBOARD_COMMAND));
 }
 
-#[test]
-fn git_contributes_through_the_public_api() {
-    let reg = Registry::with_plugins(all_builtins());
-    assert!(
-        reg.command_ids().any(|id| id == GIT_COMMAND),
-        "git-nav command missing — is git-change navigation wired as a plugin?"
-    );
+/// Shared body behind the per-plugin disable-isolation guards: assert `sample` (a command owned
+/// by plugin `id`, whose command ids share `prefix`) is present with every built-in enabled, and
+/// that dropping `id` removes exactly the `prefix` commands and disturbs nothing unrelated.
+fn assert_disabling_isolates(id: &str, sample: &str, prefix: &str) {
     let full = Registry::with_plugins(all_builtins());
-    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
-    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != GIT_ID));
     assert!(
-        !reduced.command_ids().any(|id| id == GIT_COMMAND),
-        "git command still present after disabling — it is hardcoded, not a plugin"
+        full.command_ids().any(|c| c == sample),
+        "{sample} missing — is {id} wired as a plugin?"
     );
-    for id in before.iter().filter(|id| !id.starts_with("git.")) {
+    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
+    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != id));
+    assert!(
+        !reduced.command_ids().any(|c| c == sample),
+        "{sample} still present after disabling {id} — it is hardcoded, not a plugin"
+    );
+    for c in before.iter().filter(|c| !c.starts_with(prefix)) {
         assert!(
-            reduced.command_ids().any(|c| &c == id),
-            "disabling git-nav wrongly removed unrelated command `{id}`"
+            reduced.command_ids().any(|x| &x == c),
+            "disabling {id} wrongly removed unrelated command `{c}`"
         );
     }
 }
 
 #[test]
+fn git_contributes_through_the_public_api() {
+    assert_disabling_isolates(GIT_ID, GIT_COMMAND, "git.");
+}
+
+#[test]
 fn theme_contributes_through_the_public_api() {
-    let reg = Registry::with_plugins(all_builtins());
-    assert!(
-        reg.command_ids().any(|id| id == THEME_COMMAND),
-        "view.toggleTheme missing — is the theme toggle wired as a plugin?"
-    );
-    // The disable-isolation half is the real coverage gap: only the theme plugin contributes
-    // view.toggleTheme, so dropping it must remove exactly that.
-    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != THEME_ID));
-    assert!(
-        !reduced.command_ids().any(|id| id == THEME_COMMAND),
-        "view.toggleTheme still present after disabling theme — it is hardcoded, not a plugin"
-    );
-    assert!(reduced.command_ids().any(|id| id == EXPLORER_COMMAND));
+    // Only the theme plugin contributes a `view.toggleTheme`; dropping it must remove exactly
+    // that (palette's other `view.*` commands are excluded from the isolation loop by prefix).
+    assert_disabling_isolates(THEME_ID, THEME_COMMAND, "view.");
 }
 
 #[test]

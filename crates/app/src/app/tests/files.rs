@@ -53,6 +53,23 @@ fn save_untitled_falls_back_to_save_as_prompt() {
 }
 
 #[test]
+fn save_active_on_untitled_reports_no_path() {
+    // The dirty-close overlay's "save" path calls save_active() directly (it does not route
+    // through the Save As prompt), so on an untitled buffer that branch must surface guidance
+    // rather than silently doing nothing.
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.dispatch(Command::NewFile); // untitled, no path
+    app.dispatch(Command::InsertText("scratch".into()));
+    app.save_active();
+    assert_eq!(
+        app.editor.status_message.as_deref(),
+        Some("No path — use Save As")
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn save_trims_trailing_whitespace_when_enabled() {
     let path = temp_file("foo   \nbar\t\n");
     let mut app = app_with(&path);
