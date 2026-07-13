@@ -102,3 +102,69 @@ pub struct DiagnosticsUpdate {
     pub uri: String,
     pub diagnostics: Vec<Diagnostic>,
 }
+
+/// The position encoding negotiated for a connection. LSP defaults to UTF-16; a server may
+/// answer UTF-8 (rust-analyzer, clangd). Stored per connection; PR1 only implements UTF-16.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionEncoding {
+    Utf16,
+    Utf8,
+}
+
+/// `TextDocumentSyncKind`: how the server wants document changes. Stored on the caps; PR1
+/// always sends full text (`didChange` with no range) regardless — incremental is a later PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncKind {
+    None,
+    #[default]
+    Full,
+    Incremental,
+}
+
+/// The capability a feature request needs — one per issuable request method. Used to gate a
+/// request against the server's advertised `ServerCapabilities` (a request the server can't
+/// serve is dropped silently rather than eliciting `-32601` noise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cap {
+    Hover,
+    Definition,
+    TypeDefinition,
+    Implementation,
+    References,
+    DocumentSymbol,
+    Completion,
+    Rename,
+}
+
+/// The subset of `ServerCapabilities` Lumina currently gates on. Grows as features land
+/// (YAGNI): today only the requests the client actually issues are represented.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerCaps {
+    /// `None` means the server did not answer → UTF-16 default (§2.2).
+    pub position_encoding: Option<PositionEncoding>,
+    pub sync_kind: SyncKind,
+    pub hover: bool,
+    pub definition: bool,
+    pub type_definition: bool,
+    pub implementation: bool,
+    pub references: bool,
+    pub document_symbol: bool,
+    pub completion: bool,
+    pub rename: bool,
+}
+
+impl ServerCaps {
+    /// Whether the server advertised support for the feature behind `cap`.
+    pub fn allows(&self, cap: Cap) -> bool {
+        match cap {
+            Cap::Hover => self.hover,
+            Cap::Definition => self.definition,
+            Cap::TypeDefinition => self.type_definition,
+            Cap::Implementation => self.implementation,
+            Cap::References => self.references,
+            Cap::DocumentSymbol => self.document_symbol,
+            Cap::Completion => self.completion,
+            Cap::Rename => self.rename,
+        }
+    }
+}

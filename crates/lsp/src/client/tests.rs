@@ -200,3 +200,48 @@ fn workspace_edit_parses_changes_map() {
     assert_eq!(we.changes[0].0, "file:///a.rs");
     assert_eq!(we.changes[0].1[0].new_text, "bar");
 }
+
+#[test]
+fn parse_capabilities_full_and_minimal() {
+    use crate::{Cap, PositionEncoding, SyncKind};
+    // rust-analyzer-ish: providers as option objects, sync as object, utf-8 offered.
+    let full = serde_json::json!({ "capabilities": {
+        "positionEncoding": "utf-8",
+        "textDocumentSync": { "openClose": true, "change": 2 },
+        "hoverProvider": true,
+        "definitionProvider": true,
+        "typeDefinitionProvider": { "workDoneProgress": true },
+        "implementationProvider": true,
+        "referencesProvider": true,
+        "documentSymbolProvider": true,
+        "completionProvider": { "triggerCharacters": ["."] },
+        "renameProvider": { "prepareProvider": true }
+    }});
+    let c = parse_capabilities(&full);
+    assert_eq!(c.position_encoding, Some(PositionEncoding::Utf8));
+    assert_eq!(c.sync_kind, SyncKind::Incremental);
+    assert!(c.hover && c.definition && c.type_definition && c.implementation);
+    assert!(c.references && c.document_symbol && c.completion && c.rename);
+    assert!(c.allows(Cap::Hover) && c.allows(Cap::Rename));
+
+    // minimal: providers as bare booleans, sync as a number, no encoding.
+    let min = serde_json::json!({ "capabilities": {
+        "textDocumentSync": 1,
+        "hoverProvider": true,
+        "completionProvider": {}
+    }});
+    let c = parse_capabilities(&min);
+    assert_eq!(c.position_encoding, None); // => utf-16 default
+    assert_eq!(c.sync_kind, SyncKind::Full);
+    assert!(c.hover && c.completion);
+    assert!(!c.definition && !c.rename);
+    assert!(!c.allows(Cap::Definition));
+}
+
+#[test]
+fn parse_capabilities_is_resilient_to_garbage() {
+    let c = parse_capabilities(&serde_json::json!({}));
+    assert!(!c.hover && !c.completion);
+    let c = parse_capabilities(&serde_json::json!({ "capabilities": { "hoverProvider": false } }));
+    assert!(!c.hover);
+}
