@@ -19,6 +19,12 @@ fn is_ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// Whether `prev` (the char before the caret), with `prev2` before it, is a completion trigger:
+/// `.` (member access) or `::` (path). Pure so it unit-tests.
+fn is_trigger(prev: char, prev2: Option<char>) -> bool {
+    prev == '.' || (prev == ':' && prev2 == Some(':'))
+}
+
 /// A short glyph/abbreviation for an LSP `CompletionItemKind` (plan §2.1 "show kind").
 pub fn kind_label(kind: Option<u8>) -> &'static str {
     match kind {
@@ -132,6 +138,26 @@ pub struct CompletionPlugin {
 
 impl CompletionPlugin {
     const ID: &'static str = "completion";
+
+    /// Whether the char just typed is a completion trigger (`.` or `::`) — member/path access,
+    /// where the editor should offer completions automatically *(≈ VS Code 24×7 IntelliSense)*.
+    /// A capability-driven trigger set is a later refinement; `.`/`::` cover most languages.
+    fn at_trigger_char(host: &dyn Host) -> bool {
+        let Some(doc) = host
+            .active_doc()
+            .and_then(|id| host.workspace().documents.get(id))
+        else {
+            return false;
+        };
+        let head = doc.selections.primary().head;
+        if head == 0 {
+            return false;
+        }
+        let rope = doc.rope();
+        let prev = rope.char(head - 1);
+        let prev2 = (head >= 2).then(|| rope.char(head - 2));
+        is_trigger(prev, prev2)
+    }
 
     /// Open a popup from server `items`, anchored at the start of the identifier under the caret.
     fn open(&mut self, items: Vec<LspCompletionItem>, host: &mut dyn Host) {
@@ -315,8 +341,17 @@ impl Plugin for CompletionPlugin {
     fn on_event(&mut self, event: &Event, host: &mut dyn Host) {
         match event {
             Event::LspCompletion(items) => self.open(items.clone(), host),
-            Event::DidChange(id) | Event::DidChangeCursor(id) => {
-                if self.state.is_some() && host.active_doc() == Some(*id) {
+            Event::DidChange(id) if host.active_doc() == Some(*id) => {
+                // Typing a trigger char (`.`/`::`) auto-requests member/path completions; otherwise
+                // keep an open popup filtered against the new prefix.
+                if host.lsp_enabled() && Self::at_trigger_char(host) {
+                    host.lsp_request(LspRequestKind::Completion);
+                } else if self.state.is_some() {
+                    self.refresh(host);
+                }
+            }
+            Event::DidChangeCursor(id) if host.active_doc() == Some(*id) => {
+                if self.state.is_some() {
                     self.refresh(host);
                 }
             }
@@ -396,5 +431,14 @@ mod tests {
     fn no_match_is_empty() {
         let s = CompletionState::new(items(), 0, "zzz".to_string());
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn trigger_chars_are_dot_and_double_colon() {
+        assert!(is_trigger('.', Some('j'))); // member access
+        assert!(is_trigger(':', Some(':'))); // path
+        assert!(!is_trigger(':', Some('a'))); // a lone colon is not a trigger
+        assert!(!is_trigger('x', Some('.'))); // an identifier char is not
+        assert!(is_trigger('.', None)); // a leading '.' still triggers
     }
 }
