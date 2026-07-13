@@ -140,12 +140,32 @@ impl App {
                         .push(editor_plugin::event::Event::LspGoto(location));
                 }
             }
-            LspEvent::Completion(items) => {
+            LspEvent::Completion(list) => {
                 // Broadcast to the `completion` plugin, which anchors + filters into a popup.
-                let items = items.into_iter().map(to_primitive_completion).collect();
+                let items = list
+                    .items
+                    .into_iter()
+                    .map(to_primitive_completion)
+                    .collect();
                 self.editor
                     .pending_events
-                    .push(editor_plugin::event::Event::LspCompletion(items));
+                    .push(editor_plugin::event::Event::LspCompletion {
+                        items,
+                        is_incomplete: list.is_incomplete,
+                    });
+            }
+            LspEvent::CompletionResolvedEdits { uri, edits } => {
+                // Late auto-import edits from resolve → apply to the doc they were resolved for.
+                if edits.is_empty() {
+                    return;
+                }
+                let Some(path) = crate::lsp::path_from_uri(&uri) else {
+                    return;
+                };
+                let edits = edits.into_iter().map(to_primitive_text_edit).collect();
+                self.apply_workspace_edit(editor_plugin::LspWorkspaceEdit {
+                    changes: vec![(path.to_string_lossy().into_owned(), edits)],
+                });
             }
             LspEvent::Rename(edit) => {
                 // Resolve each file's URI to a path (version-checked) and hand the edit to the
@@ -365,6 +385,16 @@ impl App {
                 }
                 return;
             }
+            K::ResolveCompletion { label, data } => {
+                if let Some((p, l)) = self.editor.active_document().and_then(|d| {
+                    let p = d.path.clone()?;
+                    let l = d.language.clone()?;
+                    Some((p, l))
+                }) {
+                    self.lsp.request_resolve_completion(&p, &l, label, data);
+                }
+                return;
+            }
             _ => {}
         }
         let Some((p, l, line, ch)) = self.lsp_position() else {
@@ -381,7 +411,11 @@ impl App {
             K::CodeAction => self.lsp.request_code_action(&p, &l, line, ch),
             K::References => self.lsp.request_references(&p, &l, line, ch),
             K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
-            K::DocumentSymbols | K::Formatting | K::WorkspaceSymbols(_) => false, // handled above
+            // handled above (whole-document / no-cursor requests)
+            K::DocumentSymbols
+            | K::Formatting
+            | K::WorkspaceSymbols(_)
+            | K::ResolveCompletion { .. } => false,
         };
     }
 
@@ -501,6 +535,13 @@ fn to_primitive_completion(it: editor_lsp::CompletionItem) -> editor_plugin::Lsp
         detail: it.detail,
         insert_text: it.insert_text,
         kind: it.kind,
+        additional_edits: it
+            .additional_edits
+            .into_iter()
+            .map(to_primitive_text_edit)
+            .collect(),
+        is_snippet: it.is_snippet,
+        data: it.data,
     }
 }
 

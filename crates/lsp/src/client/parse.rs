@@ -6,9 +6,9 @@
 use serde_json::Value;
 
 use crate::{
-    CodeAction, CompletionItem, Diagnostic, DiagnosticsUpdate, DocEdit, DocumentHighlight,
-    DocumentSymbol, Location, PositionEncoding, ServerCaps, Severity, SignatureHelp, SyncKind,
-    TextEdit, WorkspaceEdit,
+    CodeAction, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate, DocEdit,
+    DocumentHighlight, DocumentSymbol, Location, PositionEncoding, ServerCaps, Severity,
+    SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
 
 /// Parse an `InitializeResult` into the caps Lumina gates on. Resilient: a provider is
@@ -292,15 +292,19 @@ fn push_symbol(v: &Value, depth: usize, out: &mut Vec<DocumentSymbol>) {
 }
 
 /// Extract completion items. Accepts `CompletionItem[]` or `CompletionList {items}`.
-pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
-    let items = if let Some(arr) = result.as_array() {
-        arr.clone()
+pub fn parse_completion(result: &Value) -> CompletionList {
+    let (items, is_incomplete) = if let Some(arr) = result.as_array() {
+        (arr.clone(), false)
     } else if let Some(arr) = result.get("items").and_then(|i| i.as_array()) {
-        arr.clone()
+        let inc = result
+            .get("isIncomplete")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        (arr.clone(), inc)
     } else {
-        return Vec::new();
+        return CompletionList::default();
     };
-    items
+    let items = items
         .iter()
         .filter_map(|it| {
             let label = it.get("label").and_then(|l| l.as_str())?.to_string();
@@ -318,14 +322,38 @@ pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
                 .unwrap_or_else(|| label.clone());
             let detail = it.get("detail").and_then(|d| d.as_str()).map(String::from);
             let kind = it.get("kind").and_then(|k| k.as_u64()).map(|k| k as u8);
+            let additional_edits = it
+                .get("additionalTextEdits")
+                .and_then(|a| a.as_array())
+                .map(|arr| arr.iter().filter_map(parse_text_edit).collect())
+                .unwrap_or_default();
+            // insertTextFormat: 1 PlainText, 2 Snippet.
+            let is_snippet = it.get("insertTextFormat").and_then(|v| v.as_u64()) == Some(2);
             Some(CompletionItem {
                 label,
                 detail,
                 insert_text,
                 kind,
+                additional_edits,
+                is_snippet,
+                data: it.get("data").cloned(),
             })
         })
-        .collect()
+        .collect();
+    CompletionList {
+        items,
+        is_incomplete,
+    }
+}
+
+/// Extract the `additionalTextEdits` of a resolved `completionItem/resolve` item (the auto-import
+/// edits that arrive lazily on accept).
+pub fn parse_completion_item_additional_edits(result: &Value) -> Vec<TextEdit> {
+    result
+        .get("additionalTextEdits")
+        .and_then(|a| a.as_array())
+        .map(|arr| arr.iter().filter_map(parse_text_edit).collect())
+        .unwrap_or_default()
 }
 
 /// Parse a `WorkspaceEdit` (rename / code action / applyEdit). Prefers `documentChanges` (which

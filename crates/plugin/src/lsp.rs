@@ -25,6 +25,11 @@ pub enum LspRequestKind {
     WorkspaceSymbols(String),
     /// Code actions (quickfix / refactor / source) for the selection or cursor.
     CodeAction,
+    /// Resolve an accepted completion item to fetch its lazy `additionalTextEdits` (auto-imports).
+    ResolveCompletion {
+        label: String,
+        data: serde_json::Value,
+    },
 }
 
 /// A code action offered to the user: a title plus the edit to apply on selection — the primitive
@@ -65,6 +70,12 @@ pub struct LspCompletionItem {
     pub insert_text: String,
     /// LSP `CompletionItemKind` (1..=25), if the server sent one — drives the kind glyph.
     pub kind: Option<u8>,
+    /// Extra edits applied atomically on accept (auto-imports); resolved uris are app-side.
+    pub additional_edits: Vec<LspTextEdit>,
+    /// `insert_text` is a snippet (tab-stops / placeholders) rather than literal text.
+    pub is_snippet: bool,
+    /// Opaque payload for `completionItem/resolve` (to fetch late additional_edits on accept).
+    pub data: Option<serde_json::Value>,
 }
 
 /// A diagnostic in (line, UTF-16 char) coordinates — the primitive twin of `editor_lsp::Diagnostic`.

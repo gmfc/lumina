@@ -74,6 +74,21 @@ pub struct CompletionItem {
     pub insert_text: String,
     /// LSP `CompletionItemKind` (1..=25), if the server sent one — drives the kind glyph.
     pub kind: Option<u8>,
+    /// Extra edits applied atomically on accept — auto-imports live here (may arrive only after
+    /// `completionItem/resolve`).
+    pub additional_edits: Vec<TextEdit>,
+    /// `insertTextFormat == 2`: `insert_text` is a snippet, not literal text.
+    pub is_snippet: bool,
+    /// Opaque server payload, echoed back to `completionItem/resolve` to fetch lazy fields.
+    pub data: Option<serde_json::Value>,
+}
+
+/// A completion response: the items plus whether the list is truncated (`isIncomplete`), which
+/// tells the client to re-request as the user types instead of filtering locally (§5.2).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompletionList {
+    pub items: Vec<CompletionItem>,
+    pub is_incomplete: bool,
 }
 
 /// A single text edit in (line, UTF-16 char) coordinates (used by rename).
