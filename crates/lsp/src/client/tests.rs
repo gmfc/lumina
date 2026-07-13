@@ -262,7 +262,7 @@ fn code_actions_keep_only_edit_carrying() {
     let parsed = parse_code_actions(&actions);
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].title, "Add import");
-    assert_eq!(parsed[0].edit.changes[0].0, "file:///a.rs");
+    assert_eq!(parsed[0].edit.changes[0].uri, "file:///a.rs");
     assert!(parse_code_actions(&serde_json::json!(null)).is_empty());
 }
 
@@ -277,8 +277,26 @@ fn workspace_edit_parses_changes_map() {
     });
     let we = parse_workspace_edit(&edit);
     assert_eq!(we.changes.len(), 1);
-    assert_eq!(we.changes[0].0, "file:///a.rs");
-    assert_eq!(we.changes[0].1[0].new_text, "bar");
+    assert_eq!(we.changes[0].uri, "file:///a.rs");
+    assert_eq!(we.changes[0].version, None); // legacy `changes` map has no version
+    assert_eq!(we.changes[0].edits[0].new_text, "bar");
+}
+
+#[test]
+fn workspace_edit_prefers_document_changes_with_version() {
+    let edit = serde_json::json!({
+        "documentChanges": [
+            { "textDocument": { "uri": "file:///a.rs", "version": 7 },
+              "edits": [{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"newText":"x"}] },
+            { "textDocument": { "uri": "file:///b.rs", "version": null },
+              "edits": [{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"y"}] }
+        ]
+    });
+    let we = parse_workspace_edit(&edit);
+    assert_eq!(we.changes.len(), 2);
+    assert_eq!(we.changes[0].uri, "file:///a.rs");
+    assert_eq!(we.changes[0].version, Some(7)); // carried for the §2.4 staleness check
+    assert_eq!(we.changes[1].version, None); // null version → don't version-check
 }
 
 #[test]

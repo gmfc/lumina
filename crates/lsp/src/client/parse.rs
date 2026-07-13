@@ -6,9 +6,9 @@
 use serde_json::Value;
 
 use crate::{
-    CodeAction, CompletionItem, Diagnostic, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
-    Location, PositionEncoding, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit,
-    WorkspaceEdit,
+    CodeAction, CompletionItem, Diagnostic, DiagnosticsUpdate, DocEdit, DocumentHighlight,
+    DocumentSymbol, Location, PositionEncoding, ServerCaps, Severity, SignatureHelp, SyncKind,
+    TextEdit, WorkspaceEdit,
 };
 
 /// Parse an `InitializeResult` into the caps Lumina gates on. Resilient: a provider is
@@ -328,26 +328,35 @@ pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
         .collect()
 }
 
-/// Parse a rename result (`WorkspaceEdit`). Handles both `changes` and `documentChanges`.
+/// Parse a `WorkspaceEdit` (rename / code action / applyEdit). Prefers `documentChanges` (which
+/// carries per-document versions for staleness checking, §2.4) over the legacy `changes` map.
 pub fn parse_workspace_edit(result: &Value) -> WorkspaceEdit {
     let mut out = WorkspaceEdit::default();
     let parse_edits =
-        |arr: &Vec<Value>| -> Vec<TextEdit> { arr.iter().filter_map(parse_text_edit).collect() };
-    if let Some(changes) = result.get("changes").and_then(|c| c.as_object()) {
-        for (uri, edits) in changes {
-            if let Some(arr) = edits.as_array() {
-                out.changes.push((uri.clone(), parse_edits(arr)));
-            }
-        }
-    } else if let Some(docs) = result.get("documentChanges").and_then(|d| d.as_array()) {
+        |arr: &[Value]| -> Vec<TextEdit> { arr.iter().filter_map(parse_text_edit).collect() };
+    // `documentChanges` is preferred (it has versions); fall back to the version-less `changes`.
+    if let Some(docs) = result.get("documentChanges").and_then(|d| d.as_array()) {
         for doc in docs {
-            let uri = doc
-                .get("textDocument")
-                .and_then(|t| t.get("uri"))
-                .and_then(|u| u.as_str());
+            let td = doc.get("textDocument");
+            let uri = td.and_then(|t| t.get("uri")).and_then(|u| u.as_str());
             let edits = doc.get("edits").and_then(|e| e.as_array());
             if let (Some(uri), Some(edits)) = (uri, edits) {
-                out.changes.push((uri.to_string(), parse_edits(edits)));
+                out.changes.push(DocEdit {
+                    uri: uri.to_string(),
+                    // `version` may be a number or null (OptionalVersionedTextDocumentIdentifier).
+                    version: td.and_then(|t| t.get("version")).and_then(|v| v.as_i64()),
+                    edits: parse_edits(edits),
+                });
+            }
+        }
+    } else if let Some(changes) = result.get("changes").and_then(|c| c.as_object()) {
+        for (uri, edits) in changes {
+            if let Some(arr) = edits.as_array() {
+                out.changes.push(DocEdit {
+                    uri: uri.clone(),
+                    version: None,
+                    edits: parse_edits(arr),
+                });
             }
         }
     }

@@ -549,6 +549,12 @@ impl LspManager {
         self.state.clear();
     }
 
+    /// The last document version synced to the server for `uri`, if any — the baseline a
+    /// server-computed `WorkspaceEdit` must match to be safe to apply (§2.4).
+    pub fn doc_version(&self, uri: &str) -> Option<i64> {
+        self.versions.get(uri).copied()
+    }
+
     /// True if any server is configured (so the app knows whether to bother notifying).
     pub fn is_enabled(&self) -> bool {
         !self.servers.is_empty()
