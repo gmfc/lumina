@@ -221,6 +221,23 @@ pub enum Cap {
     DocumentHighlight,
     WorkspaceSymbol,
     CodeAction,
+    PullDiagnostics,
+}
+
+/// A `textDocument/diagnostic` (pull) report (§5.1). `Full` carries the fresh set; `Unchanged`
+/// means "keep what you already have". `result_id` (when present) is cached per URI and echoed as
+/// `previousResultId` on the next pull so the server can answer `Unchanged`.
+#[derive(Debug, Clone)]
+pub enum PullReport {
+    Full {
+        result_id: Option<String>,
+        diagnostics: Vec<Diagnostic>,
+        /// Original diagnostic JSON, in lockstep with `diagnostics` (see [`DiagnosticsUpdate::raw`]).
+        raw: Vec<serde_json::Value>,
+    },
+    Unchanged {
+        result_id: Option<String>,
+    },
 }
 
 /// A server command to run via `workspace/executeCommand`, or a VS Code client command emulated
@@ -282,6 +299,11 @@ pub struct ServerCaps {
     pub document_highlight: bool,
     pub workspace_symbol: bool,
     pub code_action: bool,
+    /// Pull diagnostics via `textDocument/diagnostic` (§5.1), gated on `diagnosticProvider`.
+    pub diagnostic: bool,
+    /// The `diagnosticProvider.identifier`, echoed back in each pull request (disambiguates
+    /// multiple diagnostic sources from one server); `None` when the server omitted it.
+    pub diagnostic_identifier: Option<String>,
     /// The command ids the server declared via `executeCommandProvider.commands` — only these may
     /// be sent to `workspace/executeCommand` (§8.4).
     pub execute_commands: Vec<String>,
@@ -304,6 +326,7 @@ impl ServerCaps {
             Cap::DocumentHighlight => self.document_highlight,
             Cap::WorkspaceSymbol => self.workspace_symbol,
             Cap::CodeAction => self.code_action,
+            Cap::PullDiagnostics => self.diagnostic,
         }
     }
 }

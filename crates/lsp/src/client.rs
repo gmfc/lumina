@@ -121,7 +121,8 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                     }
                 },
                 "rename": { "prepareSupport": false },
-                "formatting": {}
+                "formatting": {},
+                "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false }
             }
         }
     })
@@ -278,6 +279,25 @@ impl LspHandle {
                 "context": { "diagnostics": context_diagnostics, "triggerKind": 1 }
             }),
         )
+    }
+
+    /// Pull diagnostics for a document (§5.1). `identifier` echoes the server's
+    /// `diagnosticProvider.identifier`; `previous_result_id` is the last cached resultId, letting
+    /// the server answer `unchanged`. Both are omitted from the params when `None`.
+    pub fn diagnostic(
+        &self,
+        uri: &str,
+        identifier: Option<&str>,
+        previous_result_id: Option<&str>,
+    ) -> io::Result<i64> {
+        let mut params = json!({ "textDocument": { "uri": uri } });
+        if let Some(id) = identifier {
+            params["identifier"] = json!(id);
+        }
+        if let Some(rid) = previous_result_id {
+            params["previousResultId"] = json!(rid);
+        }
+        self.request("textDocument/diagnostic", params)
     }
 
     /// Request whole-document formatting; `tab_size`/`insert_spaces` come from buffer settings.

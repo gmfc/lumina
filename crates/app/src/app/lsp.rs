@@ -4,6 +4,10 @@
 
 use super::*;
 
+/// Quiet period after the last edit before a diagnostics pull fires (§5.1) — avoids a pull per
+/// keystroke while typing.
+const PULL_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
+
 impl App {
     /// Notify the LSP of every open document's opens/changes (debounced by revision). The server
     /// mirror must know about **all** open buffers, not just the focused one, so cross-file
@@ -54,6 +58,27 @@ impl App {
                     }
                 }
                 _ => {}
+            }
+            // Debounced diagnostics pull (§5.1): only for servers that declared pull. Re-arm the
+            // timer on each revision change; fire once the buffer has been quiet for PULL_DEBOUNCE.
+            // Push-diagnostic servers never enter here (the gate is off), so nothing double-fires.
+            if self.lsp.supports_pull(&lang)
+                && self.lsp_pulled_revision.get(&id).copied() != Some(rev)
+            {
+                let now = std::time::Instant::now();
+                match self.lsp_pull_deadline.get(&id).copied() {
+                    Some((armed_rev, fire_at)) if armed_rev == rev => {
+                        if now >= fire_at && self.lsp.request_pull_diagnostics(&path, &lang) {
+                            self.lsp_pulled_revision.insert(id, rev);
+                            self.lsp_pull_deadline.remove(&id);
+                        }
+                    }
+                    // First sight of this revision (or the previous arm was for an older one) → arm.
+                    _ => {
+                        self.lsp_pull_deadline
+                            .insert(id, (rev, now + PULL_DEBOUNCE));
+                    }
+                }
             }
         }
     }
@@ -186,7 +211,8 @@ impl App {
             LspEvent::ServerExited { lang } => {
                 // The server (for this language) exited. Forget which docs we've synced so that,
                 // once it restarts, `update_lsp` re-sends `didOpen` for each (resync, §3.9). The
-                // per-doc version counter is not reset — versions stay monotonic.
+                // per-doc version counter is not reset — versions stay monotonic. Also drop the
+                // diagnostics-pull bookkeeping so the docs re-pull after the restart.
                 let ids: Vec<editor_core::DocId> = self
                     .editor
                     .workspace
@@ -197,6 +223,25 @@ impl App {
                     .collect();
                 for id in ids {
                     self.lsp_sent_revision.remove(&id);
+                    self.lsp_pulled_revision.remove(&id);
+                    self.lsp_pull_deadline.remove(&id);
+                }
+            }
+            LspEvent::DiagnosticsRefresh { lang } => {
+                // The server asked for a re-pull (its resultIds were already dropped manager-side).
+                // Clear the per-doc pull bookkeeping for this language so `update_lsp` re-arms and
+                // fires a fresh full pull for each of its open docs.
+                let ids: Vec<editor_core::DocId> = self
+                    .editor
+                    .workspace
+                    .documents
+                    .iter()
+                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
+                    .map(|(id, _)| id)
+                    .collect();
+                for id in ids {
+                    self.lsp_pulled_revision.remove(&id);
+                    self.lsp_pull_deadline.remove(&id);
                 }
             }
             LspEvent::ServerRequest {

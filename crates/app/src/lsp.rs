@@ -12,13 +12,14 @@ use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
     parse_capabilities, parse_code_actions, parse_completion,
-    parse_completion_item_additional_edits, parse_document_highlights, parse_document_symbols,
-    parse_hover, parse_locations, parse_signature_help, parse_text_edits, parse_workspace_edit,
-    parse_workspace_symbols,
+    parse_completion_item_additional_edits, parse_diagnostic_report, parse_document_highlights,
+    parse_document_symbols, parse_hover, parse_locations, parse_signature_help, parse_text_edits,
+    parse_workspace_edit, parse_workspace_symbols,
 };
 use editor_lsp::{
     Cap, CodeAction, CompletionList, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
-    Incoming, Location, LspClient, LspHandle, ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
+    Incoming, Location, LspClient, LspHandle, PullReport, ServerCaps, SignatureHelp, TextEdit,
+    WorkspaceEdit,
 };
 
 mod requests;
@@ -38,6 +39,7 @@ enum Pending {
     WorkspaceSymbols,
     CodeAction,
     ResolveCompletion,
+    Diagnostic,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -130,6 +132,11 @@ pub enum LspEvent {
     Highlights(Vec<DocumentHighlight>),
     /// Code actions offered for the cursor/selection (title + edit).
     CodeActions(Vec<CodeAction>),
+    /// The server asked (`workspace/diagnostic/refresh`) that pulled diagnostics be recomputed;
+    /// the app re-arms its debounced pull for that language's open docs.
+    DiagnosticsRefresh {
+        lang: String,
+    },
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -183,6 +190,9 @@ pub struct LspManager {
     /// diagnostics overlapping its range into `context.diagnostics` (§6.1). Replaced on each
     /// publish; cleared on close/crash.
     diag_raw: HashMap<String, Vec<serde_json::Value>>,
+    /// The last pull-diagnostics `resultId` per document URI, echoed as `previousResultId` so the
+    /// server can answer `unchanged` (§5.1). Dropped on close/crash/refresh.
+    diag_result_id: HashMap<String, String>,
     /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
     crash_times: HashMap<String, Vec<Instant>>,
     /// Earliest instant a language may be respawned, enforcing restart backoff.
@@ -212,6 +222,7 @@ impl LspManager {
             open_docs: HashMap::new(),
             published: HashMap::new(),
             diag_raw: HashMap::new(),
+            diag_result_id: HashMap::new(),
             crash_times: HashMap::new(),
             restart_after: HashMap::new(),
             root_uri: uri_for(root),
@@ -308,7 +319,14 @@ impl LspManager {
                     if superseded || current != entry.version {
                         continue;
                     }
-                    out.extend(response_event(entry.kind, &entry.uri, &result));
+                    // A pull-diagnostics report caches its resultId and reuses the push path (so it
+                    // updates the same diagnostics model + raw snapshot); everything else maps
+                    // straight to an event.
+                    if entry.kind == Pending::Diagnostic {
+                        self.handle_pull_report(&entry.uri, &lang, &result, &mut out);
+                    } else {
+                        out.extend(response_event(entry.kind, &entry.uri, &result));
+                    }
                 }
                 Incoming::ServerRequest { id, method, params } => {
                     // Every server→client request MUST be answered (§1.3) — silence deadlocks
@@ -327,9 +345,15 @@ impl LspManager {
                         | "window/workDoneProgress/create"
                         | "workspace/semanticTokens/refresh"
                         | "workspace/inlayHint/refresh"
-                        | "workspace/codeLens/refresh"
-                        | "workspace/diagnostic/refresh" => {
+                        | "workspace/codeLens/refresh" => {
                             self.respond(&lang, &id, serde_json::Value::Null)
+                        }
+                        "workspace/diagnostic/refresh" => {
+                            // Ack, then drop cached resultIds (forcing a full re-pull) and tell the
+                            // app to re-arm its debounced pull for this language's docs (§5.1).
+                            self.respond(&lang, &id, serde_json::Value::Null);
+                            self.diag_result_id.clear();
+                            out.push(LspEvent::DiagnosticsRefresh { lang: lang.clone() });
                         }
                         "workspace/applyEdit"
                         | "window/showMessageRequest"
@@ -358,6 +382,55 @@ impl LspManager {
             }
         }
         out
+    }
+
+    /// Turn a pull-diagnostics report into the same bookkeeping + event a push would produce
+    /// (§5.1). A `full` report replaces the URI's diagnostics (and raw snapshot) and caches its
+    /// resultId; an `unchanged` report only refreshes the cached resultId (the UI keeps what it
+    /// has). Reusing the push path means pulled diagnostics render + feed codeAction context
+    /// identically.
+    fn handle_pull_report(
+        &mut self,
+        uri: &str,
+        lang: &str,
+        result: &serde_json::Value,
+        out: &mut Vec<LspEvent>,
+    ) {
+        match parse_diagnostic_report(result) {
+            PullReport::Full {
+                result_id,
+                diagnostics,
+                raw,
+            } => {
+                match result_id {
+                    Some(rid) => {
+                        self.diag_result_id.insert(uri.to_string(), rid);
+                    }
+                    None => {
+                        self.diag_result_id.remove(uri);
+                    }
+                }
+                self.published
+                    .entry(lang.to_string())
+                    .or_default()
+                    .insert(uri.to_string());
+                if raw.is_empty() {
+                    self.diag_raw.remove(uri);
+                } else {
+                    self.diag_raw.insert(uri.to_string(), raw.clone());
+                }
+                out.push(LspEvent::Diagnostics(DiagnosticsUpdate {
+                    uri: uri.to_string(),
+                    diagnostics,
+                    raw,
+                }));
+            }
+            PullReport::Unchanged { result_id } => {
+                if let Some(rid) = result_id {
+                    self.diag_result_id.insert(uri.to_string(), rid);
+                }
+            }
+        }
     }
 
     /// Answer a server→client request for `language`, echoing its raw `id`. Public so the app
@@ -392,10 +465,12 @@ impl LspManager {
         // replays didOpen for its docs on resync).
         self.open_docs.remove(lang);
 
-        // Clear this server's stale diagnostics from the UI (and forget their raw snapshots).
+        // Clear this server's stale diagnostics from the UI (and forget their raw + resultId
+        // caches — the restarted server recomputes from scratch).
         if let Some(uris) = self.published.remove(lang) {
             for uri in uris {
                 self.diag_raw.remove(&uri);
+                self.diag_result_id.remove(&uri);
                 out.push(LspEvent::Diagnostics(DiagnosticsUpdate {
                     uri,
                     diagnostics: Vec::new(),
@@ -550,6 +625,7 @@ impl LspManager {
         let uri = uri_for(path);
         self.versions.remove(&uri);
         self.diag_raw.remove(&uri);
+        self.diag_result_id.remove(&uri);
         if let Some(p) = self.published.get_mut(language) {
             p.remove(&uri);
         }
@@ -609,6 +685,12 @@ impl LspManager {
     pub fn is_enabled(&self) -> bool {
         !self.servers.is_empty()
     }
+
+    /// Whether `language`'s server is `Running` and advertised pull diagnostics (§5.1) — the gate
+    /// for the app's debounced `textDocument/diagnostic` polling.
+    pub fn supports_pull(&self, language: &str) -> bool {
+        self.request_allowed(language, Cap::PullDiagnostics)
+    }
 }
 
 /// Interpret a successful response `result` against the request `kind` that produced it. Returns
@@ -638,6 +720,8 @@ fn response_event(kind: Pending, uri: &str, result: &serde_json::Value) -> Optio
         // Always emit (even empty) so highlights clear when the cursor leaves a symbol.
         Pending::DocumentHighlight => LspEvent::Highlights(parse_document_highlights(result)),
         Pending::CodeAction => LspEvent::CodeActions(parse_code_actions(result)),
+        // Pull-diagnostics reports are handled in `poll` (they need the resultId cache), never here.
+        Pending::Diagnostic => return None,
     })
 }
 
@@ -1194,6 +1278,106 @@ mod tests {
         );
         let _ = mgr.poll();
         assert!(mgr.context_diagnostics(uri, (1, 6), (1, 6)).is_empty());
+    }
+
+    #[test]
+    fn pull_full_report_publishes_and_caches_result_id() {
+        // A full pull report reuses the push path: it emits a Diagnostics event, caches the
+        // resultId for the next `previousResultId`, and snapshots the raw for codeAction context.
+        let mut mgr = manager();
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::Diagnostic));
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!({
+                    "kind":"full","resultId":"r1",
+                    "items":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},
+                              "severity":1,"message":"boom","data":{"fix":1}}]
+                }),
+                error: None,
+            },
+        );
+        let events = mgr.poll();
+        assert!(
+            events.iter().any(
+                |e| matches!(e, LspEvent::Diagnostics(u) if u.uri == "file:///x.rs" && u.diagnostics.len() == 1)
+            ),
+            "full pull report did not publish diagnostics"
+        );
+        assert_eq!(
+            mgr.diag_result_id.get("file:///x.rs").map(String::as_str),
+            Some("r1")
+        );
+        // The raw snapshot feeds codeAction context at the diagnostic's position.
+        assert_eq!(
+            mgr.context_diagnostics("file:///x.rs", (0, 0), (0, 0))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn pull_unchanged_report_keeps_diagnostics_and_updates_result_id() {
+        // An `unchanged` report emits no event and preserves the existing raw snapshot; only the
+        // cached resultId advances.
+        let mut mgr = manager();
+        mgr.diag_raw.insert(
+            "file:///x.rs".into(),
+            vec![serde_json::json!({"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}})],
+        );
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::Diagnostic));
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!({ "kind":"unchanged", "resultId":"r2" }),
+                error: None,
+            },
+        );
+        let events = mgr.poll();
+        assert!(
+            !events.iter().any(|e| matches!(e, LspEvent::Diagnostics(_))),
+            "unchanged report should emit no diagnostics event"
+        );
+        assert_eq!(
+            mgr.diag_result_id.get("file:///x.rs").map(String::as_str),
+            Some("r2")
+        );
+        assert!(
+            mgr.diag_raw.contains_key("file:///x.rs"),
+            "unchanged report must keep the existing raw snapshot"
+        );
+    }
+
+    #[test]
+    fn diagnostic_refresh_drops_result_ids_and_emits_refresh() {
+        // `workspace/diagnostic/refresh` is answered, drops cached resultIds (forcing a full
+        // re-pull), and surfaces a DiagnosticsRefresh so the app re-arms its debounced pull.
+        let mut mgr = manager();
+        mgr.diag_result_id
+            .insert("file:///x.rs".into(), "r1".into());
+        feed(
+            &mgr,
+            "rust",
+            Incoming::ServerRequest {
+                id: serde_json::json!(7),
+                method: "workspace/diagnostic/refresh".into(),
+                params: serde_json::json!({}),
+            },
+        );
+        let events = mgr.poll();
+        assert!(mgr.diag_result_id.is_empty(), "resultIds were not dropped");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LspEvent::DiagnosticsRefresh { lang } if lang == "rust")),
+            "refresh did not surface a DiagnosticsRefresh event"
+        );
     }
 
     #[test]

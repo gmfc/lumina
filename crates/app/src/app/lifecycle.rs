@@ -117,6 +117,8 @@ impl App {
             follow_mode,
             lsp,
             lsp_sent_revision: std::collections::HashMap::new(),
+            lsp_pulled_revision: std::collections::HashMap::new(),
+            lsp_pull_deadline: std::collections::HashMap::new(),
             last_active: None,
             closed_tabs: Vec::new(),
             settings: None,

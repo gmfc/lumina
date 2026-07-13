@@ -67,6 +67,12 @@ pub struct App {
     lsp: crate::lsp::LspManager,
     /// Last document revision sent to the LSP, per DocId (change debounce).
     lsp_sent_revision: std::collections::HashMap<editor_core::DocId, u64>,
+    /// Last document revision a diagnostics pull was issued for, per DocId (§5.1). Avoids
+    /// re-pulling an unchanged buffer every tick.
+    lsp_pulled_revision: std::collections::HashMap<editor_core::DocId, u64>,
+    /// Debounce timer for the diagnostics pull, per DocId: `(revision, fire_at)`. Re-armed on
+    /// every revision change so the pull fires only once the buffer has been quiet.
+    lsp_pull_deadline: std::collections::HashMap<editor_core::DocId, (u64, std::time::Instant)>,
     /// The doc that was active on the previous tick, to emit `DidChangeActive` on a tab switch.
     last_active: Option<editor_core::DocId>,
     /// Paths of recently closed tabs, newest last — the "reopen closed editor" stack.

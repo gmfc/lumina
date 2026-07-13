@@ -102,6 +102,57 @@ fn diagnostic_parses_source_and_code_forms() {
 }
 
 #[test]
+fn parses_diagnostic_provider_capability() {
+    let caps = serde_json::json!({
+        "capabilities": { "diagnosticProvider": { "identifier": "rustc", "interFileDependencies": true } }
+    });
+    let c = parse_capabilities(&caps);
+    assert!(c.diagnostic);
+    assert_eq!(c.diagnostic_identifier.as_deref(), Some("rustc"));
+    // Absent provider → no pull, no identifier.
+    let none = parse_capabilities(&serde_json::json!({ "capabilities": {} }));
+    assert!(!none.diagnostic);
+    assert!(none.diagnostic_identifier.is_none());
+}
+
+#[test]
+fn parses_full_and_unchanged_pull_reports() {
+    use crate::PullReport;
+    // A `full` report carries fresh items (+ raw preserved) and a resultId to cache.
+    let full = serde_json::json!({
+        "kind": "full",
+        "resultId": "r1",
+        "items": [
+            {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},
+             "severity":1,"message":"boom","data":{"k":1}}
+        ]
+    });
+    match parse_diagnostic_report(&full) {
+        PullReport::Full {
+            result_id,
+            diagnostics,
+            raw,
+        } => {
+            assert_eq!(result_id.as_deref(), Some("r1"));
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(raw.len(), 1);
+            assert!(raw[0].get("data").is_some());
+        }
+        _ => panic!("expected a full report"),
+    }
+    // An `unchanged` report carries only a resultId; the client keeps its current diagnostics.
+    match parse_diagnostic_report(&serde_json::json!({ "kind": "unchanged", "resultId": "r2" })) {
+        PullReport::Unchanged { result_id } => assert_eq!(result_id.as_deref(), Some("r2")),
+        _ => panic!("expected an unchanged report"),
+    }
+    // A bare `null` result → an empty full report (clears diagnostics).
+    match parse_diagnostic_report(&serde_json::Value::Null) {
+        PullReport::Full { diagnostics, .. } => assert!(diagnostics.is_empty()),
+        _ => panic!("null should read as an empty full report"),
+    }
+}
+
+#[test]
 fn classify_distinguishes_notification_and_response() {
     let notif = serde_json::from_str::<Value>(
         r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///a","diagnostics":[]}}"#,
@@ -588,5 +639,10 @@ fn initialize_params_are_honest_and_complete() {
     assert_eq!(
         p["capabilities"]["textDocument"]["definition"]["linkSupport"],
         true
+    );
+    // Pull diagnostics declared, honestly without related-document support (we don't render it).
+    assert_eq!(
+        p["capabilities"]["textDocument"]["diagnostic"]["relatedDocumentSupport"],
+        false
     );
 }
