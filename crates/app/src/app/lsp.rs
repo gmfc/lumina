@@ -208,6 +208,18 @@ impl App {
             LspEvent::Message(text) => {
                 self.editor.status_message = Some(format!("LSP: {text}"));
             }
+            LspEvent::Progress(line) => {
+                // Store the rendered work-done progress as a statusline item (spinner added at
+                // render); an empty update clears it (§1.5).
+                match line {
+                    Some(line) => {
+                        self.editor.status_items.insert("lsp.progress".into(), line);
+                    }
+                    None => {
+                        self.editor.status_items.remove("lsp.progress");
+                    }
+                }
+            }
             LspEvent::ServerExited { lang } => {
                 // The server (for this language) exited. Forget which docs we've synced so that,
                 // once it restarts, `update_lsp` re-sends `didOpen` for each (resync, §3.9). The

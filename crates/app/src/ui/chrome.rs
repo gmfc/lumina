@@ -262,6 +262,18 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         left = format!("{badge}{}", left.trim_start());
     }
 
+    // LSP work-done progress (§1.5): an animated spinner + the active operation, shown just left
+    // of the position cluster so it stays visible during indexing. Truncated to keep the bar sane.
+    if let Some(prog) = app
+        .editor
+        .status_items
+        .get("lsp.progress")
+        .filter(|s| !s.is_empty())
+    {
+        let text: String = prog.replace('\n', " ").chars().take(48).collect();
+        right = format!("{} {text}   {right}", spinner_frame());
+    }
+
     let bg = Style::default().bg(CLR_ACCENT).fg(Color::Black);
     let pad = (area.width as usize).saturating_sub(display_len(&left) + display_len(&right));
     let line = Line::from(vec![
@@ -270,4 +282,15 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         TSpan::styled(right, bg),
     ]);
     f.render_widget(Paragraph::new(line).style(bg), area);
+}
+
+/// The current Braille spinner frame, advanced ~10×/s off a process-wide start instant (the run
+/// loop redraws each ~16 ms, so it animates without any per-tick state to thread through).
+fn spinner_frame() -> char {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    static START: OnceLock<Instant> = OnceLock::new();
+    let i = (START.get_or_init(Instant::now).elapsed().as_millis() / 100) as usize % FRAMES.len();
+    FRAMES[i]
 }

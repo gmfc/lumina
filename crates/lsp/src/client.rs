@@ -104,6 +104,7 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
         "trace": "off",
         "capabilities": {
             "general": { "positionEncodings": ["utf-16"] },
+            "window": { "workDoneProgress": true },
             "textDocument": {
                 "publishDiagnostics": { "relatedInformation": false },
                 "hover": { "contentFormat": ["plaintext"] },
