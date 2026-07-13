@@ -105,12 +105,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// Rows the terminal dock occupies in the body: 0 when closed, 1 when minimized (header only),
 /// else `height + 1` (header + content), always leaving at least one row for the editor.
 fn terminal_panel_rows(app: &App, body_height: u16) -> u16 {
-    if !app.panel.open || body_height <= 1 {
+    let view = &app.editor.terminal_view;
+    if !view.open || body_height <= 1 {
         0
-    } else if app.panel.minimized {
+    } else if view.minimized {
         1
     } else {
-        (app.panel.height + 1).min(body_height.saturating_sub(1))
+        (app.editor.terminal_height + 1).min(body_height.saturating_sub(1))
     }
 }
 

@@ -60,6 +60,6 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(diagnostics::DiagnosticsPlugin::default()),
         Box::new(completion::CompletionPlugin::default()),
         Box::new(clipboard::ClipboardPlugin),
-        Box::new(terminal::TerminalPlugin),
+        Box::new(terminal::TerminalPlugin::default()),
     ]
 }

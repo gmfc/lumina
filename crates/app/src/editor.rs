@@ -67,9 +67,21 @@ pub struct EditorState {
     /// Mirror of `App.lsp.is_enabled()` so `Host::lsp_enabled` can answer across the split-borrow
     /// wall. Set at construction / config reload (the server set is config-stable per session).
     pub lsp_enabled: bool,
-    /// Terminal-dock lifecycle actions queued via `Host::terminal_op`; the app applies them to the
-    /// (app-owned) PTY panel on the next drain (effect-queue idiom).
-    pub pending_terminal_ops: Vec<editor_plugin::TerminalOp>,
+    /// The app-owned PTY sessions, keyed by the `TerminalId` the `terminal` plugin allocated via
+    /// `Host::terminal_open`. The plugin owns the dock lifecycle (which ids, order, active); this
+    /// map owns the concrete vt100/pty state the app feeds, resizes, and renders.
+    pub terminals: HashMap<editor_plugin::TerminalId, crate::terminal::Terminal>,
+    /// Monotonic allocator for `TerminalId`s.
+    pub next_terminal_id: u64,
+    /// The dock lifecycle the `terminal` plugin publishes via `Host::set_terminal_view`; the pure
+    /// renderer + key/mouse routing read it (invariant #8).
+    pub terminal_view: editor_plugin::TerminalView,
+    /// Resolved default shell for new terminals (from `config.terminal_shell`), so the Host can
+    /// spawn without reaching `App.config`. Set at construction / config reload.
+    pub terminal_shell: String,
+    /// Dock content height (rows) when expanded, from `config.terminal_height`. App-owned render
+    /// param (not part of the plugin's lifecycle), fed to the layout.
+    pub terminal_height: u16,
     /// Active modal overlay, if any.
     pub overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
@@ -123,7 +135,11 @@ impl EditorState {
             pending_theme_toggle: false,
             pending_lsp_requests: Vec::new(),
             lsp_enabled: false,
-            pending_terminal_ops: Vec::new(),
+            terminals: HashMap::new(),
+            next_terminal_id: 1,
+            terminal_view: editor_plugin::TerminalView::default(),
+            terminal_shell: crate::terminal::default_shell(None),
+            terminal_height: 12,
             overlay: None,
             highlighters: HashMap::new(),
             decorations: HashMap::new(),
@@ -403,8 +419,28 @@ impl Host for EditorState {
             .unwrap_or(0)
     }
 
-    fn terminal_op(&mut self, op: editor_plugin::TerminalOp) {
-        self.pending_terminal_ops.push(op);
+    fn terminal_open(&mut self, cwd: &Path) -> Option<editor_plugin::TerminalId> {
+        let tx = self.job_tx.clone()?;
+        let id = editor_plugin::TerminalId(self.next_terminal_id);
+        // Spawn at a default size; the app resizes to the drawn region on the next frame
+        // (`sync_terminals`), so this is corrected before the terminal is first shown.
+        let term = crate::terminal::Terminal::new(id.0, cwd, &self.terminal_shell, 24, 80, tx)?;
+        self.next_terminal_id += 1;
+        self.terminals.insert(id, term);
+        Some(id)
+    }
+
+    fn terminal_close(&mut self, id: editor_plugin::TerminalId) {
+        // Dropping the `Terminal` kills the shell + reaps the child.
+        self.terminals.remove(&id);
+    }
+
+    fn set_terminal_view(&mut self, view: editor_plugin::TerminalView) {
+        self.terminal_view = view;
+    }
+
+    fn set_terminal_focus(&mut self, focused: bool) {
+        self.focus = if focused { Focus::Panel } else { Focus::Editor };
     }
 
     fn clipboard_read(&mut self) -> String {

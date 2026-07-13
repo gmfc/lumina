@@ -195,9 +195,23 @@ pub trait Host {
         0
     }
 
-    /// Perform a terminal-dock lifecycle action. The app owns the PTY/vt100/render machinery; the
-    /// plugin only expresses intent, applied on the next drain (effect-queue). Default no-op.
-    fn terminal_op(&mut self, _op: crate::terminal::TerminalOp) {}
+    /// Spawn a PTY terminal rooted at `cwd` and return its [`crate::terminal::TerminalId`], or
+    /// `None` if a shell couldn't be started. The app owns the concrete PTY/vt100 session (keyed by
+    /// the returned id); the plugin only tracks the id in its dock lifecycle. Default `None`.
+    fn terminal_open(&mut self, _cwd: &Path) -> Option<crate::terminal::TerminalId> {
+        None
+    }
+
+    /// Close (and kill) the PTY terminal with `id`. Default no-op.
+    fn terminal_close(&mut self, _id: crate::terminal::TerminalId) {}
+
+    /// Publish the terminal dock lifecycle (open/minimized/active/tab-order) for the app to render.
+    /// A pure mirror the renderer reads, like `set_decorations`/`set_popup`. Default no-op.
+    fn set_terminal_view(&mut self, _view: crate::terminal::TerminalView) {}
+
+    /// Move keyboard focus to the terminal dock (`true`) or back to the editor (`false`). Focus is
+    /// app-owned; the terminal plugin drives it as it opens/closes the dock. Default no-op.
+    fn set_terminal_focus(&mut self, _focused: bool) {}
 
     /// Open `path` and place the caret at the LSP `(line, character)` (a UTF-16 column), resolved
     /// to a char offset app-side once the document is open. The app owns file IO, so this is a

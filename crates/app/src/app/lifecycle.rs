@@ -59,7 +59,10 @@ impl App {
         theme.load_user_overrides();
 
         editor.sidebar_width = config.sidebar_width;
-        let panel = crate::terminal::TerminalPanel::new(config.terminal_height);
+        // The terminal dock lifecycle lives in the `terminal` plugin; the app keeps the PTY
+        // sessions on `EditorState`. Seed the render height + default shell from config.
+        editor.terminal_height = config.terminal_height.clamp(3, 60);
+        editor.terminal_shell = crate::terminal::default_shell(config.terminal_shell.as_deref());
         let follow_mode = config.follow_mode;
         let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
         // Mirror LSP availability onto EditorState so the `lsp` plugin can no-op through
@@ -109,7 +112,6 @@ impl App {
             follow_mode,
             lsp,
             lsp_sent_revision: std::collections::HashMap::new(),
-            panel,
             closed_tabs: Vec::new(),
             settings: None,
             settings_doc: None,
@@ -120,7 +122,9 @@ impl App {
     pub(super) fn reload_config(&mut self) {
         self.config = crate::config::Config::load();
         self.editor.sidebar_width = self.config.sidebar_width;
-        self.panel.height = self.config.terminal_height.clamp(3, 60);
+        self.editor.terminal_height = self.config.terminal_height.clamp(3, 60);
+        self.editor.terminal_shell =
+            crate::terminal::default_shell(self.config.terminal_shell.as_deref());
         self.keymap = build_keymap(&self.config, &self.registry);
         // Reconcile the Vim layer with the reloaded config, preserving it if already on.
         if self.config.vim && self.editor.vim.is_none() {

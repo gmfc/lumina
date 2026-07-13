@@ -153,8 +153,9 @@ impl App {
     /// are still honored, so there is always a keyboard way to close / switch / minimize the
     /// panel from inside it; everything else becomes shell input. Returns `true` when handled.
     pub(super) fn handle_terminal_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let view = &self.editor.terminal_view;
         // A focused-but-empty or collapsed panel shouldn't hold the keyboard.
-        if self.panel.active_terminal().is_none() || !self.panel.open || self.panel.minimized {
+        if self.active_terminal().is_none() || !view.open || view.minimized {
             self.editor.focus = Focus::Editor;
             return false;
         }
@@ -169,12 +170,11 @@ impl App {
             }
         }
         let app_cursor = self
-            .panel
             .active_terminal()
             .map(|t| t.application_cursor())
             .unwrap_or(false);
         if let Some(bytes) = crate::terminal::key_to_bytes(&key, app_cursor) {
-            if let Some(t) = self.panel.active_terminal_mut() {
+            if let Some(t) = self.active_terminal_mut() {
                 t.send_input(&bytes);
             }
         }
@@ -185,8 +185,9 @@ impl App {
     /// payload arrives with the event (it isn't the clipboard), so it inserts directly through
     /// `Command::InsertText` — the `clipboard` plugin's `edit.paste` is for the ctrl+v register.
     pub(super) fn on_paste(&mut self, s: String) {
-        if self.editor.focus == Focus::Panel && self.panel.open && !self.panel.minimized {
-            if let Some(t) = self.panel.active_terminal_mut() {
+        let view = &self.editor.terminal_view;
+        if self.editor.focus == Focus::Panel && view.open && !view.minimized {
+            if let Some(t) = self.active_terminal_mut() {
                 t.send_input(s.as_bytes());
                 return;
             }

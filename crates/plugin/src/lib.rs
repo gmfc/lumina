@@ -37,4 +37,4 @@ pub use lsp::{
 pub use overlay::{Popup, PopupRow, Prompt, PromptField, PromptPlacement, PromptToggle};
 pub use picker::{CommandInfo, PickerItem, PickerRequest};
 pub use registry::{Plugin, Registry};
-pub use terminal::TerminalOp;
+pub use terminal::{TerminalId, TerminalView};
