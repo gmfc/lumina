@@ -225,6 +225,30 @@ pub trait Host {
     /// plugin publishes into it through here. Default no-op.
     fn show_info(&mut self, _text: String) {}
 
+    /// The editor's visible height in text rows — the viewport the app laid out. A modal plugin
+    /// (vim) needs it for page motions (`H`/`M`/`L`, `Ctrl-d/u/f/b`) and recentering. Default `0`.
+    fn viewport_height(&self) -> usize {
+        0
+    }
+
+    /// Move the primary caret `delta` lines (down for positive, up for negative), preserving the
+    /// sticky goal column like the editor's own vertical motion; `extend` keeps the selection
+    /// anchor (visual mode). App-owned because goal-column state lives on the view. Default no-op.
+    fn move_lines(&mut self, _doc: DocId, _delta: isize, _extend: bool) {}
+
+    /// Scroll `doc` so `line` is the top visible line (vim's `z` recenter family). App-owned view
+    /// state. Default no-op.
+    fn set_scroll(&mut self, _doc: DocId, _line: usize) {}
+
+    /// Set a document's dirty flag — used only by vim's `:q!` to discard before closing. Default
+    /// no-op.
+    fn set_dirty(&mut self, _doc: DocId, _dirty: bool) {}
+
+    /// Publish (or clear with `None`) the Vim render mirror — the mode + pending hint the status
+    /// bar and visual-selection shading read (a pure function of state, invariant #8). Default
+    /// no-op.
+    fn set_vim_view(&mut self, _view: Option<crate::vim::VimView>) {}
+
     /// Apply a multi-file edit set (an LSP rename result). The app owns file IO + the UTF-16↔char
     /// mapping, so this is a deferred effect: it opens each file and applies the edits as
     /// history-recorded transactions on the next drain. Default no-op.

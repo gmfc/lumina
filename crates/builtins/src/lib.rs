@@ -28,6 +28,7 @@ pub mod project_search;
 pub mod rename;
 pub mod terminal;
 pub mod theme;
+pub mod vim;
 
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
 /// config can filter the list to disable any of them (the litmus test for self-hosting).
@@ -38,13 +39,13 @@ pub fn all_builtins() -> Vec<Box<dyn Plugin>> {
 /// Like [`all_builtins`], but with runtime options threaded in from user config (e.g. whether
 /// the explorer draws Nerd Font glyphs).
 pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
-    // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap). Extracted so
-    // far: the explorer, multi-cursor, git-change navigation, find/replace, the command palette +
-    // quick-open + goto-line, project search, the theme toggle, the LSP request commands,
-    // diagnostics, completion, clipboard copy/cut/paste, LSP navigation (goto/references/symbols
-    // responses) + hover + rename application, and the terminal-dock commands (all reach the editor
-    // only through `Host`). Still hardcoded in `editor-app`: the terminal PTY/vt100/render
-    // machinery, and vim.
+    // Feature-by-feature migration onto the plugin system (docs/AUDIT.md roadmap): every
+    // user-facing feature is now a plugin reaching the editor only through `Host` — the explorer,
+    // multi-cursor, git-change navigation, find/replace, the command palette + quick-open +
+    // goto-line, project search, the theme toggle, the LSP request commands, diagnostics,
+    // completion, clipboard copy/cut/paste, LSP navigation + hover + rename, the terminal dock, and
+    // the vim modal layer. `editor-app` keeps only the substrate: editing primitives, file/tab IO,
+    // the PTY/vt100 transport, the LSP client, and the pure renderer.
     vec![
         Box::new(explorer::ExplorerPlugin::new(icons)),
         Box::new(multicursor::MultiCursorPlugin),
@@ -61,5 +62,6 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(completion::CompletionPlugin::default()),
         Box::new(clipboard::ClipboardPlugin),
         Box::new(terminal::TerminalPlugin::default()),
+        Box::new(vim::VimPlugin::default()),
     ]
 }

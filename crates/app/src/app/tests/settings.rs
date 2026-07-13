@@ -80,7 +80,7 @@ fn vim_toggle_enables_modal_layer_live() {
     focus(&mut app, "vim");
     press(&mut app, KeyCode::Char(' '));
     assert!(app.config.vim);
-    assert!(app.editor.vim.is_some()); // applied live, not just persisted
+    assert!(app.editor.vim_view.is_some()); // applied live, not just persisted
     std::fs::remove_file(&file).ok();
     std::fs::remove_file(&cfg).ok();
 }

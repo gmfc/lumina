@@ -44,9 +44,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         // view.commandPalette / view.quickOpen / view.gotoLine titles come from the `palette` plugin.
         ("view.settings", "Preferences: Open Settings"),
         ("config.reload", "Preferences: Reload Configuration"),
-        ("vim.toggle", "Vim: Toggle Vim Mode"),
-        ("vim.enable", "Vim: Enable Vim Mode"),
-        ("vim.disable", "Vim: Disable Vim Mode"),
+        // vim.toggle/enable/disable titles come from the `vim` plugin via the registry.
         ("app.quit", "Quit"),
     ]
 }

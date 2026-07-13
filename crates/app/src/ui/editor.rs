@@ -108,11 +108,11 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
             None
         },
         vim_visual_char: matches!(
-            app.editor.vim.as_ref().map(|v| v.mode),
-            Some(crate::vim::Mode::Visual)
+            app.editor.vim_view.as_ref().map(|v| v.mode),
+            Some(editor_plugin::VimMode::Visual)
         ),
-        vim_visual_lines: match app.editor.vim.as_ref().map(|v| v.mode) {
-            Some(crate::vim::Mode::VisualLine) => {
+        vim_visual_lines: match app.editor.vim_view.as_ref().map(|v| v.mode) {
+            Some(editor_plugin::VimMode::VisualLine) => {
                 let p = doc.selections.primary();
                 let fl = doc.char_to_line(p.from());
                 let ll = doc.char_to_line(p.to());

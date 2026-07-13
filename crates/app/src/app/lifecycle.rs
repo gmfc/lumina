@@ -9,9 +9,6 @@ impl App {
         let (root, open_file) = resolve_arg(arg);
         let mut editor = EditorState::new(root);
         let config = crate::config::Config::load();
-        if config.vim {
-            editor.vim = Some(crate::vim::VimState::new());
-        }
 
         // Built-in plugins + any external (script) plugins from the plugins dirs. Both
         // register through the same Registry — the external tier has no special path.
@@ -23,6 +20,10 @@ impl App {
         plugins.retain(|p| config.is_plugin_enabled(p.id()));
         let mut registry = Registry::with_plugins(plugins);
         registry.activate_all(&mut editor);
+        // Turn the `vim` plugin on if the config asked for it (it owns the modal state now).
+        if config.vim {
+            registry.dispatch_command("vim.enable", &mut editor);
+        }
         // Mirror the command set onto EditorState so a palette plugin can enumerate it through
         // `Host::commands` (the registry is unreachable behind the split-borrow wall).
         editor.command_catalog = command_catalog(&registry);
@@ -126,12 +127,13 @@ impl App {
         self.editor.terminal_shell =
             crate::terminal::default_shell(self.config.terminal_shell.as_deref());
         self.keymap = build_keymap(&self.config, &self.registry);
-        // Reconcile the Vim layer with the reloaded config, preserving it if already on.
-        if self.config.vim && self.editor.vim.is_none() {
-            self.editor.vim = Some(crate::vim::VimState::new());
-        } else if !self.config.vim {
-            self.editor.vim = None;
-        }
+        // Reconcile the `vim` plugin with the reloaded config (enable is idempotent when on).
+        let vim_cmd = if self.config.vim {
+            "vim.enable"
+        } else {
+            "vim.disable"
+        };
+        self.registry.dispatch_command(vim_cmd, &mut self.editor);
         self.editor.status_message = Some("Configuration reloaded".into());
     }
 

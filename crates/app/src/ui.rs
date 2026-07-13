@@ -55,8 +55,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         (body, None)
     };
 
-    // Remember the editor viewport height for PageUp/PageDown next tick.
+    // Remember the editor viewport height for PageUp/PageDown next tick. Mirror it onto
+    // `EditorState` too, so the `vim` plugin can read it through `Host::viewport_height`.
     app.page_height = main_body.height.saturating_sub(0) as usize;
+    app.editor.page_height = app.page_height;
 
     let (editor_area, sidebar_area, sidebar_inner) = if app.editor.sidebar_visible {
         let [sidebar, editors] = Layout::horizontal([

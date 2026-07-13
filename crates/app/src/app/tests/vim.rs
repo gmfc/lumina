@@ -2,13 +2,13 @@
 //! path (the same seam the terminal loop uses).
 
 use super::*;
-use crate::vim::Mode;
+use editor_plugin::VimMode as Mode;
 
 /// An app with the Vim layer enabled on a scratch file.
 fn vim_app(contents: &str) -> (App, PathBuf) {
     let path = temp_file(contents);
     let mut app = app_with(&path);
-    app.set_vim(true);
+    app.exec_id("vim.enable");
     app.editor.active_document_mut().unwrap().set_caret(0);
     (app, path)
 }
@@ -47,7 +47,7 @@ fn head(app: &App) -> usize {
 }
 
 fn mode(app: &App) -> Mode {
-    app.editor.vim.as_ref().unwrap().mode
+    app.editor.vim_view.as_ref().unwrap().mode
 }
 
 #[test]
@@ -387,8 +387,8 @@ fn indent_operator_on_line() {
 #[test]
 fn disabling_vim_restores_plain_typing() {
     let (mut app, path) = vim_app("x");
-    app.set_vim(false);
-    assert!(app.editor.vim.is_none());
+    app.exec_id("vim.disable");
+    assert!(app.editor.vim_view.is_none());
     // With Vim off, a plain char inserts again.
     keys(&mut app, "y");
     assert!(text(&app).contains('y'));
@@ -399,15 +399,15 @@ fn disabling_vim_restores_plain_typing() {
 fn toggle_commands_enable_and_disable() {
     let path = temp_file("hello");
     let mut app = app_with(&path); // Vim off by default
-    assert!(app.editor.vim.is_none());
+    assert!(app.editor.vim_view.is_none());
     app.exec_id("vim.enable");
-    assert!(app.editor.vim.is_some());
+    assert!(app.editor.vim_view.is_some());
     app.exec_id("vim.toggle"); // toggles off
-    assert!(app.editor.vim.is_none());
+    assert!(app.editor.vim_view.is_none());
     app.exec_id("vim.toggle"); // toggles on
-    assert!(app.editor.vim.is_some());
+    assert!(app.editor.vim_view.is_some());
     app.exec_id("vim.disable");
-    assert!(app.editor.vim.is_none());
+    assert!(app.editor.vim_view.is_none());
     std::fs::remove_file(&path).ok();
 }
 

@@ -62,6 +62,10 @@ const COMPLETION_COMMAND: &str = "lsp.completion";
 const CLIPBOARD_ID: &str = "clipboard";
 const CLIPBOARD_COMMAND: &str = "edit.paste";
 
+// The vim modal layer (owns vim.enable/disable/toggle; intercepts keys via capture_key).
+const VIM_ID: &str = "vim";
+const VIM_COMMAND: &str = "vim.toggle";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -307,6 +311,24 @@ fn clipboard_contributes_through_the_public_api() {
     // Disabling clipboard must leave unrelated plugins' commands intact.
     assert!(reduced.command_ids().any(|id| id == COMPLETION_COMMAND));
     assert!(reduced.command_ids().any(|id| id == EXPLORER_COMMAND));
+}
+
+#[test]
+fn vim_contributes_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.command_ids().any(|id| id == VIM_COMMAND),
+        "vim.toggle missing — is the modal layer wired as a plugin?"
+    );
+    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != VIM_ID));
+    for id in ["vim.enable", "vim.disable", "vim.toggle"] {
+        assert!(
+            !reduced.command_ids().any(|c| c == id),
+            "`{id}` still present after disabling vim — it is hardcoded, not a plugin"
+        );
+    }
+    // Disabling vim leaves unrelated plugins' commands intact.
+    assert!(reduced.command_ids().any(|id| id == CLIPBOARD_COMMAND));
 }
 
 #[test]
