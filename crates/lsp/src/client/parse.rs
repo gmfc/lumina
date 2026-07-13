@@ -6,8 +6,8 @@
 use serde_json::Value;
 
 use crate::{
-    CodeAction, Command, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate, DocEdit,
-    DocumentHighlight, DocumentSymbol, InlayHint, Location, PositionEncoding, PullReport,
+    CodeAction, CodeLens, Command, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate,
+    DocEdit, DocumentHighlight, DocumentSymbol, InlayHint, Location, PositionEncoding, PullReport,
     SemanticLegend, SemanticToken, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit,
     WorkspaceEdit,
 };
@@ -76,6 +76,12 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
             .map(parse_semantic_legend)
             .unwrap_or_default(),
         inlay_hint: present("inlayHintProvider"),
+        code_lens: present("codeLensProvider"),
+        code_lens_resolve: caps
+            .get("codeLensProvider")
+            .and_then(|p| p.get("resolveProvider"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         execute_commands: caps
             .get("executeCommandProvider")
             .and_then(|e| e.get("commands"))
@@ -519,6 +525,35 @@ pub fn parse_diagnostic_report(result: &Value) -> PullReport {
         diagnostics,
         raw,
     }
+}
+
+/// Parse one `CodeLens` object into the model (§6.4): its start position, the resolved `title`
+/// (from `command.title`, `None` when unresolved), and the raw JSON to echo to `codeLens/resolve`.
+fn parse_one_code_lens(v: &Value) -> Option<CodeLens> {
+    let start = v.get("range")?.get("start")?;
+    Some(CodeLens {
+        line: start.get("line")?.as_u64()? as u32,
+        char16: start.get("character")?.as_u64()? as u32,
+        title: v
+            .get("command")
+            .and_then(|c| c.get("title"))
+            .and_then(|t| t.as_str())
+            .map(String::from),
+        raw: v.clone(),
+    })
+}
+
+/// Parse a `textDocument/codeLens` result (`CodeLens[]`) — malformed entries skipped (§6.4).
+pub fn parse_code_lenses(result: &Value) -> Vec<CodeLens> {
+    result
+        .as_array()
+        .map(|arr| arr.iter().filter_map(parse_one_code_lens).collect())
+        .unwrap_or_default()
+}
+
+/// Parse a `codeLens/resolve` result (a single resolved `CodeLens`, now carrying `command.title`).
+pub fn parse_code_lens_resolve(result: &Value) -> Option<CodeLens> {
+    parse_one_code_lens(result)
 }
 
 /// Parse a `textDocument/inlayHint` result into hints (§7.2). `label` is a string or an

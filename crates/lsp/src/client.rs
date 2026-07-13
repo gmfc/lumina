@@ -144,7 +144,9 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                     ]
                 },
                 // Inlay hints as virtual text (§7.2). We resolve nothing lazily yet.
-                "inlayHint": { "dynamicRegistration": false }
+                "inlayHint": { "dynamicRegistration": false },
+                // Code lens as virtual text (§6.4).
+                "codeLens": { "dynamicRegistration": false }
             },
             "workspace": {
                 // The client owns file watching and forwards matching changes (§8.1); the rest
@@ -153,7 +155,10 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                 "configuration": true,
                 "workspaceFolders": true,
                 "didChangeWatchedFiles": { "dynamicRegistration": true, "relativePatternSupport": true },
-                "executeCommand": { "dynamicRegistration": false }
+                "executeCommand": { "dynamicRegistration": false },
+                "codeLens": { "refreshSupport": true },
+                "inlayHint": { "refreshSupport": true },
+                "semanticTokens": { "refreshSupport": true }
             }
         }
     })
@@ -319,6 +324,19 @@ impl LspHandle {
             "textDocument/semanticTokens/full",
             json!({ "textDocument": { "uri": uri } }),
         )
+    }
+
+    /// Request code lenses for a document (§6.4). The response is `CodeLens[]` (some unresolved).
+    pub fn code_lens(&self, uri: &str) -> io::Result<i64> {
+        self.request(
+            "textDocument/codeLens",
+            json!({ "textDocument": { "uri": uri } }),
+        )
+    }
+
+    /// Resolve a code lens's command lazily (§6.4). `lens` is the original lens JSON.
+    pub fn resolve_code_lens(&self, lens: &Value) -> io::Result<i64> {
+        self.request("codeLens/resolve", lens.clone())
     }
 
     /// Request inlay hints for a range (§7.2). The response is `InlayHint[]`.

@@ -86,6 +86,15 @@ pub struct LspInlayHint {
     pub pad_right: bool,
 }
 
+/// One resolved code lens (§6.4) — the primitive twin of a title-bearing `editor_lsp::CodeLens`.
+/// Rendered as inline virtual text; only lenses with a resolved `title` reach the plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspCodeLens {
+    pub line: u32,
+    pub char16: u32,
+    pub title: String,
+}
+
 /// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own
 /// diagnostics without depending on `editor-lsp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

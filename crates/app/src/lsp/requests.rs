@@ -286,6 +286,32 @@ impl LspManager {
         })
     }
 
+    /// Request code lenses for the whole document (§6.4). Cancelable; the response fires
+    /// `codeLens/resolve` for any unresolved lenses.
+    pub fn request_code_lens(&mut self, path: &Path, language: &str) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, &uri, Pending::CodeLens, Cap::CodeLens, |c| {
+            c.code_lens(&uri)
+        })
+    }
+
+    /// Resolve a single code lens's command (§6.4), tagged to `uri` so its resolved title lands in
+    /// that document's lens set. Not cancelable (each resolve is for a specific lens).
+    pub(crate) fn request_code_lens_resolve(
+        &mut self,
+        language: &str,
+        uri: &str,
+        raw: &serde_json::Value,
+    ) -> bool {
+        self.send_request(
+            language,
+            uri,
+            Pending::CodeLensResolve,
+            Cap::CodeLens,
+            |c| c.resolve_code_lens(raw),
+        )
+    }
+
     pub fn request_workspace_symbols(&mut self, language: &str, query: &str) -> bool {
         // Workspace symbols aren't tied to a document; tag with an empty uri (version 0).
         self.send_request(

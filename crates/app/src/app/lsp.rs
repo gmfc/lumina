@@ -80,6 +80,10 @@ impl App {
                     .unwrap_or(0);
                 self.lsp.request_inlay_hints(&path, &lang, end_line);
             }
+            // …and code lenses (§6.4).
+            if synced && self.lsp.supports_code_lens(&lang) {
+                self.lsp.request_code_lens(&path, &lang);
+            }
             // Debounced diagnostics pull (§5.1): only for servers that declared pull. Re-arm the
             // timer on each revision change; fire once the buffer has been quiet for PULL_DEBOUNCE.
             // Push-diagnostic servers never enter here (the gate is off), so nothing double-fires.
@@ -290,6 +294,28 @@ impl App {
                     .collect();
                 for (p, l, end_line) in docs {
                     self.lsp.request_inlay_hints(&p, &l, end_line);
+                }
+            }
+            LspEvent::CodeLenses { uri, lenses } => {
+                let doc = crate::lsp::path_from_uri(&uri)
+                    .and_then(|path| self.editor.workspace.find_by_path(&path));
+                let lenses = lenses.into_iter().map(to_primitive_code_lens).collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspCodeLenses { doc, lenses });
+            }
+            LspEvent::CodeLensRefresh { lang } => {
+                // Re-request lenses for every open doc of this language (§6.4).
+                let docs: Vec<(PathBuf, String)> = self
+                    .editor
+                    .workspace
+                    .documents
+                    .iter()
+                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
+                    .filter_map(|(_, d)| Some((d.path.clone()?, d.language.clone()?)))
+                    .collect();
+                for (p, l) in docs {
+                    self.lsp.request_code_lens(&p, &l);
                 }
             }
             LspEvent::ServerExited { lang } => {
@@ -694,6 +720,16 @@ fn to_primitive_semantic_token(t: editor_lsp::SemanticToken) -> editor_plugin::L
         length: t.length,
         token_type: t.token_type,
         modifiers: t.modifiers,
+    }
+}
+
+/// Translate a resolved `editor-lsp` code lens into the kernel's primitive `LspCodeLens` (drops the
+/// raw JSON; the title is guaranteed present by the manager).
+fn to_primitive_code_lens(l: editor_lsp::CodeLens) -> editor_plugin::LspCodeLens {
+    editor_plugin::LspCodeLens {
+        line: l.line,
+        char16: l.char16,
+        title: l.title.unwrap_or_default(),
     }
 }
 
