@@ -165,6 +165,9 @@ impl App {
             self.drain_workers();
             self.ensure_cursor_visible();
         }
+        // Graceful LSP teardown on quit: shutdown→exit→wait per server, bounded so a hung
+        // server can't delay exit beyond the deadline (§3.8).
+        self.lsp.stop_all(Duration::from_secs(3));
         self.save_session();
         Ok(())
     }

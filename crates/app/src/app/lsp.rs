@@ -113,6 +113,22 @@ impl App {
             LspEvent::Message(text) => {
                 self.editor.status_message = Some(format!("LSP: {text}"));
             }
+            LspEvent::ServerExited { lang } => {
+                // The server (for this language) exited. Forget which docs we've synced so that,
+                // once it restarts, `update_lsp` re-sends `didOpen` for each (resync, §3.9). The
+                // per-doc version counter is not reset — versions stay monotonic.
+                let ids: Vec<editor_core::DocId> = self
+                    .editor
+                    .workspace
+                    .documents
+                    .iter()
+                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
+                    .map(|(id, _)| id)
+                    .collect();
+                for id in ids {
+                    self.lsp_sent_revision.remove(&id);
+                }
+            }
             LspEvent::ServerRequest {
                 lang,
                 id,

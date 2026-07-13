@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Mutex;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -266,15 +267,37 @@ impl LspHandle {
         )
     }
 
-    /// Ask the server to shut down cleanly.
+    /// Ask the server to shut down cleanly (fire-and-forget: `shutdown` request + `exit`).
     pub fn shutdown(&self) {
         let _ = self.request("shutdown", Value::Null);
         let _ = self.notify("exit", Value::Null);
+    }
+
+    /// Graceful ordered teardown (§3.8): `shutdown` → `exit` → wait up to `deadline` for the
+    /// process to exit → SIGKILL. Never blocks longer than `deadline`. Use this on
+    /// restart/quit; `Drop` is only the last-resort kill.
+    pub fn stop(&mut self, deadline: Duration) {
+        self.shutdown();
+        let start = Instant::now();
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return, // exited cleanly
+                Ok(None) if start.elapsed() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => break, // deadline hit, or wait errored
+            }
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
 impl Drop for LspHandle {
     fn drop(&mut self) {
+        // Fire-and-forget graceful teardown then kill — non-blocking, so quitting never hangs on
+        // a slow server. The ordered ladder that *waits* for a clean exit is `stop`, called
+        // explicitly on restart/quit when we can afford the deadline.
         self.shutdown();
         let _ = self.child.kill();
         let _ = self.child.wait();

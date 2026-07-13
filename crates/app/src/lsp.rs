@@ -5,9 +5,10 @@
 //! Servers are configured in `config.toml` (`[lsp] rust = "rust-analyzer"`); with none
 //! configured the manager is inert, so CI and default runs never require a server.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
     parse_capabilities, parse_completion, parse_document_symbols, parse_hover, parse_locations,
@@ -31,14 +32,42 @@ enum Pending {
     DocumentSymbols,
 }
 
-/// Per-connection lifecycle. The full Starting/ShuttingDown/Crashed machine is a later PR;
-/// PR1 needs only the Initializing→Running gate that a conformant handshake requires.
+/// Per-connection lifecycle gate. The Crashed terminal state is represented by removal from
+/// `state` + an entry in `failed` (circuit breaker tripped); a live connection is either
+/// Initializing or Running.
 enum ClientState {
     /// `initialize` sent; awaiting the response (whose id is `init_id`) to store capabilities
     /// and send `initialized`.
     Initializing { init_id: i64 },
     /// Handshake complete; feature requests are gated on these capabilities.
     Running(ServerCaps),
+}
+
+/// A message from a connection's forwarding thread. `Exited` is synthesized when the server's
+/// stdout closes (the process died), turning a silent crash into an observable event.
+enum ClientMsg {
+    Msg(Incoming),
+    Exited,
+}
+
+/// Circuit breaker: if a server crashes this many times within [`CRASH_WINDOW`], stop
+/// auto-restarting it *(≈ VS Code default)*.
+const CRASH_LIMIT: usize = 5;
+const CRASH_WINDOW: Duration = Duration::from_secs(180);
+
+/// Whether the crash `times` (already pruned to the window) have hit the breaker limit.
+fn breaker_tripped(times: &[Instant], now: Instant) -> bool {
+    times
+        .iter()
+        .filter(|&&t| now.saturating_duration_since(t) <= CRASH_WINDOW)
+        .count()
+        >= CRASH_LIMIT
+}
+
+/// Exponential restart backoff for the Nth consecutive crash (1-based): 250 ms → 4 s.
+fn restart_backoff(crash_count: usize) -> Duration {
+    let shift = crash_count.saturating_sub(1).min(4);
+    Duration::from_millis((250u64 << shift).min(4000))
 }
 
 /// A high-level LSP result, handed to the app after correlating a response with its request.
@@ -54,6 +83,11 @@ pub enum LspEvent {
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
     Message(String),
+    /// A connection's server process exited. The app clears its per-doc `didOpen` bookkeeping for
+    /// this language so documents are re-synced when the connection restarts.
+    ServerExited {
+        lang: String,
+    },
     /// A server→client request the app must act on **and answer** (applyEdit,
     /// showMessageRequest, showDocument). `id` is the raw JSON-RPC id to echo in the reply,
     /// sent back through [`LspManager::respond`].
@@ -70,20 +104,26 @@ pub struct LspManager {
     /// Merged inbound stream, tagged with the originating language so responses route to the
     /// right connection even when two servers happen to reuse the same JSON-RPC id (each
     /// connection numbers ids from 1).
-    tx: Sender<(String, Incoming)>,
-    rx: Receiver<(String, Incoming)>,
+    tx: Sender<(String, ClientMsg)>,
+    rx: Receiver<(String, ClientMsg)>,
     /// Configured `language → server command` (with args split on whitespace).
     servers: HashMap<String, Vec<String>>,
     /// Live handles by language id.
     clients: HashMap<String, LspHandle>,
     /// Per-connection handshake/lifecycle state by language id.
     state: HashMap<String, ClientState>,
-    /// Languages we've already tried (and failed) to spawn, to avoid retry storms.
+    /// Languages we've given up on (spawn failure or the crash breaker tripped).
     failed: HashMap<String, ()>,
     /// Per-document version counter for didChange.
     versions: HashMap<String, i64>,
     /// In-flight requests by (language, JSON-RPC id), so responses can be interpreted.
     pending: HashMap<(String, i64), Pending>,
+    /// URIs each server has published diagnostics for, so they can be cleared on a crash.
+    published: HashMap<String, HashSet<String>>,
+    /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
+    crash_times: HashMap<String, Vec<Instant>>,
+    /// Earliest instant a language may be respawned, enforcing restart backoff.
+    restart_after: HashMap<String, Instant>,
     root_uri: String,
     /// The editor version, sent in `initialize`'s `clientInfo`.
     client_version: String,
@@ -105,6 +145,9 @@ impl LspManager {
             failed: HashMap::new(),
             versions: HashMap::new(),
             pending: HashMap::new(),
+            published: HashMap::new(),
+            crash_times: HashMap::new(),
+            restart_after: HashMap::new(),
             root_uri: uri_for(root),
             client_version,
         }
@@ -114,9 +157,24 @@ impl LspManager {
     /// high-level [`LspEvent`]s by matching each against the request that produced it.
     pub fn poll(&mut self) -> Vec<LspEvent> {
         let mut out = Vec::new();
-        while let Ok((lang, msg)) = self.rx.try_recv() {
+        while let Ok((lang, cmsg)) = self.rx.try_recv() {
+            let msg = match cmsg {
+                ClientMsg::Msg(m) => m,
+                ClientMsg::Exited => {
+                    self.handle_exit(&lang, &mut out);
+                    continue;
+                }
+            };
             match msg {
-                Incoming::Diagnostics(u) => out.push(LspEvent::Diagnostics(u)),
+                Incoming::Diagnostics(u) => {
+                    // Remember which docs this server has diagnostics for, so a crash can clear
+                    // its now-stale squiggles.
+                    self.published
+                        .entry(lang.clone())
+                        .or_default()
+                        .insert(u.uri.clone());
+                    out.push(LspEvent::Diagnostics(u));
+                }
                 Incoming::Response { id, result, error } => {
                     // Is this the awaited `InitializeResult` for this connection?
                     let is_init = matches!(
@@ -213,6 +271,62 @@ impl LspManager {
         }
     }
 
+    /// Handle a connection's process exiting (§3.9). Fails its in-flight requests, clears its
+    /// diagnostics, tells the app to re-sync, and applies the restart policy: auto-restart after
+    /// exponential backoff unless the crash breaker has tripped ([`CRASH_LIMIT`] in
+    /// [`CRASH_WINDOW`]).
+    fn handle_exit(&mut self, lang: &str, out: &mut Vec<LspEvent>) {
+        self.clients.remove(lang);
+        self.state.remove(lang);
+
+        // Fail in-flight requests locally — no response is coming.
+        let dead: Vec<(String, i64)> = self
+            .pending
+            .keys()
+            .filter(|(l, _)| l == lang)
+            .cloned()
+            .collect();
+        let had_pending = !dead.is_empty();
+        for key in dead {
+            self.pending.remove(&key);
+        }
+
+        // Clear this server's stale diagnostics from the UI.
+        if let Some(uris) = self.published.remove(lang) {
+            for uri in uris {
+                out.push(LspEvent::Diagnostics(DiagnosticsUpdate {
+                    uri,
+                    diagnostics: Vec::new(),
+                }));
+            }
+        }
+
+        // Let the app forget per-doc sync bookkeeping so docs re-open after a restart.
+        out.push(LspEvent::ServerExited {
+            lang: lang.to_string(),
+        });
+        if had_pending {
+            out.push(LspEvent::Error(format!("{lang}: language server exited")));
+        }
+
+        // Restart policy: breaker + exponential backoff.
+        let now = Instant::now();
+        let times = self.crash_times.entry(lang.to_string()).or_default();
+        times.retain(|&t| now.saturating_duration_since(t) <= CRASH_WINDOW);
+        times.push(now);
+        let count = times.len();
+        if breaker_tripped(times, now) {
+            self.failed.insert(lang.to_string(), ());
+            self.restart_after.remove(lang);
+            out.push(LspEvent::Error(format!(
+                "{lang}: language server crashed {count} times; not restarting"
+            )));
+        } else {
+            self.restart_after
+                .insert(lang.to_string(), now + restart_backoff(count));
+        }
+    }
+
     /// Ensure a connection for `language` is at least started (spawned + `Initializing`).
     /// Returns whether a connection record now exists (initializing or running). Non-blocking:
     /// the handshake completes later in [`LspManager::poll`].
@@ -222,6 +336,12 @@ impl LspManager {
         }
         if self.failed.contains_key(language) {
             return false;
+        }
+        // Respect restart backoff after a crash: don't respawn until the cool-off passes.
+        if let Some(after) = self.restart_after.get(language) {
+            if Instant::now() < *after {
+                return false;
+            }
         }
         let Some(cmd) = self.servers.get(language).cloned() else {
             return false;
@@ -241,16 +361,19 @@ impl LspManager {
         ) {
             Ok((handle, rx, init_id)) => {
                 // Forward this server's messages onto the shared channel, tagged with the
-                // language so `poll` can route them (ids collide across connections).
+                // language so `poll` can route them (ids collide across connections). A synthetic
+                // `Exited` is emitted when the stream closes so a crash becomes observable.
                 let tx = self.tx.clone();
                 let lang = language.to_string();
                 std::thread::spawn(move || {
                     while let Ok(msg) = rx.recv() {
-                        if tx.send((lang.clone(), msg)).is_err() {
-                            break;
+                        if tx.send((lang.clone(), ClientMsg::Msg(msg))).is_err() {
+                            return;
                         }
                     }
+                    let _ = tx.send((lang, ClientMsg::Exited));
                 });
+                self.restart_after.remove(language);
                 self.clients.insert(language.to_string(), handle);
                 self.state
                     .insert(language.to_string(), ClientState::Initializing { init_id });
@@ -301,6 +424,28 @@ impl LspManager {
             return client.did_change(&uri, v, text).is_ok();
         }
         false
+    }
+
+    /// Notify the server that a document closed (§4.1): its truth reverts to disk. Sends only
+    /// once `Running`; drops the per-doc version so a later reopen restarts its counter.
+    pub fn did_close(&mut self, path: &Path, language: &str) {
+        let uri = uri_for(path);
+        self.versions.remove(&uri);
+        if self.is_ready(language) {
+            if let Some(client) = self.clients.get(language) {
+                let _ = client.did_close(&uri);
+            }
+        }
+    }
+
+    /// Gracefully stop all connections (ordered shutdown with a per-server deadline), e.g. on
+    /// editor quit. Never blocks longer than `deadline` per server.
+    pub fn stop_all(&mut self, deadline: Duration) {
+        for (_lang, client) in self.clients.iter_mut() {
+            client.stop(deadline);
+        }
+        self.clients.clear();
+        self.state.clear();
     }
 
     /// True if any server is configured (so the app knows whether to bother notifying).
@@ -369,6 +514,16 @@ mod tests {
         LspManager::new(Path::new("/tmp"), HashMap::new(), "test".into())
     }
 
+    /// Push an inbound message onto the merged channel as the forwarding thread would.
+    fn feed(mgr: &LspManager, lang: &str, msg: Incoming) {
+        mgr.tx.send((lang.into(), ClientMsg::Msg(msg))).unwrap();
+    }
+
+    /// Signal that a connection's process exited.
+    fn feed_exit(mgr: &LspManager, lang: &str) {
+        mgr.tx.send((lang.into(), ClientMsg::Exited)).unwrap();
+    }
+
     #[test]
     fn init_response_stores_caps_and_becomes_ready() {
         // The awaited InitializeResult transitions the connection to Running with parsed caps,
@@ -377,16 +532,15 @@ mod tests {
         mgr.state
             .insert("rust".into(), ClientState::Initializing { init_id: 1 });
         let caps = serde_json::json!({ "capabilities": { "hoverProvider": true } });
-        mgr.tx
-            .send((
-                "rust".into(),
-                Incoming::Response {
-                    id: 1,
-                    result: caps,
-                    error: None,
-                },
-            ))
-            .unwrap();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: caps,
+                error: None,
+            },
+        );
         assert!(mgr.poll().is_empty());
         assert!(mgr.is_ready("rust"));
         assert!(mgr.request_allowed("rust", Cap::Hover));
@@ -417,26 +571,24 @@ mod tests {
         let mut mgr = manager();
         mgr.pending.insert(("rust".into(), 1), Pending::Rename);
         mgr.pending.insert(("py".into(), 1), Pending::Hover);
-        mgr.tx
-            .send((
-                "py".into(),
-                Incoming::Response {
-                    id: 1,
-                    result: serde_json::json!({ "contents": "doc" }),
-                    error: None,
-                },
-            ))
-            .unwrap();
-        mgr.tx
-            .send((
-                "rust".into(),
-                Incoming::Response {
-                    id: 1,
-                    result: Default::default(),
-                    error: None,
-                },
-            ))
-            .unwrap();
+        feed(
+            &mgr,
+            "py",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!({ "contents": "doc" }),
+                error: None,
+            },
+        );
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: Default::default(),
+                error: None,
+            },
+        );
         let events = mgr.poll();
         assert!(events.iter().any(|e| matches!(e, LspEvent::Hover(_))));
         assert!(events.iter().any(|e| matches!(e, LspEvent::Rename(_))));
@@ -472,16 +624,15 @@ mod tests {
             "window/showMessageRequest",
             "window/showDocument",
         ] {
-            mgr.tx
-                .send((
-                    "rust".into(),
-                    Incoming::ServerRequest {
-                        id: serde_json::json!(1),
-                        method: method.into(),
-                        params: serde_json::json!({}),
-                    },
-                ))
-                .unwrap();
+            feed(
+                &mgr,
+                "rust",
+                Incoming::ServerRequest {
+                    id: serde_json::json!(1),
+                    method: method.into(),
+                    params: serde_json::json!({}),
+                },
+            );
         }
         let routed: Vec<String> = mgr
             .poll()
@@ -511,16 +662,15 @@ mod tests {
             "workspace/semanticTokens/refresh",
             "some/unknown/method",
         ] {
-            mgr.tx
-                .send((
-                    "rust".into(),
-                    Incoming::ServerRequest {
-                        id: serde_json::json!(1),
-                        method: method.into(),
-                        params: serde_json::json!({ "items": [] }),
-                    },
-                ))
-                .unwrap();
+            feed(
+                &mgr,
+                "rust",
+                Incoming::ServerRequest {
+                    id: serde_json::json!(1),
+                    method: method.into(),
+                    params: serde_json::json!({ "items": [] }),
+                },
+            );
         }
         assert!(mgr.poll().is_empty());
     }
@@ -528,15 +678,14 @@ mod tests {
     #[test]
     fn show_message_notification_becomes_a_message_event() {
         let mut mgr = manager();
-        mgr.tx
-            .send((
-                "rust".into(),
-                Incoming::Notification {
-                    method: "window/showMessage".into(),
-                    params: serde_json::json!({ "type": 3, "message": "reloading" }),
-                },
-            ))
-            .unwrap();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Notification {
+                method: "window/showMessage".into(),
+                params: serde_json::json!({ "type": 3, "message": "reloading" }),
+            },
+        );
         let events = mgr.poll();
         assert!(matches!(events.as_slice(), [LspEvent::Message(m)] if m == "reloading"));
     }
@@ -547,16 +696,15 @@ mod tests {
         // (empty) result that would read as "nothing found".
         let mut mgr = manager();
         mgr.pending.insert(("rust".into(), 1), Pending::Rename);
-        mgr.tx
-            .send((
-                "rust".into(),
-                Incoming::Response {
-                    id: 1,
-                    result: Default::default(), // Null; irrelevant on the error path
-                    error: Some("rename failed".into()),
-                },
-            ))
-            .unwrap();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: Default::default(), // Null; irrelevant on the error path
+                error: Some("rename failed".into()),
+            },
+        );
         let events = mgr.poll();
         assert!(
             matches!(events.as_slice(), [LspEvent::Error(m)] if m == "rename failed"),
@@ -568,17 +716,88 @@ mod tests {
     fn success_response_still_parses_result() {
         let mut mgr = manager();
         mgr.pending.insert(("rust".into(), 2), Pending::Rename);
-        mgr.tx
-            .send((
-                "rust".into(),
-                Incoming::Response {
-                    id: 2,
-                    result: Default::default(), // a null result still parses to an (empty) Rename
-                    error: None,
-                },
-            ))
-            .unwrap();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 2,
+                result: Default::default(), // a null result still parses to an (empty) Rename
+                error: None,
+            },
+        );
         let events = mgr.poll();
         assert!(matches!(events.as_slice(), [LspEvent::Rename(_)]));
+    }
+
+    #[test]
+    fn restart_backoff_is_exponential_and_capped() {
+        assert_eq!(restart_backoff(1), Duration::from_millis(250));
+        assert_eq!(restart_backoff(2), Duration::from_millis(500));
+        assert_eq!(restart_backoff(3), Duration::from_millis(1000));
+        assert_eq!(restart_backoff(4), Duration::from_millis(2000));
+        assert_eq!(restart_backoff(5), Duration::from_millis(4000));
+        assert_eq!(restart_backoff(9), Duration::from_millis(4000)); // capped
+    }
+
+    #[test]
+    fn breaker_trips_only_within_the_window() {
+        let now = Instant::now();
+        // Five crashes inside the window → tripped.
+        let recent: Vec<Instant> = (0..5).map(|i| now - Duration::from_secs(i * 10)).collect();
+        assert!(breaker_tripped(&recent, now));
+        // Four recent + one ancient (outside the window) → not tripped.
+        let mut spread = recent[..4].to_vec();
+        spread.push(now - Duration::from_secs(600));
+        assert!(!breaker_tripped(&spread, now));
+    }
+
+    #[test]
+    fn server_exit_fails_pending_and_clears_diagnostics() {
+        let mut mgr = manager();
+        mgr.state
+            .insert("rust".into(), ClientState::Running(ServerCaps::default()));
+        mgr.pending.insert(("rust".into(), 5), Pending::Hover);
+        mgr.published
+            .entry("rust".into())
+            .or_default()
+            .insert("file:///a.rs".into());
+        feed_exit(&mgr, "rust");
+        let events = mgr.poll();
+
+        assert!(!mgr.state.contains_key("rust"), "state not torn down");
+        assert!(mgr.pending.is_empty(), "pending not failed locally");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LspEvent::Diagnostics(u) if u.uri == "file:///a.rs" && u.diagnostics.is_empty())),
+            "stale diagnostics not cleared"
+        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, LspEvent::ServerExited { lang } if lang == "rust")));
+        assert!(events.iter().any(|e| matches!(e, LspEvent::Error(_))));
+        // First crash → scheduled for restart, breaker not tripped.
+        assert!(mgr.restart_after.contains_key("rust"));
+        assert!(!mgr.failed.contains_key("rust"));
+    }
+
+    #[test]
+    fn breaker_trips_after_repeated_crashes() {
+        let mut mgr = manager();
+        for _ in 0..CRASH_LIMIT {
+            feed_exit(&mgr, "rust");
+        }
+        let events = mgr.poll();
+        assert!(
+            mgr.failed.contains_key("rust"),
+            "breaker did not trip after {CRASH_LIMIT} crashes"
+        );
+        assert!(
+            !mgr.restart_after.contains_key("rust"),
+            "should not be scheduled to restart"
+        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, LspEvent::Error(m) if m.contains("not restarting"))));
     }
 }
