@@ -449,17 +449,24 @@ pub(super) fn parse_diagnostics(value: &Value) -> Option<DiagnosticsUpdate> {
     let params = value.get("params")?;
     let uri = params.get("uri")?.as_str()?.to_string();
     let mut diagnostics = Vec::new();
+    let mut raw = Vec::new();
     if let Some(arr) = params.get("diagnostics").and_then(|d| d.as_array()) {
         for d in arr {
             // Skip a single malformed entry rather than discarding the whole batch (which
             // would also fail to clear stale diagnostics for this URI). One buggy or hostile
-            // diagnostic must not suppress the valid ones.
+            // diagnostic must not suppress the valid ones. `raw` stays in lockstep with the
+            // parsed model so the client can echo it into a `codeAction` context (§6.1).
             if let Some(diag) = parse_one_diagnostic(d) {
                 diagnostics.push(diag);
+                raw.push(d.clone());
             }
         }
     }
-    Some(DiagnosticsUpdate { uri, diagnostics })
+    Some(DiagnosticsUpdate {
+        uri,
+        diagnostics,
+        raw,
+    })
 }
 
 /// Parse a single diagnostic object, returning `None` (to be skipped) if it is malformed.

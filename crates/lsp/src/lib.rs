@@ -149,6 +149,11 @@ pub struct Diagnostic {
 pub struct DiagnosticsUpdate {
     pub uri: String,
     pub diagnostics: Vec<Diagnostic>,
+    /// The original diagnostic JSON objects, kept in lockstep with `diagnostics`, so the client
+    /// can echo the ones overlapping a range back into a `codeAction` request's
+    /// `context.diagnostics` verbatim — preserving `data`/`code`/`relatedInformation` that quickfix
+    /// providers key off (§6.1). Empty for a synthetic clear.
+    pub raw: Vec<serde_json::Value>,
 }
 
 /// A JSON-RPC error object from a response. The `code` drives the client's error matrix (§9.5):
