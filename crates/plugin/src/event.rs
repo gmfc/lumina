@@ -54,6 +54,9 @@ pub enum Event {
     /// Occurrences of the symbol under the cursor. Delivered to the document-highlight plugin,
     /// which paints them as a decoration layer. Empty clears the highlights.
     LspHighlights(Vec<crate::lsp::LspHighlight>),
+    /// Code actions offered for the cursor/selection. Delivered to the code-action plugin, which
+    /// shows them in a picker and applies the chosen one. Empty means none were offered.
+    LspCodeActions(Vec<crate::lsp::LspCodeAction>),
     /// The language server computed a rename's edits (a `WorkspaceEdit`, translated to primitive
     /// paths app-side). Delivered to the rename plugin, which applies them via
     /// [`crate::Host::apply_workspace_edit`].

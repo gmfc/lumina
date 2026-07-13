@@ -23,6 +23,16 @@ pub enum LspRequestKind {
     DocumentHighlight,
     /// Search workspace symbols by the given query (server-side matching).
     WorkspaceSymbols(String),
+    /// Code actions (quickfix / refactor / source) for the selection or cursor.
+    CodeAction,
+}
+
+/// A code action offered to the user: a title plus the edit to apply on selection — the primitive
+/// twin of `editor_lsp::CodeAction`. Command-only actions are not modeled yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspCodeAction {
+    pub title: String,
+    pub edit: LspWorkspaceEdit,
 }
 
 /// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates. `kind`:

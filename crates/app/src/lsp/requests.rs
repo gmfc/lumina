@@ -192,6 +192,20 @@ impl LspManager {
         )
     }
 
+    pub fn request_code_action(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        // Cursor as an empty range (selection-range support is a later refinement).
+        self.send_request(language, &uri, Pending::CodeAction, Cap::CodeAction, |c| {
+            c.code_action(&uri, line, character, line, character)
+        })
+    }
+
     pub fn request_workspace_symbols(&mut self, language: &str, query: &str) -> bool {
         // Workspace symbols aren't tied to a document; tag with an empty uri (version 0).
         self.send_request(

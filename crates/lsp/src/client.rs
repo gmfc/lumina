@@ -230,6 +230,30 @@ impl LspHandle {
         self.request("workspace/symbol", json!({ "query": query }))
     }
 
+    /// Request code actions for a range. `context.diagnostics` is empty for now (quickfixes that
+    /// key off it may be limited — see the roadmap); refactor/source actions still apply.
+    #[allow(clippy::too_many_arguments)]
+    pub fn code_action(
+        &self,
+        uri: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) -> io::Result<i64> {
+        self.request(
+            "textDocument/codeAction",
+            json!({
+                "textDocument": { "uri": uri },
+                "range": {
+                    "start": { "line": start_line, "character": start_char },
+                    "end": { "line": end_line, "character": end_char }
+                },
+                "context": { "diagnostics": [], "triggerKind": 1 }
+            }),
+        )
+    }
+
     /// Request whole-document formatting; `tab_size`/`insert_spaces` come from buffer settings.
     /// The response is a `TextEdit[]` to apply as one atomic group.
     pub fn formatting(&self, uri: &str, tab_size: u32, insert_spaces: bool) -> io::Result<i64> {
