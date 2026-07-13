@@ -192,6 +192,19 @@ impl App {
                     .collect();
                 self.push_locations("Symbols", items);
             }
+            LspEvent::WorkspaceSymbols(syms) => {
+                let items = syms
+                    .iter()
+                    .filter_map(|(name, loc)| {
+                        let location = to_primitive_location(loc)?;
+                        Some(editor_plugin::LspNavItem {
+                            label: format!("{name}  {}", location_label(loc)),
+                            location,
+                        })
+                    })
+                    .collect();
+                self.push_locations("Workspace Symbols", items);
+            }
             LspEvent::Formatting(edits) => {
                 // Apply whole-document formatting to the active doc through the same
                 // Transaction pipeline as rename (one atomic group, invariant #1).
@@ -278,14 +291,26 @@ impl App {
     /// cursor; the rest share the `lsp_position` lookup.
     pub(super) fn dispatch_lsp_request(&mut self, kind: editor_plugin::LspRequestKind) {
         use editor_plugin::LspRequestKind as K;
-        // Whole-file requests need no cursor position.
-        match kind {
+        // Whole-file / workspace requests need no cursor position. Match by ref so the
+        // owned-String `WorkspaceSymbols` variant isn't partially moved out of `kind`.
+        match &kind {
             K::DocumentSymbols => {
                 self.request_document_symbols();
                 return;
             }
             K::Formatting => {
                 self.request_formatting();
+                return;
+            }
+            K::WorkspaceSymbols(query) => {
+                // Query the active file's language server (one server per language).
+                if let Some(lang) = self
+                    .editor
+                    .active_document()
+                    .and_then(|d| d.language.clone())
+                {
+                    self.lsp.request_workspace_symbols(&lang, query);
+                }
                 return;
             }
             _ => {}
@@ -303,7 +328,7 @@ impl App {
             K::DocumentHighlight => self.lsp.request_document_highlight(&p, &l, line, ch),
             K::References => self.lsp.request_references(&p, &l, line, ch),
             K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
-            K::DocumentSymbols | K::Formatting => false, // handled above
+            K::DocumentSymbols | K::Formatting | K::WorkspaceSymbols(_) => false, // handled above
         };
     }
 

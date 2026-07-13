@@ -16,11 +16,29 @@ use editor_plugin::{
 pub struct LspPlugin {
     /// The identifier typed into the rename prompt while it's open.
     rename_buf: String,
+    /// The query typed into the workspace-symbol prompt while it's open.
+    symbol_buf: String,
 }
 
 impl LspPlugin {
     const ID: &'static str = "lsp";
     const RENAME_PROMPT: &'static str = "lsp.rename";
+    const SYMBOL_PROMPT: &'static str = "lsp.workspaceSymbols";
+
+    /// Open the workspace-symbol query prompt (empty; the server matches as the user types on
+    /// Enter — a live per-keystroke picker is a later refinement).
+    fn open_symbols(&mut self, host: &mut dyn Host) {
+        self.symbol_buf.clear();
+        host.set_prompt(self.symbol_prompt());
+    }
+
+    fn symbol_prompt(&self) -> Prompt {
+        let mut p = Prompt::new(Self::ID, Self::SYMBOL_PROMPT, PromptPlacement::Center);
+        p.title = Some("Workspace Symbols".to_string());
+        p.fields = vec![PromptField::new("Query", self.symbol_buf.clone())];
+        p.footer = Some("[Enter] Search   [Esc] Cancel".to_string());
+        p
+    }
 
     /// Open the rename prompt, seeded with the identifier under the caret.
     fn open_rename(&mut self, host: &mut dyn Host) {
@@ -59,6 +77,7 @@ impl Plugin for LspPlugin {
             .command("lsp.references", "Go: Find All References")
             .command("lsp.documentSymbols", "Go: Symbols in File…")
             .command("lsp.rename", "Refactor: Rename Symbol")
+            .command("lsp.workspaceSymbols", "Go: Symbols in Workspace…")
             .command("lsp.format", "Edit: Format Document")
             .keybinding("ctrl+k ctrl+i", "lsp.hover")
             .keybinding("f12", "lsp.gotoDefinition")
@@ -66,6 +85,7 @@ impl Plugin for LspPlugin {
             .keybinding("shift+f12", "lsp.references")
             .keybinding("ctrl+shift+o", "lsp.documentSymbols")
             .keybinding("f2", "lsp.rename")
+            .keybinding("ctrl+t", "lsp.workspaceSymbols")
             .keybinding("shift+alt+f", "lsp.format")
             .build()
     }
@@ -82,6 +102,7 @@ impl Plugin for LspPlugin {
                     | "lsp.references"
                     | "lsp.documentSymbols"
                     | "lsp.rename"
+                    | "lsp.workspaceSymbols"
                     | "lsp.format"
             );
         }
@@ -97,6 +118,10 @@ impl Plugin for LspPlugin {
                 self.open_rename(host);
                 return true;
             }
+            "lsp.workspaceSymbols" => {
+                self.open_symbols(host);
+                return true;
+            }
             _ => return false,
         };
         host.lsp_request(kind);
@@ -104,9 +129,17 @@ impl Plugin for LspPlugin {
     }
 
     fn on_prompt_key(&mut self, prompt_id: &str, key: Key, host: &mut dyn Host) -> bool {
-        if prompt_id != Self::RENAME_PROMPT {
-            return false;
+        match prompt_id {
+            Self::RENAME_PROMPT => self.rename_prompt_key(key, host),
+            Self::SYMBOL_PROMPT => self.symbol_prompt_key(key, host),
+            _ => return false,
         }
+        true
+    }
+}
+
+impl LspPlugin {
+    fn rename_prompt_key(&mut self, key: Key, host: &mut dyn Host) {
         match key.code {
             KeyCode::Esc => host.dismiss_prompt(),
             KeyCode::Enter => {
@@ -125,6 +158,26 @@ impl Plugin for LspPlugin {
             }
             _ => {}
         }
-        true
+    }
+
+    fn symbol_prompt_key(&mut self, key: Key, host: &mut dyn Host) {
+        match key.code {
+            KeyCode::Esc => host.dismiss_prompt(),
+            KeyCode::Enter => {
+                host.dismiss_prompt();
+                if !self.symbol_buf.is_empty() {
+                    host.lsp_request(LspRequestKind::WorkspaceSymbols(self.symbol_buf.clone()));
+                }
+            }
+            KeyCode::Backspace => {
+                self.symbol_buf.pop();
+                host.set_prompt(self.symbol_prompt());
+            }
+            KeyCode::Char(c) if !key.ctrl && !key.alt => {
+                self.symbol_buf.push(c);
+                host.set_prompt(self.symbol_prompt());
+            }
+            _ => {}
+        }
     }
 }

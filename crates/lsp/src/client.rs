@@ -225,6 +225,11 @@ impl LspHandle {
         )
     }
 
+    /// Search for symbols across the workspace by name (server-side fuzzy matching).
+    pub fn workspace_symbols(&self, query: &str) -> io::Result<i64> {
+        self.request("workspace/symbol", json!({ "query": query }))
+    }
+
     /// Request whole-document formatting; `tab_size`/`insert_spaces` come from buffer settings.
     /// The response is a `TextEdit[]` to apply as one atomic group.
     pub fn formatting(&self, uri: &str, tab_size: u32, insert_spaces: bool) -> io::Result<i64> {

@@ -45,7 +45,41 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
         formatting: present("documentFormattingProvider"),
         signature_help: present("signatureHelpProvider"),
         document_highlight: present("documentHighlightProvider"),
+        workspace_symbol: present("workspaceSymbolProvider"),
     }
+}
+
+/// Parse a `workspace/symbol` result (`WorkspaceSymbol[]` / `SymbolInformation[]`) into
+/// `(name, location)` pairs. A `WorkspaceSymbol` whose `location` carries only a `uri` (no range,
+/// pending `workspaceSymbol/resolve`) defaults to the file start. Malformed entries are skipped.
+pub fn parse_workspace_symbols(result: &Value) -> Vec<(String, Location)> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|s| {
+            let name = s.get("name")?.as_str()?.to_string();
+            let loc = s.get("location")?;
+            let uri = loc.get("uri")?.as_str()?.to_string();
+            let pos = |field: &str, key: &str| {
+                loc.get("range")
+                    .and_then(|r| r.get(field))
+                    .and_then(|p| p.get(key))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32
+            };
+            Some((
+                name,
+                Location {
+                    uri,
+                    line: pos("start", "line"),
+                    character: pos("start", "character"),
+                    end_line: pos("end", "line"),
+                    end_character: pos("end", "character"),
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Parse a `textDocument/documentHighlight` result into occurrence ranges. Malformed entries are
