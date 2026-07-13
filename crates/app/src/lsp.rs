@@ -52,6 +52,17 @@ pub enum LspEvent {
     DocumentSymbols(Vec<DocumentSymbol>),
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
+    /// A `window/showMessage` notice to surface on the statusline.
+    Message(String),
+    /// A server→client request the app must act on **and answer** (applyEdit,
+    /// showMessageRequest, showDocument). `id` is the raw JSON-RPC id to echo in the reply,
+    /// sent back through [`LspManager::respond`].
+    ServerRequest {
+        lang: String,
+        id: serde_json::Value,
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 /// Owns the running servers and the merged incoming-message stream.
@@ -144,9 +155,62 @@ impl LspManager {
                         out.extend(response_event(kind, &result));
                     }
                 }
+                Incoming::ServerRequest { id, method, params } => {
+                    // Every server→client request MUST be answered (§1.3) — silence deadlocks
+                    // servers that await the reply. Manager-local ones are answered here; the
+                    // rest are routed to the app (which owns docs/UI) to act and answer.
+                    match method.as_str() {
+                        "workspace/configuration" => {
+                            self.respond(&lang, &id, configuration_response(&params))
+                        }
+                        "workspace/workspaceFolders" => {
+                            let folders = workspace_folders_response(&self.root_uri);
+                            self.respond(&lang, &id, folders)
+                        }
+                        "client/registerCapability"
+                        | "client/unregisterCapability"
+                        | "window/workDoneProgress/create"
+                        | "workspace/semanticTokens/refresh"
+                        | "workspace/inlayHint/refresh"
+                        | "workspace/codeLens/refresh"
+                        | "workspace/diagnostic/refresh" => {
+                            self.respond(&lang, &id, serde_json::Value::Null)
+                        }
+                        "workspace/applyEdit"
+                        | "window/showMessageRequest"
+                        | "window/showDocument" => out.push(LspEvent::ServerRequest {
+                            lang: lang.clone(),
+                            id,
+                            method,
+                            params,
+                        }),
+                        _ => {
+                            if let Some(h) = self.clients.get(&lang) {
+                                let _ = h.respond_err(&id, -32601, "method not found");
+                            }
+                        }
+                    }
+                }
+                Incoming::Notification { method, params } => {
+                    // window/showMessage → statusline. logMessage / $/progress / telemetry /
+                    // unknown are dropped (progress UI + a log view are later PRs).
+                    if method == "window/showMessage" {
+                        if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
+                            out.push(LspEvent::Message(msg.to_string()));
+                        }
+                    }
+                }
             }
         }
         out
+    }
+
+    /// Answer a server→client request for `language`, echoing its raw `id`. Public so the app
+    /// can reply after acting on a routed [`LspEvent::ServerRequest`].
+    pub fn respond(&self, language: &str, id: &serde_json::Value, result: serde_json::Value) {
+        if let Some(client) = self.clients.get(language) {
+            let _ = client.respond(id, result);
+        }
     }
 
     /// Ensure a connection for `language` is at least started (spawned + `Initializing`).
@@ -259,6 +323,33 @@ fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent>
     })
 }
 
+/// Build the response to `workspace/configuration`: one entry per requested item. We hold no
+/// per-server settings yet, so every entry is `null` — but the arity **must** match the request
+/// (a wrong-arity response wedges servers like pyright, §3.7).
+fn configuration_response(params: &serde_json::Value) -> serde_json::Value {
+    let n = params
+        .get("items")
+        .and_then(|i| i.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    serde_json::Value::Array(vec![serde_json::Value::Null; n])
+}
+
+/// Build the response to `workspace/workspaceFolders`: the single project root (§8.2).
+fn workspace_folders_response(root_uri: &str) -> serde_json::Value {
+    serde_json::json!([{ "uri": root_uri, "name": folder_name(root_uri) }])
+}
+
+/// The last path segment of a `file://` root URI, used as the workspace-folder name.
+fn folder_name(root_uri: &str) -> String {
+    root_uri
+        .trim_end_matches('/')
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("root")
+        .to_string()
+}
+
 /// A `file://` URI for a path (best-effort; no percent-encoding of exotic chars).
 pub fn uri_for(path: &Path) -> String {
     format!("file://{}", path.display())
@@ -349,6 +440,105 @@ mod tests {
         let events = mgr.poll();
         assert!(events.iter().any(|e| matches!(e, LspEvent::Hover(_))));
         assert!(events.iter().any(|e| matches!(e, LspEvent::Rename(_))));
+    }
+
+    #[test]
+    fn configuration_response_matches_item_arity() {
+        // Wrong arity wedges servers, so a null-per-item response must match the request.
+        let params = serde_json::json!({ "items": [{ "section": "a" }, { "section": "b" }] });
+        assert_eq!(
+            configuration_response(&params),
+            serde_json::json!([null, null])
+        );
+        assert_eq!(
+            configuration_response(&serde_json::json!({})),
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn workspace_folders_response_names_the_root() {
+        let r = workspace_folders_response("file:///home/g/proj/");
+        assert_eq!(r[0]["uri"], "file:///home/g/proj/");
+        assert_eq!(r[0]["name"], "proj");
+    }
+
+    #[test]
+    fn app_needing_requests_route_to_the_app() {
+        // applyEdit/showMessageRequest/showDocument are surfaced for the app to act + answer.
+        let mut mgr = manager();
+        for method in [
+            "workspace/applyEdit",
+            "window/showMessageRequest",
+            "window/showDocument",
+        ] {
+            mgr.tx
+                .send((
+                    "rust".into(),
+                    Incoming::ServerRequest {
+                        id: serde_json::json!(1),
+                        method: method.into(),
+                        params: serde_json::json!({}),
+                    },
+                ))
+                .unwrap();
+        }
+        let routed: Vec<String> = mgr
+            .poll()
+            .into_iter()
+            .filter_map(|e| match e {
+                LspEvent::ServerRequest { method, .. } => Some(method),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            routed,
+            [
+                "workspace/applyEdit",
+                "window/showMessageRequest",
+                "window/showDocument"
+            ]
+        );
+    }
+
+    #[test]
+    fn local_requests_and_unknown_do_not_route_to_the_app() {
+        // Manager-local requests (configuration, refresh, …) and unknown methods are answered in
+        // poll (no handle in tests → no-op) and produce no app event.
+        let mut mgr = manager();
+        for method in [
+            "workspace/configuration",
+            "workspace/semanticTokens/refresh",
+            "some/unknown/method",
+        ] {
+            mgr.tx
+                .send((
+                    "rust".into(),
+                    Incoming::ServerRequest {
+                        id: serde_json::json!(1),
+                        method: method.into(),
+                        params: serde_json::json!({ "items": [] }),
+                    },
+                ))
+                .unwrap();
+        }
+        assert!(mgr.poll().is_empty());
+    }
+
+    #[test]
+    fn show_message_notification_becomes_a_message_event() {
+        let mut mgr = manager();
+        mgr.tx
+            .send((
+                "rust".into(),
+                Incoming::Notification {
+                    method: "window/showMessage".into(),
+                    params: serde_json::json!({ "type": 3, "message": "reloading" }),
+                },
+            ))
+            .unwrap();
+        let events = mgr.poll();
+        assert!(matches!(events.as_slice(), [LspEvent::Message(m)] if m == "reloading"));
     }
 
     #[test]

@@ -218,6 +218,16 @@ impl LspHandle {
         self.notify("initialized", json!({}))
     }
 
+    /// Answer a server→client request with a result. `id` is echoed verbatim.
+    pub fn respond(&self, id: &Value, result: Value) -> io::Result<()> {
+        self.send(json_response(id, result))
+    }
+
+    /// Answer a server→client request with an error (e.g. `-32601` for an unsupported method).
+    pub fn respond_err(&self, id: &Value, code: i64, message: &str) -> io::Result<()> {
+        self.send(json_error(id, code, message))
+    }
+
     pub fn did_open(
         &self,
         uri: &str,
@@ -271,11 +281,28 @@ impl Drop for LspHandle {
     }
 }
 
-/// Classify an incoming server message: a diagnostics notification or a response to one of our
-/// requests. Other notifications/requests are ignored.
+/// Classify an incoming server message into the shape the app acts on. A message with a
+/// `method` is a request (has `id`, must be answered) or a notification (no `id`);
+/// `publishDiagnostics` is special-cased. A message with `id` + `result`/`error` is a response.
 fn classify(value: &Value) -> Option<Incoming> {
-    if value.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics") {
-        return parse_diagnostics(value).map(Incoming::Diagnostics);
+    if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
+        if method == "textDocument/publishDiagnostics" {
+            return parse_diagnostics(value).map(Incoming::Diagnostics);
+        }
+        let params = value.get("params").cloned().unwrap_or(Value::Null);
+        // `method` + `id` is a server→client request (answer it, §1.3); `method` alone is a
+        // notification. The id stays raw — it may be a string and must be echoed verbatim.
+        return Some(match value.get("id") {
+            Some(id) => Incoming::ServerRequest {
+                id: id.clone(),
+                method: method.to_string(),
+                params,
+            },
+            None => Incoming::Notification {
+                method: method.to_string(),
+                params,
+            },
+        });
     }
     // A response carries a numeric id and a result (or error).
     if let Some(id) = value.get("id").and_then(|v| v.as_i64()) {
@@ -294,4 +321,15 @@ fn classify(value: &Value) -> Option<Incoming> {
         }
     }
     None
+}
+
+/// Build a JSON-RPC success response. Pure (unit-tested); `id` is echoed verbatim (it may be a
+/// string).
+pub fn json_response(id: &Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+/// Build a JSON-RPC error response (e.g. `-32601 MethodNotFound` for an unsupported request).
+pub fn json_error(id: &Value, code: i64, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }

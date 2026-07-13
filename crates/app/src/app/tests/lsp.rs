@@ -35,6 +35,35 @@ fn workspace_edit_applies_rename_across_occurrences() {
 }
 
 #[test]
+fn server_apply_edit_request_mutates_the_buffer() {
+    // A server→client workspace/applyEdit is applied through the same Transaction pipeline as
+    // rename (invariant #1), so a server-initiated edit lands in the buffer.
+    let path = temp_file("let foo = foo + 1;");
+    let mut app = app_with(&path);
+    let uri = crate::lsp::uri_for(&path);
+    let mut changes = serde_json::Map::new();
+    changes.insert(
+        uri,
+        serde_json::json!([
+            {"range":{"start":{"line":0,"character":4},"end":{"line":0,"character":7}},"newText":"bar"},
+            {"range":{"start":{"line":0,"character":10},"end":{"line":0,"character":13}},"newText":"bar"}
+        ]),
+    );
+    let params = serde_json::json!({ "label": "fix", "edit": { "changes": changes } });
+    app.handle_lsp_event(crate::lsp::LspEvent::ServerRequest {
+        lang: "rust".into(),
+        id: serde_json::json!(1),
+        method: "workspace/applyEdit".into(),
+        params,
+    });
+    assert_eq!(
+        app.editor.active_document().unwrap().to_string(),
+        "let bar = bar + 1;"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn completion_accept_replaces_typed_prefix() {
     // Feed one item, accept it, and confirm it replaces the identifier prefix under the caret —
     // the `completion` plugin's accept path (apply_transaction over the real edit).
