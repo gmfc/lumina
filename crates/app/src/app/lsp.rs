@@ -42,11 +42,13 @@ impl App {
                     .get(id)
                     .map(|d| d.to_string())
             };
+            let mut synced = false;
             match sent {
                 None => {
                     if let Some(text) = text() {
                         if self.lsp.did_open(&path, &lang, &text) {
                             self.lsp_sent_revision.insert(id, rev);
+                            synced = true;
                         }
                     }
                 }
@@ -54,10 +56,18 @@ impl App {
                     if let Some(text) = text() {
                         if self.lsp.did_change(&path, &lang, &text) {
                             self.lsp_sent_revision.insert(id, rev);
+                            synced = true;
                         }
                     }
                 }
                 _ => {}
+            }
+            // Re-request full-document semantic tokens whenever the doc is (re)synced — on open
+            // (server just became ready → initial paint) and per edit (§7.1). Cancelable, so a
+            // typing burst supersedes intermediate requests; gated so push/unsupported servers
+            // never enter here.
+            if synced && self.lsp.supports_semantic_tokens(&lang) {
+                self.lsp.request_semantic_tokens(&path, &lang);
             }
             // Debounced diagnostics pull (§5.1): only for servers that declared pull. Re-arm the
             // timer on each revision change; fire once the buffer has been quiet for PULL_DEBOUNCE.
@@ -218,6 +228,33 @@ impl App {
                     None => {
                         self.editor.status_items.remove("lsp.progress");
                     }
+                }
+            }
+            LspEvent::SemanticTokens { uri, tokens } => {
+                // Resolve to the doc it was computed for (not whatever is active now) and broadcast
+                // to the `semantic-tokens` plugin, which paints them over tree-sitter (§7.1).
+                let doc = crate::lsp::path_from_uri(&uri)
+                    .and_then(|path| self.editor.workspace.find_by_path(&path));
+                let tokens = tokens
+                    .into_iter()
+                    .map(to_primitive_semantic_token)
+                    .collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspSemanticTokens { doc, tokens });
+            }
+            LspEvent::SemanticTokensRefresh { lang } => {
+                // Re-request tokens for every open doc of this language (§7.1).
+                let docs: Vec<(PathBuf, String)> = self
+                    .editor
+                    .workspace
+                    .documents
+                    .iter()
+                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
+                    .filter_map(|(_, d)| Some((d.path.clone()?, d.language.clone()?)))
+                    .collect();
+                for (p, l) in docs {
+                    self.lsp.request_semantic_tokens(&p, &l);
                 }
             }
             LspEvent::ServerExited { lang } => {
@@ -611,6 +648,17 @@ fn to_primitive_diag(d: editor_lsp::Diagnostic) -> editor_plugin::LspDiagnostic 
         message: d.message,
         source: d.source,
         code: d.code,
+    }
+}
+
+/// Translate an `editor-lsp` semantic token into the kernel's primitive `LspSemanticToken`.
+fn to_primitive_semantic_token(t: editor_lsp::SemanticToken) -> editor_plugin::LspSemanticToken {
+    editor_plugin::LspSemanticToken {
+        line: t.line,
+        start_char16: t.start_char16,
+        length: t.length,
+        token_type: t.token_type,
+        modifiers: t.modifiers,
     }
 }
 

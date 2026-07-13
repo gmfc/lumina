@@ -222,6 +222,26 @@ pub enum Cap {
     WorkspaceSymbol,
     CodeAction,
     PullDiagnostics,
+    SemanticTokens,
+}
+
+/// A server's semantic-tokens legend (§7.1): the ordered name lists a token's numeric `type` index
+/// and `modifiers` bitset decode against. Fixed at capability time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SemanticLegend {
+    pub token_types: Vec<String>,
+    pub token_modifiers: Vec<String>,
+}
+
+/// One decoded semantic token (§7.1): an absolute range in (line, UTF-16 char) coordinates plus its
+/// resolved type name and modifier names (already looked up through the legend).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticToken {
+    pub line: u32,
+    pub start_char16: u32,
+    pub length: u32,
+    pub token_type: String,
+    pub modifiers: Vec<String>,
 }
 
 /// A `textDocument/diagnostic` (pull) report (§5.1). `Full` carries the fresh set; `Unchanged`
@@ -304,6 +324,11 @@ pub struct ServerCaps {
     /// The `diagnosticProvider.identifier`, echoed back in each pull request (disambiguates
     /// multiple diagnostic sources from one server); `None` when the server omitted it.
     pub diagnostic_identifier: Option<String>,
+    /// Full-document semantic tokens via `textDocument/semanticTokens/full` (§7.1), gated on
+    /// `semanticTokensProvider` advertising a `full` request.
+    pub semantic_tokens: bool,
+    /// The server's semantic-tokens legend, used to decode token type/modifier indices.
+    pub semantic_legend: SemanticLegend,
     /// The command ids the server declared via `executeCommandProvider.commands` — only these may
     /// be sent to `workspace/executeCommand` (§8.4).
     pub execute_commands: Vec<String>,
@@ -327,6 +352,7 @@ impl ServerCaps {
             Cap::WorkspaceSymbol => self.workspace_symbol,
             Cap::CodeAction => self.code_action,
             Cap::PullDiagnostics => self.diagnostic,
+            Cap::SemanticTokens => self.semantic_tokens,
         }
     }
 }

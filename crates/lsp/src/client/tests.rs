@@ -116,6 +116,66 @@ fn parses_diagnostic_provider_capability() {
 }
 
 #[test]
+fn parses_semantic_tokens_provider_and_legend() {
+    let caps = serde_json::json!({
+        "capabilities": { "semanticTokensProvider": {
+            "legend": { "tokenTypes": ["function","variable"], "tokenModifiers": ["declaration"] },
+            "full": true
+        } }
+    });
+    let c = parse_capabilities(&caps);
+    assert!(c.semantic_tokens);
+    assert_eq!(c.semantic_legend.token_types, ["function", "variable"]);
+    assert_eq!(c.semantic_legend.token_modifiers, ["declaration"]);
+    // A provider with only `range` (no `full`) → we don't gate on it (we issue `.../full` only).
+    let range_only = parse_capabilities(&serde_json::json!({
+        "capabilities": { "semanticTokensProvider": { "legend": {}, "range": true } }
+    }));
+    assert!(!range_only.semantic_tokens);
+}
+
+#[test]
+fn decodes_semantic_tokens_relative_encoding() {
+    use crate::SemanticLegend;
+    // The guide's worked example: legend function/variable + declaration; three tokens.
+    let legend = SemanticLegend {
+        token_types: vec!["function".into(), "variable".into()],
+        token_modifiers: vec!["declaration".into()],
+    };
+    let result = serde_json::json!({
+        "resultId": "1",
+        "data": [2,5,3,0,1,  0,9,4,1,0,  1,2,4,1,0]
+    });
+    let toks = parse_semantic_tokens(&result, &legend);
+    assert_eq!(toks.len(), 3);
+    // line 2 col 5 len 3 function + declaration
+    assert_eq!(
+        (toks[0].line, toks[0].start_char16, toks[0].length),
+        (2, 5, 3)
+    );
+    assert_eq!(toks[0].token_type, "function");
+    assert_eq!(toks[0].modifiers, ["declaration"]);
+    // same line, col 5+9=14 len 4 variable (deltaLine 0 → relative column)
+    assert_eq!(
+        (toks[1].line, toks[1].start_char16, toks[1].length),
+        (2, 14, 4)
+    );
+    assert_eq!(toks[1].token_type, "variable");
+    assert!(toks[1].modifiers.is_empty());
+    // line 3 col 2 len 4 variable (deltaLine 1 → absolute column)
+    assert_eq!(
+        (toks[2].line, toks[2].start_char16, toks[2].length),
+        (3, 2, 4)
+    );
+    // A missing data array decodes to nothing; a malformed tail (not a multiple of 5) is ignored.
+    assert!(parse_semantic_tokens(&serde_json::json!({}), &legend).is_empty());
+    assert_eq!(
+        parse_semantic_tokens(&serde_json::json!({ "data": [0,0,1,0,0, 9,9] }), &legend).len(),
+        1
+    );
+}
+
+#[test]
 fn parses_full_and_unchanged_pull_reports() {
     use crate::PullReport;
     // A `full` report carries fresh items (+ raw preserved) and a resultId to cache.
@@ -651,4 +711,13 @@ fn initialize_params_are_honest_and_complete() {
         true
     );
     assert_eq!(p["capabilities"]["workspace"]["configuration"], true);
+    // Semantic tokens: full only, augmenting (not replacing) tree-sitter.
+    assert_eq!(
+        p["capabilities"]["textDocument"]["semanticTokens"]["requests"]["full"],
+        true
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["semanticTokens"]["augmentsSyntaxTokens"],
+        true
+    );
 }

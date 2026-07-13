@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use crate::{
     CodeAction, Command, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate, DocEdit,
-    DocumentHighlight, DocumentSymbol, Location, PositionEncoding, PullReport, ServerCaps,
-    Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
+    DocumentHighlight, DocumentSymbol, Location, PositionEncoding, PullReport, SemanticLegend,
+    SemanticToken, ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
 
 /// Parse a `Command`/`{command, arguments}` object.
@@ -63,6 +63,17 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
             .and_then(|d| d.get("identifier"))
             .and_then(|v| v.as_str())
             .map(String::from),
+        // Full-document semantic tokens: the provider must advertise a truthy `full` request
+        // (bool `true` or a `{ delta }` object) — we only issue `.../full`, not range/delta.
+        semantic_tokens: caps
+            .get("semanticTokensProvider")
+            .and_then(|p| p.get("full"))
+            .is_some_and(|f| f.is_object() || f.as_bool() == Some(true)),
+        semantic_legend: caps
+            .get("semanticTokensProvider")
+            .and_then(|p| p.get("legend"))
+            .map(parse_semantic_legend)
+            .unwrap_or_default(),
         execute_commands: caps
             .get("executeCommandProvider")
             .and_then(|e| e.get("commands"))
@@ -506,6 +517,73 @@ pub fn parse_diagnostic_report(result: &Value) -> PullReport {
         diagnostics,
         raw,
     }
+}
+
+/// Parse a `semanticTokensProvider.legend` into the ordered type/modifier name lists (§7.1).
+fn parse_semantic_legend(legend: &Value) -> SemanticLegend {
+    let names = |key: &str| {
+        legend
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    SemanticLegend {
+        token_types: names("tokenTypes"),
+        token_modifiers: names("tokenModifiers"),
+    }
+}
+
+/// Decode a `textDocument/semanticTokens/full` result (`{ resultId?, data: uint[] }`) into absolute
+/// tokens using `legend` (§7.1). The `data` array is groups of five relative integers
+/// `[deltaLine, deltaStartChar, length, typeIdx, modBits]`; `deltaStartChar` is relative to the
+/// previous token only when `deltaLine == 0` (else it is an absolute column). Unknown type/modifier
+/// indices (shouldn't occur — servers map to our legend) decode to empty names. A malformed tail
+/// (length not a multiple of 5) is ignored.
+pub fn parse_semantic_tokens(result: &Value, legend: &SemanticLegend) -> Vec<SemanticToken> {
+    let Some(data) = result.get("data").and_then(|d| d.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(data.len() / 5);
+    let mut line = 0u32;
+    let mut col = 0u32;
+    for chunk in data.chunks_exact(5) {
+        let n = |v: &Value| v.as_u64().unwrap_or(0) as u32;
+        let (delta_line, delta_col, length, type_idx, mod_bits) = (
+            n(&chunk[0]),
+            n(&chunk[1]),
+            n(&chunk[2]),
+            n(&chunk[3]),
+            n(&chunk[4]),
+        );
+        if delta_line == 0 {
+            col += delta_col;
+        } else {
+            line += delta_line;
+            col = delta_col;
+        }
+        let token_type = legend
+            .token_types
+            .get(type_idx as usize)
+            .cloned()
+            .unwrap_or_default();
+        let modifiers = (0..legend.token_modifiers.len())
+            .filter(|i| mod_bits & (1 << i) != 0)
+            .map(|i| legend.token_modifiers[i].clone())
+            .collect();
+        out.push(SemanticToken {
+            line,
+            start_char16: col,
+            length,
+            token_type,
+            modifiers,
+        });
+    }
+    out
 }
 
 /// Parse a single diagnostic object, returning `None` (to be skipped) if it is malformed.

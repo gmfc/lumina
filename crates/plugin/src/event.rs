@@ -59,6 +59,13 @@ pub enum Event {
     /// Occurrences of the symbol under the cursor. Delivered to the document-highlight plugin,
     /// which paints them as a decoration layer. Empty clears the highlights.
     LspHighlights(Vec<crate::lsp::LspHighlight>),
+    /// Full-document semantic tokens for `doc` (§7.1), delivered to the semantic-tokens plugin,
+    /// which paints them as a decoration layer over tree-sitter. Empty clears the layer. `None`
+    /// doc = a response for a URI with no open document (dropped).
+    LspSemanticTokens {
+        doc: Option<DocId>,
+        tokens: Vec<crate::lsp::LspSemanticToken>,
+    },
     /// Code actions offered for the cursor/selection. Delivered to the code-action plugin, which
     /// shows them in a picker and applies the chosen one. Empty means none were offered.
     LspCodeActions(Vec<crate::lsp::LspCodeAction>),
