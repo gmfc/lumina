@@ -185,6 +185,18 @@ pub enum Cap {
     Rename,
     Formatting,
     SignatureHelp,
+    DocumentHighlight,
+}
+
+/// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates.
+/// `kind`: 1 Text, 2 Read, 3 Write (per LSP `DocumentHighlightKind`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentHighlight {
+    pub line: u32,
+    pub start_char16: u32,
+    pub end_line: u32,
+    pub end_char16: u32,
+    pub kind: u8,
 }
 
 /// A resolved signature-help view: the active signature's label and the char range within it of
@@ -214,6 +226,7 @@ pub struct ServerCaps {
     pub rename: bool,
     pub formatting: bool,
     pub signature_help: bool,
+    pub document_highlight: bool,
 }
 
 impl ServerCaps {
@@ -230,6 +243,7 @@ impl ServerCaps {
             Cap::Rename => self.rename,
             Cap::Formatting => self.formatting,
             Cap::SignatureHelp => self.signature_help,
+            Cap::DocumentHighlight => self.document_highlight,
         }
     }
 }

@@ -11,12 +11,12 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
-    parse_capabilities, parse_completion, parse_document_symbols, parse_hover, parse_locations,
-    parse_signature_help, parse_text_edits, parse_workspace_edit,
+    parse_capabilities, parse_completion, parse_document_highlights, parse_document_symbols,
+    parse_hover, parse_locations, parse_signature_help, parse_text_edits, parse_workspace_edit,
 };
 use editor_lsp::{
-    Cap, CompletionItem, DiagnosticsUpdate, DocumentSymbol, Incoming, Location, LspClient,
-    LspHandle, ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
+    Cap, CompletionItem, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol, Incoming, Location,
+    LspClient, LspHandle, ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
 };
 
 mod requests;
@@ -32,6 +32,7 @@ enum Pending {
     DocumentSymbols,
     Formatting,
     SignatureHelp,
+    DocumentHighlight,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -40,7 +41,11 @@ enum Pending {
 fn is_cancelable(kind: Pending) -> bool {
     matches!(
         kind,
-        Pending::Hover | Pending::Definition | Pending::Completion | Pending::SignatureHelp
+        Pending::Hover
+            | Pending::Definition
+            | Pending::Completion
+            | Pending::SignatureHelp
+            | Pending::DocumentHighlight
     )
 }
 
@@ -104,6 +109,8 @@ pub enum LspEvent {
     /// Signature help: the active signature line with its active parameter marked, or `None` to
     /// clear the hint (cursor left the call).
     SignatureHelp(Option<String>),
+    /// Occurrences of the symbol under the cursor (read/write highlights).
+    Highlights(Vec<DocumentHighlight>),
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -553,6 +560,8 @@ fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent>
         Pending::SignatureHelp => {
             LspEvent::SignatureHelp(parse_signature_help(result).map(|s| format_signature(&s)))
         }
+        // Always emit (even empty) so highlights clear when the cursor leaves a symbol.
+        Pending::DocumentHighlight => LspEvent::Highlights(parse_document_highlights(result)),
     })
 }
 

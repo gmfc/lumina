@@ -200,6 +200,11 @@ impl Theme {
             "lsp.diag.mark.warning" => sev(Color::Yellow),
             "lsp.diag.mark.info" => sev(Color::Blue),
             "lsp.diag.mark.hint" => sev(Color::DarkGray),
+            // Document-highlight occurrences: a background tint, brighter for a write.
+            "lsp.highlight.text" | "lsp.highlight.read" => {
+                Style::default().bg(Color::Rgb(58, 58, 78))
+            }
+            "lsp.highlight.write" => Style::default().bg(Color::Rgb(82, 62, 62)),
             _ => self.style_for(key).unwrap_or_default(),
         }
     }

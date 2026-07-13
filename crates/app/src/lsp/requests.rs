@@ -175,6 +175,23 @@ impl LspManager {
         })
     }
 
+    pub fn request_document_highlight(
+        &mut self,
+        path: &Path,
+        language: &str,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(
+            language,
+            &uri,
+            Pending::DocumentHighlight,
+            Cap::DocumentHighlight,
+            |c| c.document_highlight(&uri, line, character),
+        )
+    }
+
     pub fn request_document_symbols(&mut self, path: &Path, language: &str) -> bool {
         let uri = uri_for(path);
         self.send_request(
