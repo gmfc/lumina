@@ -5,46 +5,56 @@
 use super::*;
 
 impl App {
-    /// Notify the LSP of changes to the active document (debounced by revision), and open
-    /// documents the server hasn't seen. Inert unless a server is configured.
+    /// Notify the LSP of every open document's opens/changes (debounced by revision). The server
+    /// mirror must know about **all** open buffers, not just the focused one, so cross-file
+    /// features (references, rename, workspace edits) and crash-resync stay correct. Inert unless
+    /// a server is configured.
     pub(super) fn update_lsp(&mut self) {
         if !self.lsp.is_enabled() {
             return;
         }
-        let Some(id) = self.editor.workspace.active_doc() else {
-            return;
-        };
-        let Some(doc) = self.editor.workspace.documents.get(id) else {
-            return;
-        };
-        let (Some(path), Some(lang)) = (doc.path.clone(), doc.language.clone()) else {
-            return;
-        };
-        let rev = doc.revision;
-        // Kick the connection into starting (non-blocking) and wait for the handshake before
-        // sending anything: didOpen/didChange are illegal before `initialized`. Once the
-        // connection is Running the first didOpen goes out with current text via the `None` arm.
-        self.lsp.ensure_started(&lang);
-        if !self.lsp.is_ready(&lang) {
-            return;
-        }
-        // Serialize the rope only when we actually have something to send. This runs every
-        // frame; materializing a multi-MB document to a String on each unchanged tick would be
-        // needless allocation churn. Record the sent revision only on a real send.
-        match self.lsp_sent_revision.get(&id).copied() {
-            None => {
-                let text = doc.to_string();
-                if self.lsp.did_open(&path, &lang, &text) {
-                    self.lsp_sent_revision.insert(id, rev);
-                }
+        // Snapshot every open, path-backed, language-detected document (id, path, lang, revision).
+        let docs: Vec<(editor_core::DocId, PathBuf, String, u64)> = self
+            .editor
+            .workspace
+            .documents
+            .iter()
+            .filter_map(|(id, d)| Some((id, d.path.clone()?, d.language.clone()?, d.revision)))
+            .collect();
+        for (id, path, lang, rev) in docs {
+            // Kick each language's connection into starting (non-blocking) and wait for its
+            // handshake before sending — didOpen/didChange are illegal before `initialized`.
+            self.lsp.ensure_started(&lang);
+            if !self.lsp.is_ready(&lang) {
+                continue;
             }
-            Some(sent) if sent != rev => {
-                let text = doc.to_string();
-                if self.lsp.did_change(&path, &lang, &text) {
-                    self.lsp_sent_revision.insert(id, rev);
+            // Serialize the rope only when something actually changed (unchanged docs are a
+            // cheap no-op each tick); record the sent revision only on a real send.
+            let sent = self.lsp_sent_revision.get(&id).copied();
+            let text = || {
+                self.editor
+                    .workspace
+                    .documents
+                    .get(id)
+                    .map(|d| d.to_string())
+            };
+            match sent {
+                None => {
+                    if let Some(text) = text() {
+                        if self.lsp.did_open(&path, &lang, &text) {
+                            self.lsp_sent_revision.insert(id, rev);
+                        }
+                    }
                 }
+                Some(prev) if prev != rev => {
+                    if let Some(text) = text() {
+                        if self.lsp.did_change(&path, &lang, &text) {
+                            self.lsp_sent_revision.insert(id, rev);
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
