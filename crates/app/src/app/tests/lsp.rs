@@ -148,6 +148,30 @@ fn switching_tabs_dismisses_the_completion_popup() {
 }
 
 #[test]
+fn snippet_completion_expands_with_tabstop_cursor() {
+    // Accepting a snippet item expands its grammar ($1/$0 stripped) and lands the caret on the
+    // first tabstop instead of leaving a literal `$1` in the buffer.
+    let path = temp_file("pri");
+    let mut app = app_with(&path);
+    app.dispatch(Command::Move(Motion::DocEnd));
+    let snippet_item = editor_plugin::LspCompletionItem {
+        label: "println!".into(),
+        detail: None,
+        insert_text: "println!($1)$0".into(),
+        kind: Some(3),
+        additional_edits: Vec::new(),
+        is_snippet: true,
+        data: None,
+    };
+    feed_completion(&mut app, vec![snippet_item]);
+    app.on_key(KeyEvent::from(KeyCode::Enter)); // accept
+    let doc = app.editor.active_document().unwrap();
+    assert_eq!(doc.to_string(), "println!()");
+    assert_eq!(doc.selections.primary().head, 9); // between the parens ($1)
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn completion_accept_replaces_typed_prefix() {
     // Feed one item, accept it, and confirm it replaces the identifier prefix under the caret —
     // the `completion` plugin's accept path (apply_transaction over the real edit).

@@ -116,7 +116,7 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                 "completion": {
                     "contextSupport": true,
                     "completionItem": {
-                        "snippetSupport": false,
+                        "snippetSupport": true,
                         "resolveSupport": { "properties": ["documentation", "detail", "additionalTextEdits"] }
                     }
                 },

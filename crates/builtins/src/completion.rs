@@ -237,24 +237,28 @@ impl CompletionPlugin {
         let Some(id) = host.active_doc() else {
             return;
         };
-        let insert = item.insert_text.clone();
-        let built = host.workspace().documents.get(id).map(|doc| {
-            let head = doc.selections.primary().head;
-            let mut start = head;
-            while start > 0 && is_ident(doc.rope().char(start - 1)) {
-                start -= 1;
-            }
-            editor_core::edit::selection_edit_transaction(doc, |_d, sel| {
-                if sel.head == head {
-                    (start..head, insert.clone())
-                } else {
-                    (sel.span(), insert.clone())
+        if item.is_snippet {
+            Self::accept_snippet(host, id, &item.insert_text);
+        } else {
+            let insert = item.insert_text.clone();
+            let built = host.workspace().documents.get(id).map(|doc| {
+                let head = doc.selections.primary().head;
+                let mut start = head;
+                while start > 0 && is_ident(doc.rope().char(start - 1)) {
+                    start -= 1;
                 }
-            })
-        });
-        if let Some((txn, after)) = built {
-            host.apply_transaction(id, txn);
-            host.set_selections(id, after);
+                editor_core::edit::selection_edit_transaction(doc, |_d, sel| {
+                    if sel.head == head {
+                        (start..head, insert.clone())
+                    } else {
+                        (sel.span(), insert.clone())
+                    }
+                })
+            });
+            if let Some((txn, after)) = built {
+                host.apply_transaction(id, txn);
+                host.set_selections(id, after);
+            }
         }
         // Auto-imports: apply eager additionalTextEdits, or resolve to fetch them lazily.
         if !item.additional_edits.is_empty() {
@@ -267,6 +271,34 @@ impl CompletionPlugin {
                 });
             }
         }
+    }
+
+    /// Expand and insert a snippet at the primary cursor, replacing the typed prefix and placing
+    /// the caret at the first tabstop (selecting its placeholder). Multi-cursor snippet accepts
+    /// collapse to the primary cursor; full tabstop cycling is a follow-up.
+    fn accept_snippet(host: &mut dyn Host, id: editor_core::DocId, raw: &str) {
+        let snip = crate::snippet::expand(raw);
+        let Some((start, removed)) = host.workspace().documents.get(id).map(|doc| {
+            let head = doc.selections.primary().head;
+            let mut start = head;
+            while start > 0 && is_ident(doc.rope().char(start - 1)) {
+                start -= 1;
+            }
+            (start, doc.rope().slice(start..head).to_string())
+        }) else {
+            return;
+        };
+        let txn = editor_core::Transaction::from_changes(vec![editor_core::Change {
+            at: start,
+            removed,
+            inserted: snip.text.clone(),
+        }]);
+        host.apply_transaction(id, txn);
+        let sel = match snip.first_stop() {
+            Some(t) => editor_core::Selection::new(start + t.range.0, start + t.range.1),
+            None => editor_core::Selection::caret(start + snip.text.chars().count()),
+        };
+        host.set_selections(id, editor_core::Selections::single(sel));
     }
 
     /// Apply a completion's `additionalTextEdits` (auto-import edits) to the active document via

@@ -31,6 +31,7 @@ pub mod palette;
 pub mod project_search;
 pub mod rename;
 pub mod signature_help;
+pub mod snippet;
 pub mod terminal;
 pub mod theme;
 pub mod vim;
