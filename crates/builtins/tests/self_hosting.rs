@@ -124,27 +124,7 @@ fn multicursor_contributes_through_the_public_api() {
 
 #[test]
 fn disabling_multicursor_removes_only_its_contributions() {
-    let full = Registry::with_plugins(all_builtins());
-    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
-
-    let reduced = Registry::with_plugins(
-        all_builtins()
-            .into_iter()
-            .filter(|p| p.id() != MULTICURSOR_ID),
-    );
-
-    // Its `cursor.*` commands are gone …
-    assert!(
-        !reduced.command_ids().any(|id| id == MULTICURSOR_COMMAND),
-        "multi-cursor command still present after disabling — it is hardcoded, not a plugin"
-    );
-    // … and the explorer's contributions are untouched.
-    for id in before.iter().filter(|id| !id.starts_with("cursor.")) {
-        assert!(
-            reduced.command_ids().any(|c| &c == id),
-            "disabling multi-cursor wrongly removed unrelated command `{id}`"
-        );
-    }
+    assert_disabling_isolates(MULTICURSOR_ID, MULTICURSOR_COMMAND, "cursor.");
 }
 
 #[test]
@@ -158,23 +138,9 @@ fn find_contributes_through_the_public_api() {
 
 #[test]
 fn disabling_find_removes_only_its_contributions() {
-    let full = Registry::with_plugins(all_builtins());
-    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
-
-    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != FIND_ID));
-
-    // Its `search.find`/`search.replace`/… commands are gone …
-    assert!(
-        !reduced.command_ids().any(|id| id == FIND_COMMAND),
-        "find command still present after disabling — it is hardcoded, not a plugin"
-    );
-    // … and nothing unrelated was disturbed (the app's `search.project` isn't a find contribution).
-    for id in before.iter().filter(|id| !id.starts_with("search.")) {
-        assert!(
-            reduced.command_ids().any(|c| &c == id),
-            "disabling find wrongly removed unrelated command `{id}`"
-        );
-    }
+    // The `search.` prefix also covers project-search's `search.project`; the isolation loop
+    // skips the whole prefix, so disabling find never asserts about a sibling `search.*` command.
+    assert_disabling_isolates(FIND_ID, FIND_COMMAND, "search.");
 }
 
 #[test]
@@ -188,23 +154,9 @@ fn palette_contributes_through_the_public_api() {
 
 #[test]
 fn disabling_palette_removes_only_its_contributions() {
-    let full = Registry::with_plugins(all_builtins());
-    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
-
-    let reduced =
-        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != PALETTE_ID));
-
-    assert!(
-        !reduced.command_ids().any(|id| id == PALETTE_COMMAND),
-        "palette command still present after disabling — it is hardcoded, not a plugin"
-    );
-    // Nothing unrelated removed (the app's `view.gotoLine` isn't a palette contribution).
-    for id in before.iter().filter(|id| !id.starts_with("view.")) {
-        assert!(
-            reduced.command_ids().any(|c| &c == id),
-            "disabling palette wrongly removed unrelated command `{id}`"
-        );
-    }
+    // The `view.` prefix also covers the theme toggle; the isolation loop skips the whole prefix,
+    // so disabling the palette never asserts about a sibling `view.*` command.
+    assert_disabling_isolates(PALETTE_ID, PALETTE_COMMAND, "view.");
 }
 
 #[test]
@@ -256,23 +208,9 @@ fn lsp_contributes_through_the_public_api() {
 
 #[test]
 fn disabling_lsp_removes_only_its_contributions() {
-    let full = Registry::with_plugins(all_builtins());
-    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
-
-    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != LSP_ID));
-
-    assert!(
-        !reduced.command_ids().any(|id| id == LSP_COMMAND),
-        "lsp command still present after disabling — it is hardcoded, not a plugin"
-    );
-    // Nothing unrelated removed (the app-side lsp.nextDiagnostic is not a plugin contribution, so
-    // it never appears in the registry command ids to begin with).
-    for id in before.iter().filter(|id| !id.starts_with("lsp.")) {
-        assert!(
-            reduced.command_ids().any(|c| &c == id),
-            "disabling lsp wrongly removed unrelated command `{id}`"
-        );
-    }
+    // The `lsp.` prefix also covers the diagnostics plugin's `lsp.nextDiagnostic`; the isolation
+    // loop skips the whole prefix, so disabling lsp never asserts about a sibling `lsp.*` command.
+    assert_disabling_isolates(LSP_ID, LSP_COMMAND, "lsp.");
 }
 
 #[test]
@@ -404,22 +342,7 @@ fn terminal_contributes_through_the_public_api() {
 
 #[test]
 fn disabling_terminal_removes_only_its_contributions() {
-    let full = Registry::with_plugins(all_builtins());
-    let before: Vec<String> = full.command_ids().map(|s| s.to_string()).collect();
-
-    let reduced =
-        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != TERMINAL_ID));
-
-    assert!(
-        !reduced.command_ids().any(|id| id == TERMINAL_COMMAND),
-        "terminal command still present after disabling — it is hardcoded, not a plugin"
-    );
-    for id in before.iter().filter(|id| !id.starts_with("terminal.")) {
-        assert!(
-            reduced.command_ids().any(|c| &c == id),
-            "disabling terminal wrongly removed unrelated command `{id}`"
-        );
-    }
+    assert_disabling_isolates(TERMINAL_ID, TERMINAL_COMMAND, "terminal.");
 }
 
 /// A migrated plugin owns its keybindings too, not just its commands: the chord travels with
