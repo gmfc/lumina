@@ -143,6 +143,10 @@ impl App {
 
     /// Reconcile an external on-disk change against the buffer (plan §6 decision matrix).
     pub(super) fn on_disk_changed(&mut self, path: &std::path::Path) {
+        // Forward the tree change to any language server that dynamically registered a matching
+        // file watcher (§8.1) — independent of whether it's an open document or the config file.
+        self.lsp.notify_watched_file_change(path);
+
         // A change to the user config file → hot-reload keymap/settings (plan §6).
         if self.config_path.as_deref() == Some(path) {
             self.reload_config();

@@ -45,6 +45,7 @@ vt100 = "0.15"
 # search / fs
 regex = "1.10"
 ignore = "0.4"
+globset = "0.4"
 grep-searcher = "0.1"
 grep-regex = "0.1"
 notify = "6.1"
