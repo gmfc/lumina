@@ -270,7 +270,8 @@ fn lsp_manager_is_inert_without_a_configured_server() {
     // With no server configured, every request resolves to `false`, notifications are
     // no-ops, and the event queue stays empty — the manager is dormant (plan §10).
     use std::collections::HashMap;
-    let mut mgr = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), HashMap::new());
+    let mut mgr =
+        crate::lsp::LspManager::new(std::path::Path::new("/tmp"), HashMap::new(), "test".into());
     assert!(!mgr.is_enabled());
     let p = std::path::Path::new("/tmp/x.rs");
     assert!(!mgr.request_hover(p, "rust", 0, 0));

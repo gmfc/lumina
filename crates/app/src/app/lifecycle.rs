@@ -65,7 +65,11 @@ impl App {
         editor.terminal_height = config.terminal_height.clamp(3, 60);
         editor.terminal_shell = crate::terminal::default_shell(config.terminal_shell.as_deref());
         let follow_mode = config.follow_mode;
-        let lsp = crate::lsp::LspManager::new(&editor.workspace.root, config.lsp_servers.clone());
+        let lsp = crate::lsp::LspManager::new(
+            &editor.workspace.root,
+            config.lsp_servers.clone(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        );
         // Mirror LSP availability onto EditorState so the `lsp` plugin can no-op through
         // `Host::lsp_enabled` when no server is configured.
         editor.lsp_enabled = lsp.is_enabled();

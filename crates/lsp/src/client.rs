@@ -40,7 +40,8 @@ impl LspClient {
         command: &str,
         args: &[String],
         root_uri: &str,
-    ) -> io::Result<(LspHandle, Receiver<Incoming>)> {
+        client_version: &str,
+    ) -> io::Result<(LspHandle, Receiver<Incoming>, i64)> {
         let mut child = Command::new(command)
             .args(args)
             .stdin(Stdio::piped())
@@ -76,9 +77,45 @@ impl LspClient {
             next_id: AtomicI64::new(1),
             child,
         };
-        handle.initialize(root_uri)?;
-        Ok((handle, rx))
+        // Send `initialize` only. `initialized` is deferred until the caller sees the response
+        // (§3.2 ordering); the returned id lets it recognize that response.
+        let init_id = handle.send_initialize(root_uri, client_version)?;
+        Ok((handle, rx, init_id))
     }
+}
+
+/// Build the `initialize` request params. Pure (no I/O) so it is unit-tested. Declares only
+/// capabilities the client actually implements (honest declaration): utf-16 only, no snippet
+/// engine, no prepareRename, plaintext hover. `rootPath`/`workspaceFolders` are derived from
+/// `root_uri`.
+pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
+    let root_path = root_uri.strip_prefix("file://").unwrap_or(root_uri);
+    let name = root_path
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("root");
+    json!({
+        "processId": std::process::id(),
+        "clientInfo": { "name": "lumina", "version": client_version },
+        "rootUri": root_uri,
+        "rootPath": root_path,
+        "workspaceFolders": [ { "uri": root_uri, "name": name } ],
+        "trace": "off",
+        "capabilities": {
+            "general": { "positionEncodings": ["utf-16"] },
+            "textDocument": {
+                "publishDiagnostics": { "relatedInformation": false },
+                "hover": { "contentFormat": ["plaintext"] },
+                "definition": { "linkSupport": true },
+                "typeDefinition": { "linkSupport": true },
+                "implementation": { "linkSupport": true },
+                "references": {},
+                "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+                "completion": { "completionItem": { "snippetSupport": false } },
+                "rename": { "prepareSupport": false }
+            }
+        }
+    })
 }
 
 impl LspHandle {
@@ -169,28 +206,15 @@ impl LspHandle {
         )
     }
 
-    /// Send `initialize` + `initialized`. (A strict client waits for the initialize result
-    /// before `initialized`; we send promptly, which most servers accept — real handshake
-    /// sequencing is a refinement for when this is exercised against a live server.)
-    pub fn initialize(&self, root_uri: &str) -> io::Result<()> {
-        self.request(
-            "initialize",
-            json!({
-                "processId": std::process::id(),
-                "rootUri": root_uri,
-                "capabilities": {
-                    "textDocument": {
-                        "publishDiagnostics": { "relatedInformation": false },
-                        "hover": { "contentFormat": ["plaintext", "markdown"] },
-                        "definition": { "linkSupport": true },
-                        "completion": {
-                            "completionItem": { "snippetSupport": false }
-                        },
-                        "rename": { "prepareSupport": false }
-                    }
-                }
-            }),
-        )?;
+    /// Send the `initialize` request only (not `initialized`); returns its JSON-RPC id so the
+    /// caller can recognize the response and complete the handshake in order (§3.2): capabilities
+    /// must be received before `initialized`, and nothing else may be sent until then.
+    pub fn send_initialize(&self, root_uri: &str, client_version: &str) -> io::Result<i64> {
+        self.request("initialize", initialize_params(root_uri, client_version))
+    }
+
+    /// Send the `initialized` notification — only after `InitializeResult` has arrived.
+    pub fn send_initialized(&self) -> io::Result<()> {
         self.notify("initialized", json!({}))
     }
 
