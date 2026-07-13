@@ -21,6 +21,8 @@ pub enum LspRequestKind {
     SignatureHelp,
     /// Occurrences of the symbol at the primary cursor (read/write highlights).
     DocumentHighlight,
+    /// Search workspace symbols by the given query (server-side matching).
+    WorkspaceSymbols(String),
 }
 
 /// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates. `kind`:

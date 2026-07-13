@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use editor_lsp::client::{
     parse_capabilities, parse_completion, parse_document_highlights, parse_document_symbols,
     parse_hover, parse_locations, parse_signature_help, parse_text_edits, parse_workspace_edit,
+    parse_workspace_symbols,
 };
 use editor_lsp::{
     Cap, CompletionItem, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol, Incoming, Location,
@@ -33,6 +34,7 @@ enum Pending {
     Formatting,
     SignatureHelp,
     DocumentHighlight,
+    WorkspaceSymbols,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -104,6 +106,8 @@ pub enum LspEvent {
     Rename(WorkspaceEdit),
     References(Vec<Location>),
     DocumentSymbols(Vec<DocumentSymbol>),
+    /// Workspace symbol search results: `(name, location)` pairs for a picker.
+    WorkspaceSymbols(Vec<(String, Location)>),
     /// Whole-document formatting edits, applied to the active document as one atomic group.
     Formatting(Vec<TextEdit>),
     /// Signature help: the active signature line with its active parameter marked, or `None` to
@@ -555,6 +559,7 @@ fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent>
         Pending::Rename => LspEvent::Rename(parse_workspace_edit(result)),
         Pending::References => LspEvent::References(parse_locations(result)),
         Pending::DocumentSymbols => LspEvent::DocumentSymbols(parse_document_symbols(result)),
+        Pending::WorkspaceSymbols => LspEvent::WorkspaceSymbols(parse_workspace_symbols(result)),
         Pending::Formatting => LspEvent::Formatting(parse_text_edits(result)),
         // Always emit (even `None`) so the statusline hint clears when the cursor leaves a call.
         Pending::SignatureHelp => {

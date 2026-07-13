@@ -192,6 +192,17 @@ impl LspManager {
         )
     }
 
+    pub fn request_workspace_symbols(&mut self, language: &str, query: &str) -> bool {
+        // Workspace symbols aren't tied to a document; tag with an empty uri (version 0).
+        self.send_request(
+            language,
+            "",
+            Pending::WorkspaceSymbols,
+            Cap::WorkspaceSymbol,
+            |c| c.workspace_symbols(query),
+        )
+    }
+
     pub fn request_document_symbols(&mut self, path: &Path, language: &str) -> bool {
         let uri = uri_for(path);
         self.send_request(

@@ -186,6 +186,7 @@ pub enum Cap {
     Formatting,
     SignatureHelp,
     DocumentHighlight,
+    WorkspaceSymbol,
 }
 
 /// An occurrence of the symbol under the cursor, in (line, UTF-16 char) coordinates.
@@ -227,6 +228,7 @@ pub struct ServerCaps {
     pub formatting: bool,
     pub signature_help: bool,
     pub document_highlight: bool,
+    pub workspace_symbol: bool,
 }
 
 impl ServerCaps {
@@ -244,6 +246,7 @@ impl ServerCaps {
             Cap::Formatting => self.formatting,
             Cap::SignatureHelp => self.signature_help,
             Cap::DocumentHighlight => self.document_highlight,
+            Cap::WorkspaceSymbol => self.workspace_symbol,
         }
     }
 }

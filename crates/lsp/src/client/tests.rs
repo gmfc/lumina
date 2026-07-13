@@ -219,6 +219,23 @@ fn document_highlights_parse_with_kinds() {
 }
 
 #[test]
+fn workspace_symbols_parse_with_and_without_range() {
+    let syms = serde_json::json!([
+        {"name":"Foo","kind":5,"location":{"uri":"file:///a.rs",
+            "range":{"start":{"line":9,"character":4},"end":{"line":9,"character":7}}}},
+        // WorkspaceSymbol with a location that carries only a uri (no range yet).
+        {"name":"bar","kind":12,"location":{"uri":"file:///b.rs"}}
+    ]);
+    let parsed = parse_workspace_symbols(&syms);
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].0, "Foo");
+    assert_eq!((parsed[0].1.line, parsed[0].1.character), (9, 4));
+    assert_eq!(parsed[1].0, "bar");
+    assert_eq!((parsed[1].1.line, parsed[1].1.character), (0, 0)); // defaulted
+    assert_eq!(parsed[1].1.uri, "file:///b.rs");
+}
+
+#[test]
 fn references_parse_as_locations() {
     let refs = serde_json::json!([
         {"uri":"file:///a.rs","range":{"start":{"line":1,"character":2},"end":{"line":1,"character":5}}},
@@ -262,16 +279,17 @@ fn parse_capabilities_full_and_minimal() {
         "renameProvider": { "prepareProvider": true },
         "documentFormattingProvider": true,
         "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
-        "documentHighlightProvider": true
+        "documentHighlightProvider": true,
+        "workspaceSymbolProvider": true
     }});
     let c = parse_capabilities(&full);
     assert_eq!(c.position_encoding, Some(PositionEncoding::Utf8));
     assert_eq!(c.sync_kind, SyncKind::Incremental);
     assert!(c.hover && c.definition && c.type_definition && c.implementation);
     assert!(c.references && c.document_symbol && c.completion && c.rename && c.formatting);
-    assert!(c.signature_help && c.document_highlight);
+    assert!(c.signature_help && c.document_highlight && c.workspace_symbol);
     assert!(c.allows(Cap::Hover) && c.allows(Cap::Formatting) && c.allows(Cap::SignatureHelp));
-    assert!(c.allows(Cap::DocumentHighlight));
+    assert!(c.allows(Cap::DocumentHighlight) && c.allows(Cap::WorkspaceSymbol));
 
     // minimal: providers as bare booleans, sync as a number, no encoding.
     let min = serde_json::json!({ "capabilities": {
