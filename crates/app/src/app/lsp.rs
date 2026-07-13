@@ -104,21 +104,21 @@ impl App {
             LspEvent::Rename(edit) => {
                 // Resolve each file's URI to a path and hand the edit to the `rename` plugin, which
                 // forwards it back through `Host::apply_workspace_edit` (applied on drain).
-                let changes = edit
-                    .changes
-                    .into_iter()
-                    .filter_map(|(uri, edits)| {
-                        let path = crate::lsp::path_from_uri(&uri)?;
-                        let edits = edits.into_iter().map(to_primitive_text_edit).collect();
-                        Some((path.to_string_lossy().into_owned(), edits))
-                    })
-                    .collect();
                 self.editor
                     .pending_events
                     .push(editor_plugin::event::Event::LspWorkspaceEdit(
-                        editor_plugin::LspWorkspaceEdit { changes },
+                        to_primitive_workspace_edit(edit),
                     ));
             }
+            LspEvent::Message(text) => {
+                self.editor.status_message = Some(format!("LSP: {text}"));
+            }
+            LspEvent::ServerRequest {
+                lang,
+                id,
+                method,
+                params,
+            } => self.handle_server_request(lang, id, &method, params),
             LspEvent::References(locs) => {
                 let items = locs
                     .iter()
@@ -174,7 +174,9 @@ impl App {
     /// Apply a rename's edits across the affected documents as history-recorded transactions. The
     /// `rename` plugin forwards a primitive [`editor_plugin::LspWorkspaceEdit`] (paths already
     /// resolved) here through the effect-queue; the app owns the file IO + UTF-16↔char mapping.
-    pub(super) fn apply_workspace_edit(&mut self, edit: editor_plugin::LspWorkspaceEdit) {
+    /// Returns the number of files actually changed (0 = nothing applied), so a server
+    /// `workspace/applyEdit` can report `applied` honestly.
+    pub(super) fn apply_workspace_edit(&mut self, edit: editor_plugin::LspWorkspaceEdit) -> usize {
         let mut count = 0usize;
         for (path, edits) in edit.changes {
             let path = std::path::PathBuf::from(path);
@@ -214,8 +216,9 @@ impl App {
             count += 1;
         }
         if count > 0 {
-            self.editor.status_message = Some(format!("Renamed across {count} file(s)"));
+            self.editor.status_message = Some(format!("Applied edits across {count} file(s)"));
         }
+        count
     }
 
     /// Forward a plugin-queued LSP request to the manager, resolving the primary cursor position
@@ -240,6 +243,66 @@ impl App {
             K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
             K::DocumentSymbols => false, // handled above
         };
+    }
+
+    /// Act on a server→client request that needs the editor (docs/UI) and answer it. Every arm
+    /// MUST reply through `LspManager::respond` (§1.3): an unanswered request hangs the server.
+    pub(super) fn handle_server_request(
+        &mut self,
+        lang: String,
+        id: serde_json::Value,
+        method: &str,
+        params: serde_json::Value,
+    ) {
+        match method {
+            "workspace/applyEdit" => {
+                // A server-initiated edit (code actions / executeCommand results). Apply through
+                // the same Transaction pipeline as rename (invariant #1) and report applied.
+                let edit = params
+                    .get("edit")
+                    .map(editor_lsp::client::parse_workspace_edit)
+                    .unwrap_or_default();
+                let primitive = to_primitive_workspace_edit(edit);
+                // Report what actually landed, not just what was requested (a stale/missing
+                // target file changes nothing).
+                let applied = self.apply_workspace_edit(primitive) > 0;
+                self.lsp
+                    .respond(&lang, &id, serde_json::json!({ "applied": applied }));
+            }
+            "window/showMessageRequest" => {
+                // Surface the message; PR2 chooses no action (later: action buttons).
+                if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
+                    self.editor.status_message = Some(format!("LSP: {msg}"));
+                }
+                self.lsp.respond(&lang, &id, serde_json::Value::Null);
+            }
+            "window/showDocument" => {
+                // Open a `file:` document in the editor unless the server asked for an external
+                // (OS/browser) open, which we don't do here.
+                let external = params
+                    .get("external")
+                    .and_then(|e| e.as_bool())
+                    .unwrap_or(false);
+                let path = params
+                    .get("uri")
+                    .and_then(|u| u.as_str())
+                    .and_then(crate::lsp::path_from_uri);
+                // Only claim success for a real openable file we actually show — not a directory
+                // or a missing/external target.
+                let opened = match (external, path) {
+                    (false, Some(path)) if path.is_file() => {
+                        self.open_path(&path);
+                        true
+                    }
+                    _ => false,
+                };
+                self.lsp
+                    .respond(&lang, &id, serde_json::json!({ "success": opened }));
+            }
+            // The manager only routes the three methods above; anything else still gets a reply
+            // so a mis-route can never hang the server.
+            _ => self.lsp.respond(&lang, &id, serde_json::Value::Null),
+        }
     }
 
     /// Request the symbols in the active document (no cursor position needed).
@@ -294,6 +357,22 @@ fn to_primitive_text_edit(te: editor_lsp::TextEdit) -> editor_plugin::LspTextEdi
         end_char16: te.end_char16,
         new_text: te.new_text,
     }
+}
+
+/// Resolve an `editor-lsp` `WorkspaceEdit`'s URIs to filesystem paths and convert its edits to
+/// the kernel primitive. Shared by rename responses and server-initiated `workspace/applyEdit`;
+/// non-`file:` URIs are dropped.
+fn to_primitive_workspace_edit(edit: editor_lsp::WorkspaceEdit) -> editor_plugin::LspWorkspaceEdit {
+    let changes = edit
+        .changes
+        .into_iter()
+        .filter_map(|(uri, edits)| {
+            let path = crate::lsp::path_from_uri(&uri)?;
+            let edits = edits.into_iter().map(to_primitive_text_edit).collect();
+            Some((path.to_string_lossy().into_owned(), edits))
+        })
+        .collect();
+    editor_plugin::LspWorkspaceEdit { changes }
 }
 
 /// Resolve an `editor-lsp` location's URI to a filesystem path and package it as the primitive

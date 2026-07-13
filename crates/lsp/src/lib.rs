@@ -14,11 +14,13 @@ pub mod transport;
 
 pub use client::{LspClient, LspHandle};
 
-/// A message from a server to the client: either a diagnostics notification or a response to
-/// one of our requests (correlated by `id`).
+/// A message from a server to the client.
 #[derive(Debug, Clone)]
 pub enum Incoming {
+    /// A `textDocument/publishDiagnostics` notification (special-cased: it is by far the most
+    /// common inbound notification and has a dedicated parser).
     Diagnostics(DiagnosticsUpdate),
+    /// A response to one of our requests, correlated by `id`.
     Response {
         id: i64,
         result: serde_json::Value,
@@ -26,6 +28,19 @@ pub enum Incoming {
         /// result. Kept distinct from a `null` result so a failed request (rename, goto, …) can
         /// be surfaced to the user rather than silently degrading to "no result".
         error: Option<String>,
+    },
+    /// A server→client **request** (has both `method` and `id`). Every one must be answered
+    /// (§1.3) — silence deadlocks servers that await the reply. `id` is kept as a raw JSON value
+    /// because server ids may be strings and must be echoed verbatim.
+    ServerRequest {
+        id: serde_json::Value,
+        method: String,
+        params: serde_json::Value,
+    },
+    /// A server→client notification other than diagnostics (`method`, no `id`).
+    Notification {
+        method: String,
+        params: serde_json::Value,
     },
 }
 

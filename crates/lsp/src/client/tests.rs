@@ -247,6 +247,61 @@ fn parse_capabilities_is_resilient_to_garbage() {
 }
 
 #[test]
+fn classify_server_request_and_notification() {
+    // method + id (string id) => a server→client request to be answered.
+    let req = serde_json::from_str::<Value>(
+        r#"{"jsonrpc":"2.0","id":"tok-1","method":"window/workDoneProgress/create","params":{"token":"t"}}"#,
+    )
+    .unwrap();
+    match classify(&req) {
+        Some(Incoming::ServerRequest { id, method, params }) => {
+            assert_eq!(id, serde_json::json!("tok-1")); // raw id preserved (string)
+            assert_eq!(method, "window/workDoneProgress/create");
+            assert_eq!(params["token"], "t");
+        }
+        other => panic!("expected ServerRequest, got {other:?}"),
+    }
+
+    // method, no id => a notification.
+    let notif = serde_json::from_str::<Value>(
+        r#"{"jsonrpc":"2.0","method":"window/showMessage","params":{"type":3,"message":"hi"}}"#,
+    )
+    .unwrap();
+    match classify(&notif) {
+        Some(Incoming::Notification { method, params }) => {
+            assert_eq!(method, "window/showMessage");
+            assert_eq!(params["message"], "hi");
+        }
+        other => panic!("expected Notification, got {other:?}"),
+    }
+
+    // A plain response is still a Response (not misread as a request/notification).
+    let resp = serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":7,"result":null}"#).unwrap();
+    assert!(matches!(
+        classify(&resp),
+        Some(Incoming::Response { id: 7, .. })
+    ));
+}
+
+#[test]
+fn json_response_and_error_echo_id_verbatim() {
+    let ok = json_response(
+        &serde_json::json!("s-9"),
+        serde_json::json!({ "applied": true }),
+    );
+    assert_eq!(ok["jsonrpc"], "2.0");
+    assert_eq!(ok["id"], "s-9"); // string id echoed as-is
+    assert_eq!(ok["result"]["applied"], true);
+    assert!(ok.get("error").is_none());
+
+    let err = json_error(&serde_json::json!(4), -32601, "method not found");
+    assert_eq!(err["id"], 4);
+    assert_eq!(err["error"]["code"], -32601);
+    assert_eq!(err["error"]["message"], "method not found");
+    assert!(err.get("result").is_none());
+}
+
+#[test]
 fn initialize_params_are_honest_and_complete() {
     let p = initialize_params("file:///home/g/proj", "9.9.9");
     assert_eq!(p["clientInfo"]["name"], "lumina");
