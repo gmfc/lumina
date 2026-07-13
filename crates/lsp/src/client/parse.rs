@@ -321,6 +321,16 @@ fn parse_one_diagnostic(d: &Value) -> Option<Diagnostic> {
         Some(3) => Severity::Info,
         _ => Severity::Hint,
     };
+    // `code` is a string or a number (or a `{ value, target }` object in 3.16+).
+    let code = match d.get("code") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        Some(Value::Object(o)) => o.get("value").map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }),
+        _ => None,
+    };
     Some(Diagnostic {
         line: start.get("line")?.as_u64()? as u32,
         start_char16: start.get("character")?.as_u64()? as u32,
@@ -332,5 +342,7 @@ fn parse_one_diagnostic(d: &Value) -> Option<Diagnostic> {
             .and_then(|m| m.as_str())
             .unwrap_or("")
             .to_string(),
+        source: d.get("source").and_then(|s| s.as_str()).map(str::to_string),
+        code,
     })
 }

@@ -125,6 +125,8 @@ fn diagnostics_publish_as_a_decoration_layer() {
                 end_char16: 6,
                 severity: editor_plugin::LspSeverity::Error,
                 message: String::new(),
+                source: None,
+                code: None,
             },
             editor_plugin::LspDiagnostic {
                 line: 1,
@@ -133,6 +135,8 @@ fn diagnostics_publish_as_a_decoration_layer() {
                 end_char16: 4,
                 severity: editor_plugin::LspSeverity::Warning,
                 message: String::new(),
+                source: None,
+                code: None,
             },
         ],
     );

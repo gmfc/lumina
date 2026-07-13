@@ -394,6 +394,8 @@ fn to_primitive_diag(d: editor_lsp::Diagnostic) -> editor_plugin::LspDiagnostic 
             S::Hint => P::Hint,
         },
         message: d.message,
+        source: d.source,
+        code: d.code,
     }
 }
 

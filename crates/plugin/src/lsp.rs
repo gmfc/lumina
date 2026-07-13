@@ -54,6 +54,10 @@ pub struct LspDiagnostic {
     pub end_char16: u32,
     pub severity: LspSeverity,
     pub message: String,
+    /// The producing tool (e.g. `rustc`), shown as a prefix in the diagnostic display.
+    pub source: Option<String>,
+    /// The diagnostic code (e.g. `E0425`), shown as a suffix.
+    pub code: Option<String>,
 }
 
 /// A resolved navigation target — the primitive twin of `editor_lsp::Location`, with the URI

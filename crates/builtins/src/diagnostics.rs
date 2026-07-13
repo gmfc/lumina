@@ -44,6 +44,25 @@ fn sev_rank(s: LspSeverity) -> u8 {
     }
 }
 
+/// The caret-diagnostic line: `<glyph> [source: ]message[ [code]]`, e.g.
+/// `E rustc: cannot find value `x` in this scope [E0425]`.
+fn format_diagnostic(d: &LspDiagnostic) -> String {
+    let mut out = String::new();
+    out.push(sev_glyph(d.severity));
+    out.push(' ');
+    if let Some(src) = &d.source {
+        out.push_str(src);
+        out.push_str(": ");
+    }
+    out.push_str(&d.message);
+    if let Some(code) = &d.code {
+        out.push_str(" [");
+        out.push_str(code);
+        out.push(']');
+    }
+    out
+}
+
 #[derive(Default)]
 pub struct DiagnosticsPlugin {
     diags: HashMap<DocId, Vec<LspDiagnostic>>,
@@ -109,8 +128,7 @@ impl DiagnosticsPlugin {
                 let end = host
                     .lsp_pos_to_offset(doc, d.end_line, d.end_char16)
                     .max(start);
-                (head >= start && head <= end)
-                    .then(|| format!("{} {}", sev_glyph(d.severity), d.message))
+                (head >= start && head <= end).then(|| format_diagnostic(d))
             })
         });
         host.set_status(STATUS_ID, msg.unwrap_or_default());
@@ -206,5 +224,32 @@ impl Plugin for DiagnosticsPlugin {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diag(msg: &str, source: Option<&str>, code: Option<&str>) -> LspDiagnostic {
+        LspDiagnostic {
+            line: 0,
+            start_char16: 0,
+            end_line: 0,
+            end_char16: 1,
+            severity: LspSeverity::Error,
+            message: msg.into(),
+            source: source.map(str::to_string),
+            code: code.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn formats_source_prefix_and_code_suffix() {
+        assert_eq!(
+            format_diagnostic(&diag("no `x`", Some("rustc"), Some("E0425"))),
+            "E rustc: no `x` [E0425]"
+        );
+        assert_eq!(format_diagnostic(&diag("plain", None, None)), "E plain");
     }
 }

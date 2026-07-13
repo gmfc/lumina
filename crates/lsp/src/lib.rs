@@ -110,6 +110,10 @@ pub struct Diagnostic {
     pub end_char16: u32,
     pub severity: Severity,
     pub message: String,
+    /// The producing tool (e.g. `rustc`, `clippy`), shown as a prefix.
+    pub source: Option<String>,
+    /// The diagnostic code (e.g. `E0425`), shown as a suffix. LSP allows a string or number.
+    pub code: Option<String>,
 }
 
 /// A batch of diagnostics for one document URI (as sent by `publishDiagnostics`).
