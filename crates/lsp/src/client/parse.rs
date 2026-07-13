@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::{
     CompletionItem, Diagnostic, DiagnosticsUpdate, DocumentSymbol, Location, PositionEncoding,
-    ServerCaps, Severity, SyncKind, TextEdit, WorkspaceEdit,
+    ServerCaps, Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
 
 /// Parse an `InitializeResult` into the caps Lumina gates on. Resilient: a provider is
@@ -43,6 +43,54 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
         completion: present("completionProvider"),
         rename: present("renameProvider"),
         formatting: present("documentFormattingProvider"),
+        signature_help: present("signatureHelpProvider"),
+    }
+}
+
+/// Parse a `textDocument/signatureHelp` result into the active signature + active-parameter
+/// range the UI renders. `None` = nothing to show (server said the cursor isn't in a call).
+pub fn parse_signature_help(result: &Value) -> Option<SignatureHelp> {
+    let sigs = result.get("signatures")?.as_array()?;
+    if sigs.is_empty() {
+        return None;
+    }
+    let active_sig = result
+        .get("activeSignature")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let sig = sigs.get(active_sig).or_else(|| sigs.first())?;
+    let label = sig.get("label")?.as_str()?.to_string();
+    // A per-signature activeParameter overrides the top-level one (§5.3).
+    let active_idx = sig
+        .get("activeParameter")
+        .and_then(|v| v.as_u64())
+        .or_else(|| result.get("activeParameter").and_then(|v| v.as_u64()))
+        .map(|n| n as usize);
+    let active_param = active_idx
+        .and_then(|idx| sig.get("parameters")?.as_array()?.get(idx).cloned())
+        .and_then(|p| param_range(&p, &label));
+    Some(SignatureHelp {
+        label,
+        active_param,
+    })
+}
+
+/// The char range of a `ParameterInformation.label` within the signature label: either explicit
+/// `[start, end]` offsets (we declare `labelOffsetSupport`; treated as char offsets — signatures
+/// are effectively ASCII) or a substring to locate.
+fn param_range(param: &Value, label: &str) -> Option<(usize, usize)> {
+    match param.get("label")? {
+        Value::Array(arr) if arr.len() == 2 => {
+            let s = arr[0].as_u64()? as usize;
+            let e = arr[1].as_u64()? as usize;
+            (s <= e && e <= label.chars().count()).then_some((s, e))
+        }
+        Value::String(sub) => {
+            let byte = label.find(sub.as_str())?;
+            let start = label[..byte].chars().count();
+            Some((start, start + sub.chars().count()))
+        }
+        _ => None,
     }
 }
 

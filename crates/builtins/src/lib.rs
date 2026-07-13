@@ -28,6 +28,7 @@ pub mod multicursor;
 pub mod palette;
 pub mod project_search;
 pub mod rename;
+pub mod signature_help;
 pub mod terminal;
 pub mod theme;
 pub mod vim;
@@ -59,6 +60,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(lsp::LspPlugin::default()),
         Box::new(lsp_nav::LspNavPlugin::default()),
         Box::new(hover::HoverPlugin),
+        Box::new(signature_help::SignatureHelpPlugin::default()),
         Box::new(rename::RenamePlugin),
         Box::new(diagnostics::DiagnosticsPlugin::default()),
         Box::new(completion::CompletionPlugin::default()),

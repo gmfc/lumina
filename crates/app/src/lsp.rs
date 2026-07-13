@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
     parse_capabilities, parse_completion, parse_document_symbols, parse_hover, parse_locations,
-    parse_text_edits, parse_workspace_edit,
+    parse_signature_help, parse_text_edits, parse_workspace_edit,
 };
 use editor_lsp::{
     Cap, CompletionItem, DiagnosticsUpdate, DocumentSymbol, Incoming, Location, LspClient,
-    LspHandle, ServerCaps, TextEdit, WorkspaceEdit,
+    LspHandle, ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
 };
 
 mod requests;
@@ -31,6 +31,7 @@ enum Pending {
     References,
     DocumentSymbols,
     Formatting,
+    SignatureHelp,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -39,7 +40,7 @@ enum Pending {
 fn is_cancelable(kind: Pending) -> bool {
     matches!(
         kind,
-        Pending::Hover | Pending::Definition | Pending::Completion
+        Pending::Hover | Pending::Definition | Pending::Completion | Pending::SignatureHelp
     )
 }
 
@@ -100,6 +101,9 @@ pub enum LspEvent {
     DocumentSymbols(Vec<DocumentSymbol>),
     /// Whole-document formatting edits, applied to the active document as one atomic group.
     Formatting(Vec<TextEdit>),
+    /// Signature help: the active signature line with its active parameter marked, or `None` to
+    /// clear the hint (cursor left the call).
+    SignatureHelp(Option<String>),
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -545,7 +549,29 @@ fn response_event(kind: Pending, result: &serde_json::Value) -> Option<LspEvent>
         Pending::References => LspEvent::References(parse_locations(result)),
         Pending::DocumentSymbols => LspEvent::DocumentSymbols(parse_document_symbols(result)),
         Pending::Formatting => LspEvent::Formatting(parse_text_edits(result)),
+        // Always emit (even `None`) so the statusline hint clears when the cursor leaves a call.
+        Pending::SignatureHelp => {
+            LspEvent::SignatureHelp(parse_signature_help(result).map(|s| format_signature(&s)))
+        }
     })
+}
+
+/// Render a signature line for the statusline, marking the active parameter with brackets.
+fn format_signature(sig: &SignatureHelp) -> String {
+    match sig.active_param {
+        Some((s, e)) => {
+            let chars: Vec<char> = sig.label.chars().collect();
+            if s <= e && e <= chars.len() {
+                let pre: String = chars[..s].iter().collect();
+                let mid: String = chars[s..e].iter().collect();
+                let post: String = chars[e..].iter().collect();
+                format!("{pre}[{mid}]{post}")
+            } else {
+                sig.label.clone()
+            }
+        }
+        None => sig.label.clone(),
+    }
 }
 
 /// Build the response to `workspace/configuration`: one entry per requested item. We hold no
@@ -822,6 +848,20 @@ mod tests {
         );
         let events = mgr.poll();
         assert!(matches!(events.as_slice(), [LspEvent::Rename(_)]));
+    }
+
+    #[test]
+    fn format_signature_brackets_the_active_param() {
+        let sig = editor_lsp::SignatureHelp {
+            label: "f(a, b)".into(),
+            active_param: Some((2, 3)),
+        };
+        assert_eq!(format_signature(&sig), "f([a], b)");
+        let none = editor_lsp::SignatureHelp {
+            label: "f()".into(),
+            active_param: None,
+        };
+        assert_eq!(format_signature(&none), "f()");
     }
 
     #[test]

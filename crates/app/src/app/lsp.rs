@@ -85,6 +85,12 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspHover(text));
             }
+            LspEvent::SignatureHelp(sig) => {
+                // Hand the formatted signature (or None to clear) to the signature-help plugin.
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspSignatureHelp(sig));
+            }
             LspEvent::Goto(loc) => {
                 // Hand a single navigation target to the `lsp-nav` plugin, which jumps via
                 // `Host::open_location` (the app owns the actual open + caret placement on drain).
@@ -277,6 +283,7 @@ impl App {
             K::Implementation => self.lsp.request_implementation(&p, &l, line, ch),
             K::TypeDefinition => self.lsp.request_type_definition(&p, &l, line, ch),
             K::Completion => self.lsp.request_completion(&p, &l, line, ch),
+            K::SignatureHelp => self.lsp.request_signature_help(&p, &l, line, ch),
             K::References => self.lsp.request_references(&p, &l, line, ch),
             K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
             K::DocumentSymbols | K::Formatting => false, // handled above

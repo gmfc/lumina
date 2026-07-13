@@ -48,6 +48,9 @@ pub enum Event {
     /// The language server answered a hover request with this (already-rendered) text. Delivered
     /// to the hover plugin, which shows it in a dismissable info box.
     LspHover(String),
+    /// Signature help while typing a call: the active signature line with its active parameter
+    /// marked, or `None` to clear it. Delivered to the signature-help plugin (statusline).
+    LspSignatureHelp(Option<String>),
     /// The language server computed a rename's edits (a `WorkspaceEdit`, translated to primitive
     /// paths app-side). Delivered to the rename plugin, which applies them via
     /// [`crate::Host::apply_workspace_edit`].

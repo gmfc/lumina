@@ -180,6 +180,17 @@ pub enum Cap {
     Completion,
     Rename,
     Formatting,
+    SignatureHelp,
+}
+
+/// A resolved signature-help view: the active signature's label and the char range within it of
+/// the active parameter (for highlighting). Simplified from `lsp_types::SignatureHelp` to exactly
+/// what the UI renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureHelp {
+    pub label: String,
+    /// `(start, end)` char offsets into `label` of the active parameter, if resolvable.
+    pub active_param: Option<(usize, usize)>,
 }
 
 /// The subset of `ServerCapabilities` Lumina currently gates on. Grows as features land
@@ -198,6 +209,7 @@ pub struct ServerCaps {
     pub completion: bool,
     pub rename: bool,
     pub formatting: bool,
+    pub signature_help: bool,
 }
 
 impl ServerCaps {
@@ -213,6 +225,7 @@ impl ServerCaps {
             Cap::Completion => self.completion,
             Cap::Rename => self.rename,
             Cap::Formatting => self.formatting,
+            Cap::SignatureHelp => self.signature_help,
         }
     }
 }

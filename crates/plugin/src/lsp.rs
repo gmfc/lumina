@@ -17,6 +17,8 @@ pub enum LspRequestKind {
     Rename(String),
     /// Whole-document formatting; the app applies the returned edits to the active document.
     Formatting,
+    /// Signature help at the primary cursor (parameter hints while typing a call).
+    SignatureHelp,
 }
 
 /// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own
