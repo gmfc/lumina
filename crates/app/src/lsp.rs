@@ -65,6 +65,31 @@ struct PendingEntry {
     version: i64,
 }
 
+/// One active work-done progress token (§1.5), keyed by `(lang, token)` and rendered as a
+/// statusline segment. `title` is fixed at `begin`; `message`/`percentage` update on `report`.
+struct ProgressItem {
+    lang: String,
+    token: String,
+    title: String,
+    message: Option<String>,
+    percentage: Option<u32>,
+}
+
+impl ProgressItem {
+    /// A one-line render: `lang: title — message 45%` (message/percentage omitted when absent).
+    fn render(&self) -> String {
+        let mut s = format!("{}: {}", self.lang, self.title);
+        if let Some(m) = self.message.as_deref().filter(|m| !m.is_empty()) {
+            s.push_str(" — ");
+            s.push_str(m);
+        }
+        if let Some(p) = self.percentage {
+            s.push_str(&format!(" {p}%"));
+        }
+        s
+    }
+}
+
 /// Per-connection lifecycle gate. The Crashed terminal state is represented by removal from
 /// `state` + an entry in `failed` (circuit breaker tripped); a live connection is either
 /// Initializing or Running.
@@ -138,6 +163,9 @@ pub enum LspEvent {
     DiagnosticsRefresh {
         lang: String,
     },
+    /// Rendered work-done progress for the statusline (§1.5), or `None` when nothing is active.
+    /// Aggregates every server's in-flight progress tokens into one line.
+    Progress(Option<String>),
     /// The server replied to one of our requests with an error instead of a result.
     Error(String),
     /// A `window/showMessage` notice to surface on the statusline.
@@ -198,6 +226,9 @@ pub struct LspManager {
     /// The client forwards matching disk changes as `workspace/didChangeWatchedFiles`.
     /// Connection-scoped: cleared when a server exits.
     file_watchers: HashMap<String, HashMap<String, Vec<watchers::FileWatcher>>>,
+    /// Active work-done progress tokens across all servers (§1.5), in `begin` order for a stable
+    /// statusline render. Entries are added on `begin`, updated on `report`, dropped on `end`/crash.
+    progress: Vec<ProgressItem>,
     /// Recent crash timestamps per language (pruned to `CRASH_WINDOW`) for the breaker.
     crash_times: HashMap<String, Vec<Instant>>,
     /// Earliest instant a language may be respawned, enforcing restart backoff.
@@ -229,6 +260,7 @@ impl LspManager {
             diag_raw: HashMap::new(),
             diag_result_id: HashMap::new(),
             file_watchers: HashMap::new(),
+            progress: Vec::new(),
             crash_times: HashMap::new(),
             restart_after: HashMap::new(),
             root_uri: uri_for(root),
@@ -383,11 +415,15 @@ impl LspManager {
                     }
                 }
                 Incoming::Notification { method, params } => {
-                    // window/showMessage → statusline. logMessage / $/progress / telemetry /
-                    // unknown are dropped (progress UI + a log view are later PRs).
+                    // window/showMessage → statusline; $/progress → the work-done spinner (§1.5).
+                    // logMessage / telemetry / unknown are dropped (a log view is a later PR).
                     if method == "window/showMessage" {
                         if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
                             out.push(LspEvent::Message(msg.to_string()));
+                        }
+                    } else if method == "$/progress" {
+                        if let Some(ev) = self.handle_progress(&lang, &params) {
+                            out.push(ev);
                         }
                     }
                 }
@@ -443,6 +479,75 @@ impl LspManager {
                 }
             }
         }
+    }
+
+    /// Fold a `$/progress` notification into the active work-done set and return the re-rendered
+    /// statusline line (§1.5). Values without a `kind` are partial-result streams (we send no
+    /// partial-result tokens yet) and are ignored → `None`. `begin` adds, `report` updates,
+    /// `end` removes; the token is normalized to a string (it may arrive as a number).
+    fn handle_progress(&mut self, lang: &str, params: &serde_json::Value) -> Option<LspEvent> {
+        let token = progress_token(params.get("token")?);
+        let value = params.get("value")?;
+        let same = |p: &ProgressItem| p.lang == lang && p.token == token;
+        match value.get("kind")?.as_str()? {
+            "begin" => {
+                self.progress.retain(|p| !same(p)); // a re-begun token replaces the old one
+                self.progress.push(ProgressItem {
+                    lang: lang.to_string(),
+                    token,
+                    title: value
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    message: value
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    percentage: value
+                        .get("percentage")
+                        .and_then(|v| v.as_u64())
+                        .map(|p| p as u32),
+                });
+            }
+            "report" => {
+                if let Some(item) = self.progress.iter_mut().find(|p| same(p)) {
+                    // A report omitting a field leaves the prior value in place.
+                    if let Some(m) = value.get("message").and_then(|v| v.as_str()) {
+                        item.message = Some(m.to_string());
+                    }
+                    if let Some(p) = value.get("percentage").and_then(|v| v.as_u64()) {
+                        item.percentage = Some(p as u32);
+                    }
+                } else {
+                    return None; // report for an unknown token → nothing to re-render
+                }
+            }
+            "end" => {
+                let before = self.progress.len();
+                self.progress.retain(|p| !same(p));
+                if self.progress.len() == before {
+                    return None; // end for an unknown token
+                }
+            }
+            _ => return None,
+        }
+        Some(LspEvent::Progress(self.render_progress()))
+    }
+
+    /// The active progress tokens rendered as one statusline line (` · `-joined), or `None` when
+    /// nothing is in flight (so the segment clears).
+    fn render_progress(&self) -> Option<String> {
+        if self.progress.is_empty() {
+            return None;
+        }
+        let line = self
+            .progress
+            .iter()
+            .map(ProgressItem::render)
+            .collect::<Vec<_>>()
+            .join(" · ");
+        Some(line)
     }
 
     /// Store dynamic capability registrations for `language` (§3.6). Today only
@@ -553,6 +658,12 @@ impl LspManager {
         self.open_docs.remove(lang);
         // Dynamic registrations are connection-scoped: the restarted server re-registers (§3.6).
         self.file_watchers.remove(lang);
+        // Drop this server's in-flight progress and refresh the statusline segment (§1.5).
+        let had_progress = self.progress.iter().any(|p| p.lang == lang);
+        self.progress.retain(|p| p.lang != lang);
+        if had_progress {
+            out.push(LspEvent::Progress(self.render_progress()));
+        }
 
         // Clear this server's stale diagnostics from the UI (and forget their raw + resultId
         // caches — the restarted server recomputes from scratch).
@@ -880,6 +991,13 @@ fn diag_overlaps(raw: &serde_json::Value, start: (u32, u32), end: (u32, u32)) ->
     // Intersection of [ds, de] with [start, end] in lexicographic (line, char) order. Touching
     // endpoints count (a point request on a diagnostic boundary still surfaces its fix).
     ds <= end && start <= de
+}
+
+/// Normalize a `$/progress` token to a string key — it may arrive as a JSON string or number.
+fn progress_token(v: &serde_json::Value) -> String {
+    v.as_str()
+        .map(String::from)
+        .unwrap_or_else(|| v.to_string())
 }
 
 /// A `file://` URI for a path (best-effort; no percent-encoding of exotic chars).
@@ -1546,6 +1664,81 @@ mod tests {
             !mgr.file_watchers.contains_key("rust"),
             "registrations not cleared on exit"
         );
+    }
+
+    #[test]
+    fn progress_begin_report_end_updates_the_statusline_line() {
+        let mut mgr = manager();
+        // begin → a Progress line naming the server + title.
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Notification {
+                method: "$/progress".into(),
+                params: serde_json::json!({ "token":"idx",
+                    "value": { "kind":"begin", "title":"Indexing", "percentage": 0 } }),
+            },
+        );
+        assert!(
+            matches!(mgr.poll().as_slice(), [LspEvent::Progress(Some(s))] if s.contains("rust") && s.contains("Indexing"))
+        );
+        // report → message + percentage fold in.
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Notification {
+                method: "$/progress".into(),
+                params: serde_json::json!({ "token":"idx",
+                    "value": { "kind":"report", "message":"crate 3/7", "percentage": 42 } }),
+            },
+        );
+        assert!(
+            matches!(mgr.poll().as_slice(), [LspEvent::Progress(Some(s))] if s.contains("42%") && s.contains("crate 3/7"))
+        );
+        // end → the token clears; with nothing else active the line goes empty.
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Notification {
+                method: "$/progress".into(),
+                params: serde_json::json!({ "token":"idx", "value": { "kind":"end" } }),
+            },
+        );
+        assert!(matches!(mgr.poll().as_slice(), [LspEvent::Progress(None)]));
+        assert!(mgr.progress.is_empty());
+    }
+
+    #[test]
+    fn progress_without_kind_is_ignored() {
+        // A `$/progress` on a partial-result token carries a list chunk (no `kind`) — not work-done
+        // progress. We send no partial-result tokens yet, so it's dropped.
+        let mut mgr = manager();
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Notification {
+                method: "$/progress".into(),
+                params: serde_json::json!({ "token":"pr", "value": [ {"x":1} ] }),
+            },
+        );
+        assert!(mgr.poll().is_empty());
+        assert!(mgr.progress.is_empty());
+    }
+
+    #[test]
+    fn server_exit_clears_progress() {
+        let mut mgr = manager();
+        mgr.progress.push(ProgressItem {
+            lang: "rust".into(),
+            token: "idx".into(),
+            title: "Indexing".into(),
+            message: None,
+            percentage: None,
+        });
+        feed_exit(&mgr, "rust");
+        let events = mgr.poll();
+        assert!(mgr.progress.is_empty(), "progress not cleared on exit");
+        assert!(events.iter().any(|e| matches!(e, LspEvent::Progress(None))));
     }
 
     #[test]

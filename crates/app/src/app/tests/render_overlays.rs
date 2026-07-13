@@ -33,6 +33,22 @@ fn renders_completion_popup() {
     std::fs::remove_file(&path).ok();
 }
 
+/// LSP work-done progress renders in the status bar (spinner + operation text, §1.5).
+#[test]
+fn renders_lsp_progress_in_statusline() {
+    let path = temp_file("fn main() {}\n");
+    let mut app = app_with(&path);
+    app.editor
+        .status_items
+        .insert("lsp.progress".into(), "rust: Indexing 45%".into());
+    let out = render_to_string(&mut app, 120, 20);
+    assert!(
+        out.contains("Indexing"),
+        "progress text should render in the status bar"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
 /// The command-palette picker draws its query line and ranked list.
 #[test]
 fn renders_command_palette() {
