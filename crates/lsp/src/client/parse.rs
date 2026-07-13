@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use crate::{
     CodeAction, Command, CompletionItem, CompletionList, Diagnostic, DiagnosticsUpdate, DocEdit,
-    DocumentHighlight, DocumentSymbol, Location, PositionEncoding, ServerCaps, Severity,
-    SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
+    DocumentHighlight, DocumentSymbol, Location, PositionEncoding, PullReport, ServerCaps,
+    Severity, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
 
 /// Parse a `Command`/`{command, arguments}` object.
@@ -57,6 +57,12 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
         document_highlight: present("documentHighlightProvider"),
         workspace_symbol: present("workspaceSymbolProvider"),
         code_action: present("codeActionProvider"),
+        diagnostic: present("diagnosticProvider"),
+        diagnostic_identifier: caps
+            .get("diagnosticProvider")
+            .and_then(|d| d.get("identifier"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
         execute_commands: caps
             .get("executeCommandProvider")
             .and_then(|e| e.get("commands"))
@@ -444,29 +450,62 @@ fn parse_text_edit(v: &Value) -> Option<TextEdit> {
     })
 }
 
+/// Parse a `Diagnostic[]` into the parsed model + its raw JSON, kept in lockstep. A single
+/// malformed entry is skipped rather than discarding the whole batch (which would also fail to
+/// clear stale diagnostics) — one buggy or hostile diagnostic must not suppress the valid ones.
+/// `raw` lets the client echo the overlapping diagnostics into a `codeAction` context (§6.1).
+fn parse_diagnostic_array(arr: &[Value]) -> (Vec<Diagnostic>, Vec<Value>) {
+    let mut diagnostics = Vec::new();
+    let mut raw = Vec::new();
+    for d in arr {
+        if let Some(diag) = parse_one_diagnostic(d) {
+            diagnostics.push(diag);
+            raw.push(d.clone());
+        }
+    }
+    (diagnostics, raw)
+}
+
 /// Parse a `publishDiagnostics` notification's params into our model.
 pub(super) fn parse_diagnostics(value: &Value) -> Option<DiagnosticsUpdate> {
     let params = value.get("params")?;
     let uri = params.get("uri")?.as_str()?.to_string();
-    let mut diagnostics = Vec::new();
-    let mut raw = Vec::new();
-    if let Some(arr) = params.get("diagnostics").and_then(|d| d.as_array()) {
-        for d in arr {
-            // Skip a single malformed entry rather than discarding the whole batch (which
-            // would also fail to clear stale diagnostics for this URI). One buggy or hostile
-            // diagnostic must not suppress the valid ones. `raw` stays in lockstep with the
-            // parsed model so the client can echo it into a `codeAction` context (§6.1).
-            if let Some(diag) = parse_one_diagnostic(d) {
-                diagnostics.push(diag);
-                raw.push(d.clone());
-            }
-        }
-    }
+    let arr = params
+        .get("diagnostics")
+        .and_then(|d| d.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let (diagnostics, raw) = parse_diagnostic_array(arr);
     Some(DiagnosticsUpdate {
         uri,
         diagnostics,
         raw,
     })
+}
+
+/// Parse a `textDocument/diagnostic` (pull) result into a [`PullReport`] (§5.1). A `kind:
+/// "unchanged"` report means "keep what you have"; a `full` report (the default for any other or
+/// missing kind, including a `null` result → empty full report that clears) carries the fresh set.
+/// `relatedDocuments` is ignored (we don't declare `relatedDocumentSupport`).
+pub fn parse_diagnostic_report(result: &Value) -> PullReport {
+    let result_id = result
+        .get("resultId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    if result.get("kind").and_then(|k| k.as_str()) == Some("unchanged") {
+        return PullReport::Unchanged { result_id };
+    }
+    let arr = result
+        .get("items")
+        .and_then(|d| d.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let (diagnostics, raw) = parse_diagnostic_array(arr);
+    PullReport::Full {
+        result_id,
+        diagnostics,
+        raw,
+    }
 }
 
 /// Parse a single diagnostic object, returning `None` (to be skipped) if it is malformed.

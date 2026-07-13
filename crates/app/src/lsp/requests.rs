@@ -244,6 +244,25 @@ impl LspManager {
         })
     }
 
+    /// Pull diagnostics for a document (§5.1), echoing the cached `previousResultId` (and the
+    /// server's `diagnosticProvider.identifier`) so an unchanged report is cheap. Gated on
+    /// `diagnosticProvider`; version-tracked like any request so a stale report is dropped.
+    pub fn request_pull_diagnostics(&mut self, path: &Path, language: &str) -> bool {
+        let uri = uri_for(path);
+        let prev = self.diag_result_id.get(&uri).cloned();
+        let identifier = match self.state.get(language) {
+            Some(ClientState::Running(caps)) => caps.diagnostic_identifier.clone(),
+            _ => None,
+        };
+        self.send_request(
+            language,
+            &uri,
+            Pending::Diagnostic,
+            Cap::PullDiagnostics,
+            |c| c.diagnostic(&uri, identifier.as_deref(), prev.as_deref()),
+        )
+    }
+
     pub fn request_workspace_symbols(&mut self, language: &str, query: &str) -> bool {
         // Workspace symbols aren't tied to a document; tag with an empty uri (version 0).
         self.send_request(
