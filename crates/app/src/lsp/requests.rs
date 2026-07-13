@@ -168,4 +168,17 @@ impl LspManager {
             |c| c.document_symbols(&uri),
         )
     }
+
+    pub fn request_formatting(
+        &mut self,
+        path: &Path,
+        language: &str,
+        tab_size: u32,
+        insert_spaces: bool,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(language, &uri, Pending::Formatting, Cap::Formatting, |c| {
+            c.formatting(&uri, tab_size, insert_spaces)
+        })
+    }
 }

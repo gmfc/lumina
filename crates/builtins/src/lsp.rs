@@ -59,12 +59,14 @@ impl Plugin for LspPlugin {
             .command("lsp.references", "Go: Find All References")
             .command("lsp.documentSymbols", "Go: Symbols in File…")
             .command("lsp.rename", "Refactor: Rename Symbol")
+            .command("lsp.format", "Edit: Format Document")
             .keybinding("ctrl+k ctrl+i", "lsp.hover")
             .keybinding("f12", "lsp.gotoDefinition")
             .keybinding("ctrl+f12", "lsp.gotoImplementation")
             .keybinding("shift+f12", "lsp.references")
             .keybinding("ctrl+shift+o", "lsp.documentSymbols")
             .keybinding("f2", "lsp.rename")
+            .keybinding("shift+alt+f", "lsp.format")
             .build()
     }
 
@@ -80,6 +82,7 @@ impl Plugin for LspPlugin {
                     | "lsp.references"
                     | "lsp.documentSymbols"
                     | "lsp.rename"
+                    | "lsp.format"
             );
         }
         let kind = match command_id {
@@ -89,6 +92,7 @@ impl Plugin for LspPlugin {
             "lsp.gotoTypeDefinition" => LspRequestKind::TypeDefinition,
             "lsp.references" => LspRequestKind::References,
             "lsp.documentSymbols" => LspRequestKind::DocumentSymbols,
+            "lsp.format" => LspRequestKind::Formatting,
             "lsp.rename" => {
                 self.open_rename(host);
                 return true;

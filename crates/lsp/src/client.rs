@@ -113,7 +113,8 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                 "references": {},
                 "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
                 "completion": { "completionItem": { "snippetSupport": false } },
-                "rename": { "prepareSupport": false }
+                "rename": { "prepareSupport": false },
+                "formatting": {}
             }
         }
     })
@@ -204,6 +205,18 @@ impl LspHandle {
         self.request(
             "textDocument/documentSymbol",
             json!({ "textDocument": { "uri": uri } }),
+        )
+    }
+
+    /// Request whole-document formatting; `tab_size`/`insert_spaces` come from buffer settings.
+    /// The response is a `TextEdit[]` to apply as one atomic group.
+    pub fn formatting(&self, uri: &str, tab_size: u32, insert_spaces: bool) -> io::Result<i64> {
+        self.request(
+            "textDocument/formatting",
+            json!({
+                "textDocument": { "uri": uri },
+                "options": { "tabSize": tab_size, "insertSpaces": insert_spaces }
+            }),
         )
     }
 

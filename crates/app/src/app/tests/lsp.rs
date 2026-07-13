@@ -64,6 +64,27 @@ fn server_apply_edit_request_mutates_the_buffer() {
 }
 
 #[test]
+fn formatting_response_applies_edits_to_active_doc() {
+    // A textDocument/formatting response's TextEdit[] is applied to the active document through
+    // the Transaction pipeline (invariant #1).
+    let path = temp_file("let  x=1 ;");
+    let mut app = app_with(&path);
+    let edits = vec![editor_lsp::TextEdit {
+        start_line: 0,
+        start_char16: 0,
+        end_line: 0,
+        end_char16: 10, // the whole line
+        new_text: "let x = 1;".into(),
+    }];
+    app.handle_lsp_event(crate::lsp::LspEvent::Formatting(edits));
+    assert_eq!(
+        app.editor.active_document().unwrap().to_string(),
+        "let x = 1;"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn completion_accept_replaces_typed_prefix() {
     // Feed one item, accept it, and confirm it replaces the identifier prefix under the caret —
     // the `completion` plugin's accept path (apply_transaction over the real edit).

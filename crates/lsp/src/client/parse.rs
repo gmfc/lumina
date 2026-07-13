@@ -42,7 +42,17 @@ pub fn parse_capabilities(init_result: &Value) -> ServerCaps {
         document_symbol: present("documentSymbolProvider"),
         completion: present("completionProvider"),
         rename: present("renameProvider"),
+        formatting: present("documentFormattingProvider"),
     }
+}
+
+/// Parse a bare `TextEdit[]` result (e.g. `textDocument/formatting`) into our edit model.
+/// Malformed entries are skipped rather than discarding the whole batch.
+pub fn parse_text_edits(result: &Value) -> Vec<TextEdit> {
+    result
+        .as_array()
+        .map(|arr| arr.iter().filter_map(parse_text_edit).collect())
+        .unwrap_or_default()
 }
 
 /// Decode `textDocumentSync`: a bare number, or an object's `change` number. Absent/unknown

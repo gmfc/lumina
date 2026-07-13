@@ -170,6 +170,20 @@ impl App {
                     .collect();
                 self.push_locations("Symbols", items);
             }
+            LspEvent::Formatting(edits) => {
+                // Apply whole-document formatting to the active doc through the same
+                // Transaction pipeline as rename (one atomic group, invariant #1).
+                let Some(path) = self.editor.active_document().and_then(|d| d.path.clone()) else {
+                    return;
+                };
+                let edits = edits.into_iter().map(to_primitive_text_edit).collect();
+                let edit = editor_plugin::LspWorkspaceEdit {
+                    changes: vec![(path.to_string_lossy().into_owned(), edits)],
+                };
+                if self.apply_workspace_edit(edit) > 0 {
+                    self.editor.status_message = Some("Formatted document".to_string());
+                }
+            }
             LspEvent::Error(message) => {
                 self.editor.status_message = Some(format!("LSP: {message}"));
             }
@@ -242,9 +256,17 @@ impl App {
     /// cursor; the rest share the `lsp_position` lookup.
     pub(super) fn dispatch_lsp_request(&mut self, kind: editor_plugin::LspRequestKind) {
         use editor_plugin::LspRequestKind as K;
-        if let K::DocumentSymbols = kind {
-            self.request_document_symbols();
-            return;
+        // Whole-file requests need no cursor position.
+        match kind {
+            K::DocumentSymbols => {
+                self.request_document_symbols();
+                return;
+            }
+            K::Formatting => {
+                self.request_formatting();
+                return;
+            }
+            _ => {}
         }
         let Some((p, l, line, ch)) = self.lsp_position() else {
             return;
@@ -257,7 +279,7 @@ impl App {
             K::Completion => self.lsp.request_completion(&p, &l, line, ch),
             K::References => self.lsp.request_references(&p, &l, line, ch),
             K::Rename(name) => self.lsp.request_rename(&p, &l, line, ch, &name),
-            K::DocumentSymbols => false, // handled above
+            K::DocumentSymbols | K::Formatting => false, // handled above
         };
     }
 
@@ -330,6 +352,20 @@ impl App {
         });
         if let Some((path, lang)) = info {
             self.lsp.request_document_symbols(&path, &lang);
+        }
+    }
+
+    /// Request whole-document formatting for the active document, using the editor's indent
+    /// settings as `FormattingOptions` (Lumina indents with spaces).
+    pub(super) fn request_formatting(&mut self) {
+        let info = self.editor.active_document().and_then(|d| {
+            let path = d.path.clone()?;
+            let lang = d.language.clone()?;
+            Some((path, lang))
+        });
+        if let Some((path, lang)) = info {
+            let tab_size = self.config.tab_width as u32;
+            self.lsp.request_formatting(&path, &lang, tab_size, true);
         }
     }
 }
