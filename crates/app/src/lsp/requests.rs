@@ -295,6 +295,18 @@ impl LspManager {
         })
     }
 
+    /// Request folding ranges for the whole document (§7.3). Cancelable; version-tracked.
+    pub fn request_folding_ranges(&mut self, path: &Path, language: &str) -> bool {
+        let uri = uri_for(path);
+        self.send_request(
+            language,
+            &uri,
+            Pending::FoldingRange,
+            Cap::FoldingRange,
+            |c| c.folding_range(&uri),
+        )
+    }
+
     /// Resolve a single code lens's command (§6.4), tagged to `uri` so its resolved title lands in
     /// that document's lens set. Not cancelable (each resolve is for a specific lens).
     pub(crate) fn request_code_lens_resolve(

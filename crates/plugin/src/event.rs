@@ -79,6 +79,12 @@ pub enum Event {
         doc: Option<DocId>,
         lenses: Vec<crate::lsp::LspCodeLens>,
     },
+    /// Foldable regions for `doc` (§7.3), delivered to the folding plugin, which marks each fold
+    /// start in the gutter. Empty clears the markers.
+    LspFoldingRanges {
+        doc: Option<DocId>,
+        ranges: Vec<crate::lsp::LspFoldingRange>,
+    },
     /// Code actions offered for the cursor/selection. Delivered to the code-action plugin, which
     /// shows them in a picker and applies the chosen one. Empty means none were offered.
     LspCodeActions(Vec<crate::lsp::LspCodeAction>),

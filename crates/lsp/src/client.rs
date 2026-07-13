@@ -146,7 +146,9 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                 // Inlay hints as virtual text (§7.2). We resolve nothing lazily yet.
                 "inlayHint": { "dynamicRegistration": false },
                 // Code lens as virtual text (§6.4).
-                "codeLens": { "dynamicRegistration": false }
+                "codeLens": { "dynamicRegistration": false },
+                // Folding ranges (§7.3); line-only (we ignore fold char columns).
+                "foldingRange": { "dynamicRegistration": false, "lineFoldingOnly": true }
             },
             "workspace": {
                 // The client owns file watching and forwards matching changes (§8.1); the rest
@@ -337,6 +339,14 @@ impl LspHandle {
     /// Resolve a code lens's command lazily (§6.4). `lens` is the original lens JSON.
     pub fn resolve_code_lens(&self, lens: &Value) -> io::Result<i64> {
         self.request("codeLens/resolve", lens.clone())
+    }
+
+    /// Request folding ranges for a document (§7.3). The response is `FoldingRange[]`.
+    pub fn folding_range(&self, uri: &str) -> io::Result<i64> {
+        self.request(
+            "textDocument/foldingRange",
+            json!({ "textDocument": { "uri": uri } }),
+        )
     }
 
     /// Request inlay hints for a range (§7.2). The response is `InlayHint[]`.

@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use editor_lsp::client::{
     parse_capabilities, parse_code_actions, parse_code_lens_resolve, parse_code_lenses,
     parse_completion, parse_completion_item_additional_edits, parse_diagnostic_report,
-    parse_document_highlights, parse_document_symbols, parse_hover, parse_inlay_hints,
-    parse_locations, parse_semantic_tokens, parse_signature_help, parse_text_edits,
-    parse_workspace_edit, parse_workspace_symbols,
+    parse_document_highlights, parse_document_symbols, parse_folding_ranges, parse_hover,
+    parse_inlay_hints, parse_locations, parse_semantic_tokens, parse_signature_help,
+    parse_text_edits, parse_workspace_edit, parse_workspace_symbols,
 };
 use editor_lsp::{
     Cap, CodeAction, CodeLens, CompletionList, DiagnosticsUpdate, DocumentHighlight,
@@ -46,6 +46,7 @@ enum Pending {
     InlayHint,
     CodeLens,
     CodeLensResolve,
+    FoldingRange,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -59,10 +60,11 @@ fn is_cancelable(kind: Pending) -> bool {
             | Pending::Completion
             | Pending::SignatureHelp
             | Pending::DocumentHighlight
-            // A newer full-doc token / hint / lens request supersedes the older one (typing bursts).
+            // A newer full-doc token / hint / lens / fold request supersedes the older one.
             | Pending::SemanticTokens
             | Pending::InlayHint
             | Pending::CodeLens
+            | Pending::FoldingRange
     )
 }
 
@@ -200,6 +202,11 @@ pub enum LspEvent {
     CodeLenses {
         uri: String,
         lenses: Vec<CodeLens>,
+    },
+    /// Foldable regions (§7.3) for the document at `uri`.
+    FoldingRanges {
+        uri: String,
+        ranges: Vec<editor_lsp::FoldingRange>,
     },
     /// The server asked (`workspace/codeLens/refresh`) that lenses be recomputed; the app
     /// re-requests for this language's open docs.
@@ -1032,6 +1039,11 @@ impl LspManager {
     pub fn supports_code_lens(&self, language: &str) -> bool {
         self.request_allowed(language, Cap::CodeLens)
     }
+
+    /// Whether `language`'s server is `Running` and advertised folding ranges (§7.3).
+    pub fn supports_folding(&self, language: &str) -> bool {
+        self.request_allowed(language, Cap::FoldingRange)
+    }
 }
 
 /// Interpret a successful response `result` against the request `kind` that produced it. Returns
@@ -1064,6 +1076,10 @@ fn response_event(kind: Pending, uri: &str, result: &serde_json::Value) -> Optio
         Pending::InlayHint => LspEvent::InlayHints {
             uri: uri.to_string(),
             hints: parse_inlay_hints(result),
+        },
+        Pending::FoldingRange => LspEvent::FoldingRanges {
+            uri: uri.to_string(),
+            ranges: parse_folding_ranges(result),
         },
         // Pull-diagnostics reports are handled in `poll` (they need the resultId cache), never here.
         Pending::Diagnostic => return None,
@@ -2013,6 +2029,26 @@ mod tests {
             .poll()
             .iter()
             .any(|e| matches!(e, LspEvent::CodeLensRefresh { lang } if lang == "rust")));
+    }
+
+    #[test]
+    fn folding_range_response_becomes_a_folding_event() {
+        let mut mgr = manager();
+        mgr.pending
+            .insert(("rust".into(), 1), pend(Pending::FoldingRange));
+        feed(
+            &mgr,
+            "rust",
+            Incoming::Response {
+                id: 1,
+                result: serde_json::json!([{ "startLine": 2, "endLine": 8, "kind": "region" }]),
+                error: None,
+            },
+        );
+        assert!(
+            matches!(mgr.poll().as_slice(), [LspEvent::FoldingRanges { uri, ranges }]
+                if uri == "file:///x.rs" && ranges.len() == 1 && ranges[0].start_line == 2)
+        );
     }
 
     #[test]

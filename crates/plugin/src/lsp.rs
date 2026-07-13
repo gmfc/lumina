@@ -95,6 +95,15 @@ pub struct LspCodeLens {
     pub title: String,
 }
 
+/// One foldable region (§7.3) — the primitive twin of `editor_lsp::FoldingRange`. `kind` is
+/// `comment`/`imports`/`region` or `None`. Line-only (fold char columns are ignored).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspFoldingRange {
+    pub start_line: u32,
+    pub end_line: u32,
+    pub kind: Option<String>,
+}
+
 /// Diagnostic severity — the primitive twin of `editor_lsp::Severity`, so a plugin can own
 /// diagnostics without depending on `editor-lsp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -84,6 +84,10 @@ impl App {
             if synced && self.lsp.supports_code_lens(&lang) {
                 self.lsp.request_code_lens(&path, &lang);
             }
+            // …and folding ranges (§7.3).
+            if synced && self.lsp.supports_folding(&lang) {
+                self.lsp.request_folding_ranges(&path, &lang);
+            }
             // Debounced diagnostics pull (§5.1): only for servers that declared pull. Re-arm the
             // timer on each revision change; fire once the buffer has been quiet for PULL_DEBOUNCE.
             // Push-diagnostic servers never enter here (the gate is off), so nothing double-fires.
@@ -303,6 +307,21 @@ impl App {
                 self.editor
                     .pending_events
                     .push(editor_plugin::event::Event::LspCodeLenses { doc, lenses });
+            }
+            LspEvent::FoldingRanges { uri, ranges } => {
+                let doc = crate::lsp::path_from_uri(&uri)
+                    .and_then(|path| self.editor.workspace.find_by_path(&path));
+                let ranges = ranges
+                    .into_iter()
+                    .map(|r| editor_plugin::LspFoldingRange {
+                        start_line: r.start_line,
+                        end_line: r.end_line,
+                        kind: r.kind,
+                    })
+                    .collect();
+                self.editor
+                    .pending_events
+                    .push(editor_plugin::event::Event::LspFoldingRanges { doc, ranges });
             }
             LspEvent::CodeLensRefresh { lang } => {
                 // Re-request lenses for every open doc of this language (§6.4).

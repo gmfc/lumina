@@ -144,6 +144,22 @@ fn parses_code_lenses_resolved_and_unresolved() {
 }
 
 #[test]
+fn parses_folding_ranges() {
+    let result = serde_json::json!([
+        { "startLine": 2, "endLine": 8, "kind": "region" },
+        { "startLine": 0, "endLine": 4, "kind": "imports" },
+        { "startLine": 10, "endLine": 12 }, // no kind
+        { "endLine": 3 } // malformed (no startLine) → skipped
+    ]);
+    let ranges = parse_folding_ranges(&result);
+    assert_eq!(ranges.len(), 3);
+    assert_eq!((ranges[0].start_line, ranges[0].end_line), (2, 8));
+    assert_eq!(ranges[0].kind.as_deref(), Some("region"));
+    assert_eq!(ranges[1].kind.as_deref(), Some("imports"));
+    assert!(ranges[2].kind.is_none());
+}
+
+#[test]
 fn parses_inlay_hints_string_and_parts_labels() {
     // A string label, an InlayHintLabelPart[] label (flattened), padding + kind.
     let result = serde_json::json!([
@@ -778,6 +794,10 @@ fn initialize_params_are_honest_and_complete() {
     );
     assert_eq!(
         p["capabilities"]["workspace"]["codeLens"]["refreshSupport"],
+        true
+    );
+    assert_eq!(
+        p["capabilities"]["textDocument"]["foldingRange"]["lineFoldingOnly"],
         true
     );
 }

@@ -23,6 +23,7 @@ pub mod diagnostics;
 pub mod document_highlight;
 pub mod explorer;
 pub mod find;
+pub mod folding;
 pub mod git_nav;
 pub mod hover;
 pub mod inlay_hints;
@@ -73,6 +74,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(semantic_tokens::SemanticTokensPlugin),
         Box::new(inlay_hints::InlayHintsPlugin),
         Box::new(code_lens::CodeLensPlugin),
+        Box::new(folding::FoldingPlugin),
         Box::new(code_action::CodeActionPlugin::default()),
         Box::new(completion::CompletionPlugin::default()),
         Box::new(clipboard::ClipboardPlugin),

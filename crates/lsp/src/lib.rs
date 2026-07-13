@@ -225,6 +225,16 @@ pub enum Cap {
     SemanticTokens,
     InlayHint,
     CodeLens,
+    FoldingRange,
+}
+
+/// One foldable region (§7.3). `lineFoldingOnly` client cap → char columns are ignored. `kind`:
+/// `comment` / `imports` / `region`, or `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldingRange {
+    pub start_line: u32,
+    pub end_line: u32,
+    pub kind: Option<String>,
 }
 
 /// One code lens (§6.4): an actionable annotation at a (line, UTF-16 char) position. `title` is
@@ -360,6 +370,8 @@ pub struct ServerCaps {
     pub code_lens: bool,
     /// Whether the server resolves lens commands lazily (`codeLensProvider.resolveProvider`).
     pub code_lens_resolve: bool,
+    /// Folding ranges via `textDocument/foldingRange` (§7.3), gated on `foldingRangeProvider`.
+    pub folding_range: bool,
     /// The command ids the server declared via `executeCommandProvider.commands` — only these may
     /// be sent to `workspace/executeCommand` (§8.4).
     pub execute_commands: Vec<String>,
@@ -386,6 +398,7 @@ impl ServerCaps {
             Cap::SemanticTokens => self.semantic_tokens,
             Cap::InlayHint => self.inlay_hint,
             Cap::CodeLens => self.code_lens,
+            Cap::FoldingRange => self.folding_range,
         }
     }
 }
