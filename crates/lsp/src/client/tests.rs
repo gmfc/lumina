@@ -154,16 +154,40 @@ fn locations_handle_single_array_and_link() {
 #[test]
 fn completion_reads_list_and_array_forms() {
     let list = serde_json::json!({
+        "isIncomplete": true,
         "items": [
             {"label": "println!", "insertText": "println!"},
             {"label": "push", "detail": "fn push(&mut self)"}
         ]
     });
-    let items = parse_completion(&list);
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0].insert_text, "println!");
-    assert_eq!(items[1].insert_text, "push"); // falls back to label
-    assert_eq!(items[1].detail.as_deref(), Some("fn push(&mut self)"));
+    let cl = parse_completion(&list);
+    assert!(cl.is_incomplete);
+    assert_eq!(cl.items.len(), 2);
+    assert_eq!(cl.items[0].insert_text, "println!");
+    assert_eq!(cl.items[1].insert_text, "push"); // falls back to label
+    assert_eq!(cl.items[1].detail.as_deref(), Some("fn push(&mut self)"));
+    // A bare array form has no isIncomplete.
+    assert!(!parse_completion(&serde_json::json!([{"label": "a"}])).is_incomplete);
+}
+
+#[test]
+fn completion_parses_additional_edits_snippet_and_data() {
+    let list = serde_json::json!({ "items": [{
+        "label": "HashMap",
+        "insertTextFormat": 2,
+        "data": { "id": 7 },
+        "additionalTextEdits": [
+            {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"use std::collections::HashMap;\n"}
+        ]
+    }]});
+    let it = &parse_completion(&list).items[0];
+    assert!(it.is_snippet);
+    assert_eq!(it.data, Some(serde_json::json!({ "id": 7 })));
+    assert_eq!(it.additional_edits.len(), 1);
+    assert_eq!(
+        it.additional_edits[0].new_text,
+        "use std::collections::HashMap;\n"
+    );
 }
 
 #[test]

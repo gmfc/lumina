@@ -59,6 +59,9 @@ fn ci(label: &str, kind: u8) -> editor_plugin::LspCompletionItem {
         detail: None,
         insert_text: label.to_string(),
         kind: Some(kind),
+        additional_edits: Vec::new(),
+        is_snippet: false,
+        data: None,
     }
 }
 
@@ -67,7 +70,10 @@ fn ci(label: &str, kind: u8) -> editor_plugin::LspCompletionItem {
 fn feed_completion(app: &mut App, items: Vec<editor_plugin::LspCompletionItem>) {
     app.editor
         .pending_events
-        .push(editor_plugin::event::Event::LspCompletion(items));
+        .push(editor_plugin::event::Event::LspCompletion {
+            items,
+            is_incomplete: false,
+        });
     app.drain_workers();
 }
 

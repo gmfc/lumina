@@ -34,7 +34,12 @@ pub enum Event {
     /// The language server answered a completion request with these items (translated from
     /// `editor-lsp` at the app boundary). Delivered to the completion plugin, which anchors and
     /// filters them into a caret popup.
-    LspCompletion(Vec<crate::lsp::LspCompletionItem>),
+    LspCompletion {
+        items: Vec<crate::lsp::LspCompletionItem>,
+        /// The server truncated the list — re-request as the user types instead of filtering
+        /// locally.
+        is_incomplete: bool,
+    },
     /// The language server resolved a single navigation target (go-to-definition / implementation /
     /// type-definition). Delivered to the navigation plugin, which jumps there via
     /// [`crate::Host::open_location`].

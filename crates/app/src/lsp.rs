@@ -11,12 +11,13 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use editor_lsp::client::{
-    parse_capabilities, parse_code_actions, parse_completion, parse_document_highlights,
-    parse_document_symbols, parse_hover, parse_locations, parse_signature_help, parse_text_edits,
-    parse_workspace_edit, parse_workspace_symbols,
+    parse_capabilities, parse_code_actions, parse_completion,
+    parse_completion_item_additional_edits, parse_document_highlights, parse_document_symbols,
+    parse_hover, parse_locations, parse_signature_help, parse_text_edits, parse_workspace_edit,
+    parse_workspace_symbols,
 };
 use editor_lsp::{
-    Cap, CodeAction, CompletionItem, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
+    Cap, CodeAction, CompletionList, DiagnosticsUpdate, DocumentHighlight, DocumentSymbol,
     Incoming, Location, LspClient, LspHandle, ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
 };
 
@@ -36,6 +37,7 @@ enum Pending {
     DocumentHighlight,
     WorkspaceSymbols,
     CodeAction,
+    ResolveCompletion,
 }
 
 /// Whether a request kind is auto-cancelled when a newer one of the same kind supersedes it
@@ -103,7 +105,13 @@ pub enum LspEvent {
     Diagnostics(DiagnosticsUpdate),
     Hover(String),
     Goto(Location),
-    Completion(Vec<CompletionItem>),
+    Completion(CompletionList),
+    /// Late `additionalTextEdits` from `completionItem/resolve` (auto-imports), for the document
+    /// the completion was accepted in.
+    CompletionResolvedEdits {
+        uri: String,
+        edits: Vec<TextEdit>,
+    },
     Rename(WorkspaceEdit),
     References(Vec<Location>),
     DocumentSymbols(Vec<DocumentSymbol>),
@@ -569,6 +577,10 @@ fn response_event(kind: Pending, uri: &str, result: &serde_json::Value) -> Optio
         Pending::Hover => LspEvent::Hover(parse_hover(result)?),
         Pending::Definition => LspEvent::Goto(parse_locations(result).into_iter().next()?),
         Pending::Completion => LspEvent::Completion(parse_completion(result)),
+        Pending::ResolveCompletion => LspEvent::CompletionResolvedEdits {
+            uri: uri.to_string(),
+            edits: parse_completion_item_additional_edits(result),
+        },
         Pending::Rename => LspEvent::Rename(parse_workspace_edit(result)),
         Pending::References => LspEvent::References(parse_locations(result)),
         Pending::DocumentSymbols => LspEvent::DocumentSymbols(parse_document_symbols(result)),

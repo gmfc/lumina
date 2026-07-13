@@ -113,7 +113,13 @@ pub fn initialize_params(root_uri: &str, client_version: &str) -> Value {
                 "implementation": { "linkSupport": true },
                 "references": {},
                 "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
-                "completion": { "completionItem": { "snippetSupport": false } },
+                "completion": {
+                    "contextSupport": true,
+                    "completionItem": {
+                        "snippetSupport": false,
+                        "resolveSupport": { "properties": ["documentation", "detail", "additionalTextEdits"] }
+                    }
+                },
                 "rename": { "prepareSupport": false },
                 "formatting": {}
             }
@@ -184,6 +190,15 @@ impl LspHandle {
         self.request(
             "textDocument/completion",
             Self::position(uri, line, character),
+        )
+    }
+
+    /// Resolve a completion item to fetch its lazy fields (documentation, additionalTextEdits).
+    /// The server keys off the echoed `data`; `label` disambiguates.
+    pub fn resolve_completion(&self, label: &str, data: &Value) -> io::Result<i64> {
+        self.request(
+            "completionItem/resolve",
+            json!({ "label": label, "data": data }),
         )
     }
 

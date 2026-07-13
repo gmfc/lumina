@@ -9,8 +9,8 @@
 //! transport + the on-screen popup geometry stay app-side.
 
 use editor_plugin::{
-    Contributions, Event, Host, Key, KeyCode, LspCompletionItem, LspRequestKind, Plugin, Popup,
-    PopupRow,
+    Contributions, Event, Host, Key, KeyCode, LspCompletionItem, LspRequestKind, LspTextEdit,
+    LspWorkspaceEdit, Plugin, Popup, PopupRow,
 };
 
 /// True for identifier characters — the popup anchors at the start of the identifier under the
@@ -134,6 +134,8 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
 #[derive(Default)]
 pub struct CompletionPlugin {
     state: Option<CompletionState>,
+    /// The server truncated the list — re-request on each keystroke instead of filtering locally.
+    is_incomplete: bool,
 }
 
 impl CompletionPlugin {
@@ -160,7 +162,8 @@ impl CompletionPlugin {
     }
 
     /// Open a popup from server `items`, anchored at the start of the identifier under the caret.
-    fn open(&mut self, items: Vec<LspCompletionItem>, host: &mut dyn Host) {
+    fn open(&mut self, items: Vec<LspCompletionItem>, is_incomplete: bool, host: &mut dyn Host) {
+        self.is_incomplete = is_incomplete;
         if items.is_empty() {
             return;
         }
@@ -222,19 +225,19 @@ impl CompletionPlugin {
         }
     }
 
-    /// Accept the selected item, replacing the identifier prefix before each caret.
+    /// Accept the selected item, replacing the identifier prefix before each caret, then applying
+    /// any `additionalTextEdits` (auto-imports) — eagerly if present, else via
+    /// `completionItem/resolve` (§5.2).
     fn accept(&mut self, host: &mut dyn Host) {
-        let insert = self
-            .state
-            .as_ref()
-            .and_then(|s| s.selected_item().map(|it| it.insert_text.clone()));
+        let item = self.state.as_ref().and_then(|s| s.selected_item().cloned());
         self.dismiss(host); // clear before editing so our own DidChange is a no-op
-        let Some(insert) = insert else {
+        let Some(item) = item else {
             return;
         };
         let Some(id) = host.active_doc() else {
             return;
         };
+        let insert = item.insert_text.clone();
         let built = host.workspace().documents.get(id).map(|doc| {
             let head = doc.selections.primary().head;
             let mut start = head;
@@ -252,6 +255,31 @@ impl CompletionPlugin {
         if let Some((txn, after)) = built {
             host.apply_transaction(id, txn);
             host.set_selections(id, after);
+        }
+        // Auto-imports: apply eager additionalTextEdits, or resolve to fetch them lazily.
+        if !item.additional_edits.is_empty() {
+            Self::apply_additional_edits(host, &item.additional_edits);
+        } else if let Some(data) = item.data {
+            if host.lsp_enabled() {
+                host.lsp_request(LspRequestKind::ResolveCompletion {
+                    label: item.label,
+                    data,
+                });
+            }
+        }
+    }
+
+    /// Apply a completion's `additionalTextEdits` (auto-import edits) to the active document via
+    /// the app's workspace-edit pipeline (which owns UTF-16↔char resolution + Transaction).
+    fn apply_additional_edits(host: &mut dyn Host, edits: &[LspTextEdit]) {
+        let path = host
+            .active_doc()
+            .and_then(|id| host.workspace().documents.get(id))
+            .and_then(|d| d.path.clone());
+        if let Some(path) = path {
+            host.apply_workspace_edit(LspWorkspaceEdit {
+                changes: vec![(path.to_string_lossy().into_owned(), edits.to_vec())],
+            });
         }
     }
 
@@ -340,14 +368,22 @@ impl Plugin for CompletionPlugin {
 
     fn on_event(&mut self, event: &Event, host: &mut dyn Host) {
         match event {
-            Event::LspCompletion(items) => self.open(items.clone(), host),
+            Event::LspCompletion {
+                items,
+                is_incomplete,
+            } => self.open(items.clone(), *is_incomplete, host),
             Event::DidChange(id) if host.active_doc() == Some(*id) => {
-                // Typing a trigger char (`.`/`::`) auto-requests member/path completions; otherwise
-                // keep an open popup filtered against the new prefix.
+                // Typing a trigger char (`.`/`::`) auto-requests member/path completions; while a
+                // popup is open, an `isIncomplete` list is re-requested (server re-filters), an
+                // exhaustive one is filtered locally.
                 if host.lsp_enabled() && Self::at_trigger_char(host) {
                     host.lsp_request(LspRequestKind::Completion);
                 } else if self.state.is_some() {
-                    self.refresh(host);
+                    if self.is_incomplete && host.lsp_enabled() {
+                        host.lsp_request(LspRequestKind::Completion);
+                    } else {
+                        self.refresh(host);
+                    }
                 }
             }
             Event::DidChangeCursor(id) if host.active_doc() == Some(*id) => {
@@ -373,6 +409,9 @@ mod tests {
             detail: None,
             insert_text: label.to_string(),
             kind,
+            additional_edits: Vec::new(),
+            is_snippet: false,
+            data: None,
         }
     }
 

@@ -131,6 +131,23 @@ impl LspManager {
         })
     }
 
+    pub fn request_resolve_completion(
+        &mut self,
+        path: &Path,
+        language: &str,
+        label: &str,
+        data: &serde_json::Value,
+    ) -> bool {
+        let uri = uri_for(path);
+        self.send_request(
+            language,
+            &uri,
+            Pending::ResolveCompletion,
+            Cap::Completion,
+            |c| c.resolve_completion(label, data),
+        )
+    }
+
     pub fn request_signature_help(
         &mut self,
         path: &Path,
