@@ -201,11 +201,25 @@ fn render_editor_row(
         .map(|h| resolve_line_styles(h.line_spans(line_idx), line_text.chars().count(), ctx.theme))
         .unwrap_or_default();
 
+    draw_line_body(buf, ctx, y, line_idx, line_start, line_text, &char_styles)
+}
+
+/// Draw one line's text with tab expansion, inline virtual text (inlay hints / code lens),
+/// hscroll clipping, and the caret. Returns the primary caret's screen position when it lands on
+/// this line. Split out of [`render_editor_row`] (which does the gutter) to keep each focused.
+fn draw_line_body(
+    buf: &mut ratatui::buffer::Buffer,
+    ctx: &EditorCtx,
+    y: u16,
+    line_idx: usize,
+    line_start: usize,
+    line_text: &str,
+    char_styles: &[Option<Style>],
+) -> Option<(u16, u16)> {
     let mut primary_screen = None;
-    // Text cells available after the gutter (the horizontal viewport).
     let view_width = ctx.area.width.saturating_sub(ctx.gutter) as usize;
-    // Inline virtual text anchored on this line (inlay hints / code lens), sorted by offset so we
-    // can emit each just before the character it anchors before (the tail trails the line end).
+    // Inline virtual text anchored on this line, sorted by offset so each is emitted just before
+    // the character it anchors before (the tail trails the line end).
     let eol_off = line_start + ctx.doc.line_len_chars(line_idx);
     let mut vts: Vec<&VirtualText> = ctx
         .deco_virtual
@@ -215,46 +229,37 @@ fn render_editor_row(
         .collect();
     vts.sort_by_key(|v| v.offset);
     let mut vi = 0;
-    // `col` tracks the absolute display column from the line start (tab stops are absolute);
-    // the on-screen position is that column shifted left by the horizontal scroll offset.
+    // `col` is the absolute display column from the line start (tab stops are absolute); the
+    // on-screen position is `col` shifted left by the horizontal scroll offset.
     let mut col: usize = 0;
     for (ci, ch) in line_text.chars().enumerate() {
         let char_off = line_start + ci;
-        // Emit any virtual text anchored just before this character, displacing it rightward.
-        while vi < vts.len() && vts[vi].offset == char_off {
-            col = emit_virtual(buf, ctx, y, vts[vi], col, view_width);
-            vi += 1;
-        }
+        vi = drain_virtual_at(buf, ctx, y, &vts, vi, char_off, &mut col, view_width);
         let cells = char_cells(ch, col, ctx.doc.tab_width);
-        let end = col + cells;
-        // Wholly left of the viewport (a tab/wide char may straddle the left edge).
-        if end <= ctx.hscroll {
-            col = end;
-            continue;
+        let (screen, past_right) = draw_clipped_char(
+            buf,
+            ctx,
+            y,
+            ch,
+            ci,
+            char_off,
+            col,
+            cells,
+            view_width,
+            char_styles,
+        );
+        if let Some(pos) = screen {
+            primary_screen = Some(pos);
         }
-        // Cells clipped off the left edge for a char straddling `hscroll`.
-        let skip = ctx.hscroll.saturating_sub(col);
-        let delta = col + skip - ctx.hscroll; // == max(col, hscroll) - hscroll
-        if delta >= view_width {
-            // Off the right edge. Stop unless virtual text still trails this line, in which case
-            // keep advancing `col` (without drawing) so the trailing emit lands correctly.
-            if vi >= vts.len() {
-                break;
-            }
-            col = end;
-            continue;
+        col += cells;
+        // Off the right edge and nothing trails this line → done.
+        if past_right && vi >= vts.len() {
+            break;
         }
-        let sx = ctx.text_x + delta as u16;
-        if ctx.doc.selections.primary().head == char_off {
-            primary_screen = Some((sx, y));
-        }
-        let style = cell_style(ctx, &char_styles, ci, char_off);
-        draw_char_cells(buf, sx, y, ch, style, cells, skip);
-        col = end;
     }
 
-    // Cursor at end-of-line (past last char), placed at the real line width — before any trailing
-    // virtual text.
+    // Caret at end-of-line (past the last char), placed at the real line width — before any
+    // trailing virtual text.
     if ctx.doc.selections.primary().head == eol_off && col >= ctx.hscroll {
         let delta = col - ctx.hscroll;
         if delta <= view_width {
@@ -267,6 +272,57 @@ fn render_editor_row(
         vi += 1;
     }
     primary_screen
+}
+
+/// Emit every virtual-text run anchored exactly before `char_off` (advancing `col`), returning the
+/// next unconsumed index into the sorted `vts`.
+#[allow(clippy::too_many_arguments)]
+fn drain_virtual_at(
+    buf: &mut ratatui::buffer::Buffer,
+    ctx: &EditorCtx,
+    y: u16,
+    vts: &[&VirtualText],
+    mut vi: usize,
+    char_off: usize,
+    col: &mut usize,
+    view_width: usize,
+) -> usize {
+    while vi < vts.len() && vts[vi].offset == char_off {
+        *col = emit_virtual(buf, ctx, y, vts[vi], *col, view_width);
+        vi += 1;
+    }
+    vi
+}
+
+/// Draw one character at display column `col` with horizontal-scroll clipping. Returns the caret's
+/// screen position if this char holds the primary caret, and whether it fell off the right edge.
+#[allow(clippy::too_many_arguments)]
+fn draw_clipped_char(
+    buf: &mut ratatui::buffer::Buffer,
+    ctx: &EditorCtx,
+    y: u16,
+    ch: char,
+    ci: usize,
+    char_off: usize,
+    col: usize,
+    cells: usize,
+    view_width: usize,
+    char_styles: &[Option<Style>],
+) -> (Option<(u16, u16)>, bool) {
+    let end = col + cells;
+    if end <= ctx.hscroll {
+        return (None, false); // wholly left of the viewport
+    }
+    let skip = ctx.hscroll.saturating_sub(col); // cells clipped off the left edge
+    let delta = col + skip - ctx.hscroll; // == max(col, hscroll) - hscroll
+    if delta >= view_width {
+        return (None, true); // off the right edge
+    }
+    let sx = ctx.text_x + delta as u16;
+    let screen = (ctx.doc.selections.primary().head == char_off).then_some((sx, y));
+    let style = cell_style(ctx, char_styles, ci, char_off);
+    draw_char_cells(buf, sx, y, ch, style, cells, skip);
+    (screen, false)
 }
 
 /// Draw the git change-bar for `line_idx` in the gutter's separator column (plan §4.1).

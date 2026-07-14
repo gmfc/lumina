@@ -19,8 +19,8 @@ use editor_lsp::client::{
 };
 use editor_lsp::{
     Cap, CodeAction, CodeLens, CompletionList, DiagnosticsUpdate, DocumentHighlight,
-    DocumentSymbol, Incoming, Location, LspClient, LspHandle, PullReport, ServerCaps,
-    SignatureHelp, TextEdit, WorkspaceEdit,
+    DocumentSymbol, Incoming, Location, LspClient, LspHandle, PullReport, ResponseError,
+    ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
 };
 
 mod requests;
@@ -333,182 +333,238 @@ impl LspManager {
                 }
             };
             match msg {
-                Incoming::Diagnostics(u) => {
-                    // Remember which docs this server has diagnostics for, so a crash can clear
-                    // its now-stale squiggles.
-                    self.published
-                        .entry(lang.clone())
-                        .or_default()
-                        .insert(u.uri.clone());
-                    // Snapshot the raw diagnostics for this URI (replacing the prior batch) so a
-                    // later codeAction request can echo the overlapping ones into its context.
-                    if u.raw.is_empty() {
-                        self.diag_raw.remove(&u.uri);
-                    } else {
-                        self.diag_raw.insert(u.uri.clone(), u.raw.clone());
-                    }
-                    out.push(LspEvent::Diagnostics(u));
-                }
+                Incoming::Diagnostics(u) => self.on_diagnostics(&lang, u, &mut out),
                 Incoming::Response { id, result, error } => {
-                    // Is this the awaited `InitializeResult` for this connection?
-                    let is_init = matches!(
-                        self.state.get(&lang),
-                        Some(ClientState::Initializing { init_id }) if *init_id == id
-                    );
-                    if is_init {
-                        match error {
-                            Some(err) => {
-                                // Initialize failed: drop the connection, don't retry.
-                                self.clients.remove(&lang);
-                                self.state.remove(&lang);
-                                self.failed.insert(lang.clone(), ());
-                                out.push(LspEvent::Error(format!(
-                                    "initialize failed: {}",
-                                    err.message
-                                )));
-                            }
-                            None => {
-                                // Capabilities in hand → send `initialized` and start serving.
-                                let caps = parse_capabilities(&result);
-                                if let Some(handle) = self.clients.get(&lang) {
-                                    let _ = handle.send_initialized();
-                                }
-                                self.state.insert(lang.clone(), ClientState::Running(caps));
-                            }
-                        }
-                        continue;
-                    }
-                    let Some(entry) = self.pending.remove(&(lang.clone(), id)) else {
-                        continue;
-                    };
-                    // Superseded? A newer request of the same cancelable kind is now in flight,
-                    // so this (older) answer is stale even if the buffer never changed (§9.4).
-                    let key = (lang.clone(), entry.kind);
-                    let superseded = is_cancelable(entry.kind)
-                        && self.inflight.get(&key).is_some_and(|&latest| latest != id);
-                    if !superseded {
-                        self.inflight.remove(&key); // this request resolved its kind's slot
-                    }
-                    if let Some(err) = error {
-                        // Error matrix (§9.5): cancellations/staleness (-32800/-32801/-32802) and
-                        // superseded replies are not user errors — drop silently. A real failure
-                        // (RequestFailed, etc.) is surfaced.
-                        if !superseded && !err.is_droppable() {
-                            out.push(LspEvent::Error(err.message));
-                        }
-                        continue;
-                    }
-                    // Drop a result that no longer matches the buffer it was computed against — a
-                    // stale answer would render/apply at shifted positions (§9.4). Edit-producing
-                    // results (rename) must never apply across versions; display results just drop.
-                    let current = self
-                        .versions
-                        .get(&entry.uri)
-                        .copied()
-                        .unwrap_or(entry.version);
-                    if superseded || current != entry.version {
-                        continue;
-                    }
-                    // A pull-diagnostics report caches its resultId and reuses the push path (so it
-                    // updates the same diagnostics model + raw snapshot); everything else maps
-                    // straight to an event.
-                    if entry.kind == Pending::Diagnostic {
-                        self.handle_pull_report(&entry.uri, &lang, &result, &mut out);
-                    } else if entry.kind == Pending::CodeLens {
-                        self.handle_code_lens(&entry.uri, &lang, &result, &mut out);
-                    } else if entry.kind == Pending::CodeLensResolve {
-                        self.handle_code_lens_resolve(&entry.uri, &result, &mut out);
-                    } else if entry.kind == Pending::SemanticTokens {
-                        // Decode against this connection's legend (fixed at capability time).
-                        let tokens = match self.state.get(&lang) {
-                            Some(ClientState::Running(caps)) => {
-                                parse_semantic_tokens(&result, &caps.semantic_legend)
-                            }
-                            _ => Vec::new(),
-                        };
-                        out.push(LspEvent::SemanticTokens {
-                            uri: entry.uri.clone(),
-                            tokens,
-                        });
-                    } else {
-                        out.extend(response_event(entry.kind, &entry.uri, &result));
-                    }
+                    self.on_response(&lang, id, result, error, &mut out)
                 }
                 Incoming::ServerRequest { id, method, params } => {
-                    // Every server→client request MUST be answered (§1.3) — silence deadlocks
-                    // servers that await the reply. Manager-local ones are answered here; the
-                    // rest are routed to the app (which owns docs/UI) to act and answer.
-                    match method.as_str() {
-                        "workspace/configuration" => {
-                            self.respond(&lang, &id, configuration_response(&params))
-                        }
-                        "workspace/workspaceFolders" => {
-                            let folders = workspace_folders_response(&self.root_uri);
-                            self.respond(&lang, &id, folders)
-                        }
-                        "client/registerCapability" => {
-                            self.register_capability(&lang, &params);
-                            self.respond(&lang, &id, serde_json::Value::Null);
-                        }
-                        "client/unregisterCapability" => {
-                            self.unregister_capability(&lang, &params);
-                            self.respond(&lang, &id, serde_json::Value::Null);
-                        }
-                        "window/workDoneProgress/create" => {
-                            self.respond(&lang, &id, serde_json::Value::Null)
-                        }
-                        "workspace/codeLens/refresh" => {
-                            self.respond(&lang, &id, serde_json::Value::Null);
-                            out.push(LspEvent::CodeLensRefresh { lang: lang.clone() });
-                        }
-                        "workspace/semanticTokens/refresh" => {
-                            // Ack, then tell the app to re-request tokens for this language's docs
-                            // (project-wide meaning changed, e.g. a dependency reindexed §7.1).
-                            self.respond(&lang, &id, serde_json::Value::Null);
-                            out.push(LspEvent::SemanticTokensRefresh { lang: lang.clone() });
-                        }
-                        "workspace/inlayHint/refresh" => {
-                            self.respond(&lang, &id, serde_json::Value::Null);
-                            out.push(LspEvent::InlayHintRefresh { lang: lang.clone() });
-                        }
-                        "workspace/diagnostic/refresh" => {
-                            // Ack, then drop cached resultIds (forcing a full re-pull) and tell the
-                            // app to re-arm its debounced pull for this language's docs (§5.1).
-                            self.respond(&lang, &id, serde_json::Value::Null);
-                            self.diag_result_id.clear();
-                            out.push(LspEvent::DiagnosticsRefresh { lang: lang.clone() });
-                        }
-                        "workspace/applyEdit"
-                        | "window/showMessageRequest"
-                        | "window/showDocument" => out.push(LspEvent::ServerRequest {
-                            lang: lang.clone(),
-                            id,
-                            method,
-                            params,
-                        }),
-                        _ => {
-                            if let Some(h) = self.clients.get(&lang) {
-                                let _ = h.respond_err(&id, -32601, "method not found");
-                            }
-                        }
-                    }
+                    self.on_server_request(&lang, id, method, params, &mut out)
                 }
                 Incoming::Notification { method, params } => {
-                    // window/showMessage → statusline; $/progress → the work-done spinner (§1.5).
-                    // logMessage / telemetry / unknown are dropped (a log view is a later PR).
-                    if method == "window/showMessage" {
-                        if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
-                            out.push(LspEvent::Message(msg.to_string()));
-                        }
-                    } else if method == "$/progress" {
-                        if let Some(ev) = self.handle_progress(&lang, &params) {
-                            out.push(ev);
-                        }
-                    }
+                    self.on_notification(&lang, &method, &params, &mut out)
                 }
             }
         }
         out
+    }
+
+    /// A `publishDiagnostics` push: track the URI for crash-clearing, snapshot its raw diagnostics
+    /// (for codeAction context), and surface the update.
+    fn on_diagnostics(&mut self, lang: &str, u: DiagnosticsUpdate, out: &mut Vec<LspEvent>) {
+        self.published
+            .entry(lang.to_string())
+            .or_default()
+            .insert(u.uri.clone());
+        if u.raw.is_empty() {
+            self.diag_raw.remove(&u.uri);
+        } else {
+            self.diag_raw.insert(u.uri.clone(), u.raw.clone());
+        }
+        out.push(LspEvent::Diagnostics(u));
+    }
+
+    /// A response to one of our requests: complete the handshake if it is the awaited
+    /// `InitializeResult`, otherwise correlate it to its pending request and dispatch the result.
+    fn on_response(
+        &mut self,
+        lang: &str,
+        id: i64,
+        result: serde_json::Value,
+        error: Option<ResponseError>,
+        out: &mut Vec<LspEvent>,
+    ) {
+        let is_init = matches!(
+            self.state.get(lang),
+            Some(ClientState::Initializing { init_id }) if *init_id == id
+        );
+        if is_init {
+            self.complete_handshake(lang, result, error, out);
+            return;
+        }
+        if let Some(entry) = self.correlate_response(lang, id, error, out) {
+            self.dispatch_response(lang, &entry, &result, out);
+        }
+    }
+
+    /// Finish (or abandon) the initialize handshake: on error drop the connection permanently; on
+    /// success store capabilities, send `initialized`, and start serving.
+    fn complete_handshake(
+        &mut self,
+        lang: &str,
+        result: serde_json::Value,
+        error: Option<ResponseError>,
+        out: &mut Vec<LspEvent>,
+    ) {
+        match error {
+            Some(err) => {
+                self.clients.remove(lang);
+                self.state.remove(lang);
+                self.failed.insert(lang.to_string(), ());
+                out.push(LspEvent::Error(format!(
+                    "initialize failed: {}",
+                    err.message
+                )));
+            }
+            None => {
+                let caps = parse_capabilities(&result);
+                if let Some(handle) = self.clients.get(lang) {
+                    let _ = handle.send_initialized();
+                }
+                self.state
+                    .insert(lang.to_string(), ClientState::Running(caps));
+            }
+        }
+    }
+
+    /// Correlate a non-init response to its pending request, returning the entry only when the
+    /// result is worth dispatching. Drops superseded (§9.4) and version-stale answers silently,
+    /// and surfaces a real (non-droppable) error instead of a result.
+    fn correlate_response(
+        &mut self,
+        lang: &str,
+        id: i64,
+        error: Option<ResponseError>,
+        out: &mut Vec<LspEvent>,
+    ) -> Option<PendingEntry> {
+        let entry = self.pending.remove(&(lang.to_string(), id))?;
+        let key = (lang.to_string(), entry.kind);
+        let superseded = is_cancelable(entry.kind)
+            && self.inflight.get(&key).is_some_and(|&latest| latest != id);
+        if !superseded {
+            self.inflight.remove(&key); // this request resolved its kind's slot
+        }
+        if let Some(err) = error {
+            if !superseded && !err.is_droppable() {
+                out.push(LspEvent::Error(err.message));
+            }
+            return None;
+        }
+        // Drop a result computed against a buffer that has since moved (§9.4).
+        let current = self
+            .versions
+            .get(&entry.uri)
+            .copied()
+            .unwrap_or(entry.version);
+        (!superseded && current == entry.version).then_some(entry)
+    }
+
+    /// Turn a correlated response into the right event: pull diagnostics, code lens, and semantic
+    /// tokens need extra manager state; everything else maps straight through [`response_event`].
+    fn dispatch_response(
+        &mut self,
+        lang: &str,
+        entry: &PendingEntry,
+        result: &serde_json::Value,
+        out: &mut Vec<LspEvent>,
+    ) {
+        match entry.kind {
+            Pending::Diagnostic => self.handle_pull_report(&entry.uri, lang, result, out),
+            Pending::CodeLens => self.handle_code_lens(&entry.uri, lang, result, out),
+            Pending::CodeLensResolve => self.handle_code_lens_resolve(&entry.uri, result, out),
+            Pending::SemanticTokens => {
+                // Decode against this connection's legend (fixed at capability time).
+                let tokens = match self.state.get(lang) {
+                    Some(ClientState::Running(caps)) => {
+                        parse_semantic_tokens(result, &caps.semantic_legend)
+                    }
+                    _ => Vec::new(),
+                };
+                out.push(LspEvent::SemanticTokens {
+                    uri: entry.uri.clone(),
+                    tokens,
+                });
+            }
+            _ => out.extend(response_event(entry.kind, &entry.uri, result)),
+        }
+    }
+
+    /// Answer a server→client request (§1.3): manager-local ones (configuration, folders, dynamic
+    /// registration, refresh acks) here; applyEdit/showMessage(Request)/showDocument route to the
+    /// app; a refresh also emits an event so the app re-requests. Unknown methods get `-32601`.
+    fn on_server_request(
+        &mut self,
+        lang: &str,
+        id: serde_json::Value,
+        method: String,
+        params: serde_json::Value,
+        out: &mut Vec<LspEvent>,
+    ) {
+        // The refresh methods all ack + emit an app-facing event; table-drive them.
+        let refresh = |lang: &str| -> Option<LspEvent> {
+            match method.as_str() {
+                "workspace/codeLens/refresh" => Some(LspEvent::CodeLensRefresh {
+                    lang: lang.to_string(),
+                }),
+                "workspace/semanticTokens/refresh" => Some(LspEvent::SemanticTokensRefresh {
+                    lang: lang.to_string(),
+                }),
+                "workspace/inlayHint/refresh" => Some(LspEvent::InlayHintRefresh {
+                    lang: lang.to_string(),
+                }),
+                _ => None,
+            }
+        };
+        match method.as_str() {
+            "workspace/configuration" => self.respond(lang, &id, configuration_response(&params)),
+            "workspace/workspaceFolders" => {
+                self.respond(lang, &id, workspace_folders_response(&self.root_uri))
+            }
+            "client/registerCapability" => {
+                self.register_capability(lang, &params);
+                self.respond(lang, &id, serde_json::Value::Null);
+            }
+            "client/unregisterCapability" => {
+                self.unregister_capability(lang, &params);
+                self.respond(lang, &id, serde_json::Value::Null);
+            }
+            "window/workDoneProgress/create" => self.respond(lang, &id, serde_json::Value::Null),
+            "workspace/diagnostic/refresh" => {
+                // Also drop cached resultIds so the re-pull is a full one (§5.1).
+                self.respond(lang, &id, serde_json::Value::Null);
+                self.diag_result_id.clear();
+                out.push(LspEvent::DiagnosticsRefresh {
+                    lang: lang.to_string(),
+                });
+            }
+            "workspace/applyEdit" | "window/showMessageRequest" | "window/showDocument" => out
+                .push(LspEvent::ServerRequest {
+                    lang: lang.to_string(),
+                    id,
+                    method,
+                    params,
+                }),
+            _ => match refresh(lang) {
+                Some(ev) => {
+                    self.respond(lang, &id, serde_json::Value::Null);
+                    out.push(ev);
+                }
+                None => {
+                    if let Some(h) = self.clients.get(lang) {
+                        let _ = h.respond_err(&id, -32601, "method not found");
+                    }
+                }
+            },
+        }
+    }
+
+    /// A server→client notification: `window/showMessage` → statusline, `$/progress` → the
+    /// work-done spinner (§1.5). Everything else (logMessage / telemetry / unknown) is dropped.
+    fn on_notification(
+        &mut self,
+        lang: &str,
+        method: &str,
+        params: &serde_json::Value,
+        out: &mut Vec<LspEvent>,
+    ) {
+        if method == "window/showMessage" {
+            if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
+                out.push(LspEvent::Message(msg.to_string()));
+            }
+        } else if method == "$/progress" {
+            if let Some(ev) = self.handle_progress(lang, params) {
+                out.push(ev);
+            }
+        }
     }
 
     /// Turn a pull-diagnostics report into the same bookkeeping + event a push would produce

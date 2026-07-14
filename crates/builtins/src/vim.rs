@@ -80,6 +80,39 @@ fn toggle_case(c: char) -> String {
 }
 
 /// Step `f` `count` times over `doc` from `start`, stopping if it stalls.
+/// The one indent/outdent [`Change`] for line `l`, or `None` when outdenting a line with no
+/// leading indentation. Indent inserts four spaces at the line start; outdent removes one tab or
+/// up to `width` leading spaces.
+fn line_indent_change(d: &Document, l: usize, indent: bool, width: usize) -> Option<Change> {
+    let ls = d.line_to_char(l);
+    if indent {
+        return Some(Change {
+            at: ls,
+            removed: String::new(),
+            inserted: "    ".into(),
+        });
+    }
+    let chars: Vec<char> = d.line_text(l).chars().collect();
+    let remove = leading_indent_width(&chars, width);
+    (remove > 0).then(|| Change {
+        at: ls,
+        removed: d.rope().slice(ls..ls + remove).to_string(),
+        inserted: String::new(),
+    })
+}
+
+/// Number of leading whitespace chars one outdent removes: a single tab, else up to `width` spaces.
+fn leading_indent_width(chars: &[char], width: usize) -> usize {
+    if chars.first() == Some(&'\t') {
+        return 1;
+    }
+    let mut n = 0;
+    while n < width && chars.get(n) == Some(&' ') {
+        n += 1;
+    }
+    n
+}
+
 fn nth(doc: &Document, start: usize, count: usize, f: impl Fn(&Document, usize) -> usize) -> usize {
     let mut p = start;
     for _ in 0..count {
@@ -958,36 +991,9 @@ impl VimPlugin {
                 let fl = d.char_to_line(start);
                 let ll = d.char_to_line(end.saturating_sub(1).max(start));
                 let width = d.tab_width.max(1);
-                let mut changes = Vec::new();
-                for l in fl..=ll {
-                    let ls = d.line_to_char(l);
-                    if indent {
-                        changes.push(Change {
-                            at: ls,
-                            removed: String::new(),
-                            inserted: "    ".into(),
-                        });
-                    } else {
-                        let text = d.line_text(l);
-                        let chars: Vec<char> = text.chars().collect();
-                        let remove = if chars.first() == Some(&'\t') {
-                            1
-                        } else {
-                            let mut n = 0;
-                            while n < width && chars.get(n) == Some(&' ') {
-                                n += 1;
-                            }
-                            n
-                        };
-                        if remove > 0 {
-                            changes.push(Change {
-                                at: ls,
-                                removed: d.rope().slice(ls..ls + remove).to_string(),
-                                inserted: String::new(),
-                            });
-                        }
-                    }
-                }
+                let changes: Vec<Change> = (fl..=ll)
+                    .filter_map(|l| line_indent_change(d, l, indent, width))
+                    .collect();
                 (changes, core_vim::first_non_blank(d, fl))
             }
             None => return,

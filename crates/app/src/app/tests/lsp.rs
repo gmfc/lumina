@@ -443,6 +443,140 @@ fn active_layer<'a>(app: &'a App, layer: &str) -> Option<&'a editor_plugin::Deco
     app.editor.decorations.get(&id)?.get(layer)
 }
 
+/// Path to the `mock_lsp_server` workspace bin, relative to the current test executable.
+fn mock_server_bin() -> PathBuf {
+    let mut p = std::env::current_exe().expect("current_exe");
+    p.pop(); // drop the test binary (…/deps/<name>)
+    if p.ends_with("deps") {
+        p.pop(); // …/deps → …/debug
+    }
+    p.push(format!("mock_lsp_server{}", std::env::consts::EXE_SUFFIX));
+    p
+}
+
+#[test]
+fn update_lsp_syncs_and_requests_passive_features_end_to_end() {
+    // Drive the App's `update_lsp` tick against the scripted mock through the manager: it starts
+    // the server, handshakes, sends didOpen, and requests every passive feature, then the debounced
+    // pull. Covers sync_document / request_passive_features / poll_pull_diagnostics end to end.
+    let bin = mock_server_bin();
+    if !bin.exists() {
+        eprintln!("skipping: mock_lsp_server not found at {bin:?}");
+        return;
+    }
+    let transcript = r#"[
+        {"expect": "initialize"},
+        {"respond": {"capabilities": {
+            "semanticTokensProvider": {"legend": {"tokenTypes": ["keyword"], "tokenModifiers": []}, "full": true},
+            "inlayHintProvider": true,
+            "codeLensProvider": {"resolveProvider": false},
+            "foldingRangeProvider": true,
+            "diagnosticProvider": {"interFileDependencies": false, "workspaceDiagnostics": false}
+        }}},
+        {"expect": "initialized"},
+        {"expect": "textDocument/didOpen"},
+        {"expect": "textDocument/semanticTokens/full"},
+        {"respond": {"data": [0, 0, 2, 0, 0]}},
+        {"expect": "textDocument/inlayHint"},
+        {"respond": []},
+        {"expect": "textDocument/codeLens"},
+        {"respond": []},
+        {"expect": "textDocument/foldingRange"},
+        {"respond": []},
+        {"expect": "textDocument/diagnostic"},
+        {"respond": {"kind": "full", "items": []}},
+        {"exit": 0}
+    ]"#;
+    let mut tpath = std::env::temp_dir();
+    tpath.push(format!("lumina_update_lsp_{}.json", std::process::id()));
+    std::fs::write(&tpath, transcript).unwrap();
+
+    let path = temp_rs_file("fn x() {}\n");
+    let mut app = app_with(&path);
+    // Point the app's (otherwise inert) manager at the mock server.
+    let servers = std::collections::HashMap::from([(
+        "rust".to_string(),
+        vec![
+            bin.to_string_lossy().into_owned(),
+            tpath.to_string_lossy().into_owned(),
+        ],
+    )]);
+    app.lsp = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), servers, "test".into());
+
+    // Tick the loop until the semantic-tokens response round-trips into a published layer.
+    let mut got_tokens = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        if active_layer(&app, "lsp.semantic").is_some() {
+            got_tokens = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        got_tokens,
+        "update_lsp should sync the doc + request semantic tokens end to end"
+    );
+
+    // After a quiet period the debounced diagnostics pull fires on the next tick.
+    std::thread::sleep(std::time::Duration::from_millis(320));
+    app.update_lsp();
+    app.drain_workers();
+
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&tpath).ok();
+}
+
+#[test]
+fn code_actions_event_opens_a_picker_via_handle_lsp_event() {
+    // handle_lsp_event(CodeActions) → on_code_actions → the code-action plugin's picker.
+    let path = temp_rs_file("let x = 1;\n");
+    let mut app = app_with(&path);
+    app.drain_workers(); // flush initial DidChangeActive
+    app.handle_lsp_event(crate::lsp::LspEvent::CodeActions(vec![
+        editor_lsp::CodeAction {
+            title: "Fix it".into(),
+            edit: None,
+            command: None,
+        },
+    ]));
+    app.drain_workers();
+    assert!(
+        app.editor.picker.is_some(),
+        "code actions should open a picker"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn completion_resolved_edits_apply_to_the_document() {
+    // handle_lsp_event(CompletionResolvedEdits) → on_completion_resolved_edits applies the late
+    // auto-import edits to the doc they were resolved for.
+    let path = temp_rs_file("use x;\n");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::CompletionResolvedEdits {
+        uri: crate::lsp::uri_for(&path),
+        edits: vec![editor_lsp::TextEdit {
+            start_line: 0,
+            start_char16: 0,
+            end_line: 0,
+            end_char16: 0,
+            new_text: "// import\n".into(),
+        }],
+    });
+    app.drain_workers();
+    assert!(
+        app.editor
+            .active_document()
+            .unwrap()
+            .to_string()
+            .starts_with("// import"),
+        "the resolved edit should be inserted"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
 /// A temp `.rs` file (so language detection gives `rust` and `lsp_position` resolves).
 fn temp_rs_file(contents: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -731,8 +865,9 @@ fn progress_event_sets_and_clears_the_status_item() {
 #[test]
 fn refresh_events_reissue_requests_without_panicking() {
     // The refresh arms collect the language's open docs and re-request; with no server the
-    // requests are inert, but the collection + dispatch paths run.
-    let path = temp_file("fn x() {}\n");
+    // requests are inert, but the collection + per-doc dispatch loops run (a `.rs` doc so the
+    // `rust` language filter matches).
+    let path = temp_rs_file("fn x() {}\n");
     let mut app = app_with(&path);
     app.handle_lsp_event(crate::lsp::LspEvent::SemanticTokensRefresh {
         lang: "rust".into(),

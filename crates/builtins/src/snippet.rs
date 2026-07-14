@@ -74,57 +74,79 @@ fn parse(chars: &[char], i: &mut usize, out: &mut String, stops: &mut Vec<Tabsto
 }
 
 fn parse_dollar(chars: &[char], i: &mut usize, out: &mut String, stops: &mut Vec<Tabstop>) {
-    if *i >= chars.len() {
-        out.push('$');
+    let Some(&c) = chars.get(*i) else {
+        out.push('$'); // trailing `$`
         return;
-    }
-    if chars[*i] == '{' {
-        *i += 1; // consume '{'
-        if *i < chars.len() && chars[*i].is_ascii_digit() {
+    };
+    match c {
+        '{' => {
+            *i += 1; // consume '{'
+            parse_braced(chars, i, out, stops);
+        }
+        d if d.is_ascii_digit() => {
+            // Bare `$1` — a zero-width tabstop at the current position.
             let num = read_number(chars, i);
-            let start = out.chars().count();
-            match chars.get(*i) {
-                Some(':') => {
-                    *i += 1;
-                    parse(chars, i, out, stops, true); // placeholder (may nest tabstops)
-                }
-                Some('|') => {
-                    *i += 1;
-                    read_choice_first(chars, i, out);
-                }
-                _ => {}
-            }
-            let end = out.chars().count();
+            let at = out.chars().count();
             stops.push(Tabstop {
                 number: num,
-                range: (start, end),
+                range: (at, at),
             });
-            consume_close(chars, i);
-        } else {
-            // ${VAR} / ${VAR:default} — unknown vars fall back to their default (or empty).
-            while *i < chars.len() && chars[*i] != '}' && chars[*i] != ':' {
-                *i += 1;
-            }
-            if chars.get(*i) == Some(&':') {
-                *i += 1;
-                parse(chars, i, out, stops, true);
-            }
-            consume_close(chars, i);
         }
-    } else if chars[*i].is_ascii_digit() {
-        let num = read_number(chars, i);
-        let at = out.chars().count();
-        stops.push(Tabstop {
-            number: num,
-            range: (at, at),
-        });
-    } else if chars[*i].is_alphabetic() || chars[*i] == '_' {
-        // bare $VAR — unknown, expands to nothing.
-        while *i < chars.len() && (chars[*i].is_alphanumeric() || chars[*i] == '_') {
-            *i += 1;
-        }
+        a if a.is_alphabetic() || a == '_' => skip_ident(chars, i), // bare $VAR → nothing
+        _ => out.push('$'),
+    }
+}
+
+/// Parse the body of a `${…}` construct (the `{` already consumed) and its closing `}`: either a
+/// numbered tabstop (`${1}`, `${1:placeholder}`, `${1|a,b|}`) or a variable (`${VAR}`,
+/// `${VAR:default}` — unknown vars fall back to their default or empty).
+fn parse_braced(chars: &[char], i: &mut usize, out: &mut String, stops: &mut Vec<Tabstop>) {
+    if chars.get(*i).is_some_and(|c| c.is_ascii_digit()) {
+        parse_braced_tabstop(chars, i, out, stops);
     } else {
-        out.push('$');
+        skip_var_default(chars, i, out, stops);
+    }
+    consume_close(chars, i);
+}
+
+/// `${1:placeholder}` / `${1|a,b|}`: read the number, expand the placeholder (which may nest more
+/// tabstops) or the first choice, and record the tabstop's span.
+fn parse_braced_tabstop(chars: &[char], i: &mut usize, out: &mut String, stops: &mut Vec<Tabstop>) {
+    let num = read_number(chars, i);
+    let start = out.chars().count();
+    match chars.get(*i) {
+        Some(':') => {
+            *i += 1;
+            parse(chars, i, out, stops, true); // placeholder (may nest tabstops)
+        }
+        Some('|') => {
+            *i += 1;
+            read_choice_first(chars, i, out);
+        }
+        _ => {}
+    }
+    let end = out.chars().count();
+    stops.push(Tabstop {
+        number: num,
+        range: (start, end),
+    });
+}
+
+/// `${VAR}` / `${VAR:default}`: skip the (unknown) variable name, expanding its default if present.
+fn skip_var_default(chars: &[char], i: &mut usize, out: &mut String, stops: &mut Vec<Tabstop>) {
+    while *i < chars.len() && chars[*i] != '}' && chars[*i] != ':' {
+        *i += 1;
+    }
+    if chars.get(*i) == Some(&':') {
+        *i += 1;
+        parse(chars, i, out, stops, true);
+    }
+}
+
+/// Skip a bare `$VAR` identifier (alphanumerics + `_`).
+fn skip_ident(chars: &[char], i: &mut usize) {
+    while *i < chars.len() && (chars[*i].is_alphanumeric() || chars[*i] == '_') {
+        *i += 1;
     }
 }
 

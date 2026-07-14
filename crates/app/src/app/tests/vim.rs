@@ -385,6 +385,26 @@ fn indent_operator_on_line() {
 }
 
 #[test]
+fn outdent_operator_removes_leading_indent() {
+    // `<<` outdents: up to a tab-width of leading spaces, or one leading tab.
+    let (mut app, path) = vim_app("        code"); // 8 spaces (two tab stops)
+    keys(&mut app, "<<");
+    assert_eq!(text(&app), "    code"); // removed one tab-width (4 spaces)
+    std::fs::remove_file(&path).ok();
+
+    let (mut app2, path2) = vim_app("\tcode"); // a leading tab
+    keys(&mut app2, "<<");
+    assert_eq!(text(&app2), "code"); // removed the tab
+    std::fs::remove_file(&path2).ok();
+
+    // Outdenting a line with no indent is a no-op.
+    let (mut app3, path3) = vim_app("code");
+    keys(&mut app3, "<<");
+    assert_eq!(text(&app3), "code");
+    std::fs::remove_file(&path3).ok();
+}
+
+#[test]
 fn disabling_vim_restores_plain_typing() {
     let (mut app, path) = vim_app("x");
     app.exec_id("vim.disable");

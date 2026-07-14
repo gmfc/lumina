@@ -240,27 +240,38 @@ impl CompletionPlugin {
         if item.is_snippet {
             Self::accept_snippet(host, id, &item.insert_text);
         } else {
-            let insert = item.insert_text.clone();
-            let built = host.workspace().documents.get(id).map(|doc| {
-                let head = doc.selections.primary().head;
-                let mut start = head;
-                while start > 0 && is_ident(doc.rope().char(start - 1)) {
-                    start -= 1;
-                }
-                editor_core::edit::selection_edit_transaction(doc, |_d, sel| {
-                    if sel.head == head {
-                        (start..head, insert.clone())
-                    } else {
-                        (sel.span(), insert.clone())
-                    }
-                })
-            });
-            if let Some((txn, after)) = built {
-                host.apply_transaction(id, txn);
-                host.set_selections(id, after);
-            }
+            Self::accept_text(host, id, &item.insert_text);
         }
-        // Auto-imports: apply eager additionalTextEdits, or resolve to fetch them lazily.
+        Self::apply_followups(host, item);
+    }
+
+    /// Replace the identifier prefix before each caret with plain `insert` text (the non-snippet
+    /// accept path), leaving the caret after the inserted text.
+    fn accept_text(host: &mut dyn Host, id: editor_core::DocId, insert: &str) {
+        let insert = insert.to_string();
+        let built = host.workspace().documents.get(id).map(|doc| {
+            let head = doc.selections.primary().head;
+            let mut start = head;
+            while start > 0 && is_ident(doc.rope().char(start - 1)) {
+                start -= 1;
+            }
+            editor_core::edit::selection_edit_transaction(doc, |_d, sel| {
+                if sel.head == head {
+                    (start..head, insert.clone())
+                } else {
+                    (sel.span(), insert.clone())
+                }
+            })
+        });
+        if let Some((txn, after)) = built {
+            host.apply_transaction(id, txn);
+            host.set_selections(id, after);
+        }
+    }
+
+    /// After inserting: apply eager `additionalTextEdits` (auto-imports) or resolve them lazily,
+    /// then run any post-accept command (e.g. `editor.action.triggerSuggest`) via the shim.
+    fn apply_followups(host: &mut dyn Host, item: LspCompletionItem) {
         if !item.additional_edits.is_empty() {
             Self::apply_additional_edits(host, &item.additional_edits);
         } else if let Some(data) = item.data {
@@ -271,8 +282,6 @@ impl CompletionPlugin {
                 });
             }
         }
-        // A post-accept command (e.g. `editor.action.triggerSuggest` after a path completion),
-        // routed through the client-command shim.
         if let Some((command, arguments)) = item.command {
             host.lsp_request(LspRequestKind::ExecuteCommand { command, arguments });
         }

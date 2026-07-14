@@ -20,13 +20,31 @@ impl App {
         if std::mem::take(&mut self.editor.pending_theme_toggle) {
             self.toggle_theme();
         }
-        // Forward queued LSP requests to the (app-owned) manager, resolving the cursor position
-        // app-side (the plugin only expressed intent).
-        let lsp_reqs = std::mem::take(&mut self.editor.pending_lsp_requests);
-        for kind in lsp_reqs {
+        self.drain_pending_lsp_requests();
+        self.drain_pending_opens();
+        self.drain_pending_commands();
+        self.broadcast_pending_events();
+        // The following are drained *after* the broadcast so intents a plugin queued while reacting
+        // to an event (a nav jump, a rename edit) land in the same pass.
+        self.drain_pending_locations();
+        self.drain_pending_workspace_edits();
+        // LSP responses/notifications: diagnostics, hover, goto, completion, rename.
+        for event in self.lsp.poll() {
+            self.handle_lsp_event(event);
+        }
+        self.drain_worker_channel();
+    }
+
+    /// Forward queued LSP requests to the (app-owned) manager, resolving the cursor position
+    /// app-side (the plugin only expressed intent).
+    fn drain_pending_lsp_requests(&mut self) {
+        for kind in std::mem::take(&mut self.editor.pending_lsp_requests) {
             self.dispatch_lsp_request(kind);
         }
-        // Apply any queued opens/commands/events produced during dispatch.
+    }
+
+    /// Apply queued file opens (each optionally jumping to a line).
+    fn drain_pending_opens(&mut self) {
         let opens: Vec<(PathBuf, Option<usize>)> = std::mem::take(&mut self.editor.pending_opens);
         for (path, line) in opens {
             self.open_path(&path);
@@ -34,37 +52,39 @@ impl App {
                 self.goto_line(line);
             }
         }
-        // A plugin can queue *any* command id via `Host::execute` (the palette does this for the
-        // selected row). Resolve each through the full `exec_id` precedence — registry, then the
-        // `command_for_id` editing table, then the app-level stringly ids (`view.settings`,
-        // `config.reload`) — not just the registry, or those last two tiers get silently
-        // dropped (e.g. "Open Settings" from the palette did nothing).
-        let cmds: Vec<String> = std::mem::take(&mut self.editor.pending_commands);
-        for id in cmds {
+    }
+
+    /// Run queued command ids through the full `exec_id` precedence — a plugin can queue *any* id
+    /// via `Host::execute` (the palette does this for the selected row), including the app-level
+    /// stringly ids (`view.settings`, `config.reload`), not just registry commands.
+    fn drain_pending_commands(&mut self) {
+        for id in std::mem::take(&mut self.editor.pending_commands) {
             self.exec_id(&id);
         }
-        // Coalesce duplicate notifications from this tick: a burst of external changes (e.g. a
-        // build touching files, or a formatter rewriting several open tabs) can enqueue the same
-        // idempotent event many times, and each broadcast makes reactive plugins (like the
-        // explorer's full re-walk) redo the same work. Keep first occurrences, preserving order.
+    }
+
+    /// Broadcast queued plugin events, coalescing duplicates from this tick: a burst of external
+    /// changes can enqueue the same idempotent event many times, and each broadcast makes reactive
+    /// plugins redo the same work. Keeps first occurrences, preserving order.
+    fn broadcast_pending_events(&mut self) {
         let mut events = std::mem::take(&mut self.editor.pending_events);
         let mut seen = Vec::new();
         events.retain(|ev| {
-            if seen.contains(ev) {
-                false
-            } else {
+            let dup = seen.contains(ev);
+            if !dup {
                 seen.push(ev.clone());
-                true
             }
+            !dup
         });
         for ev in events {
             self.registry.broadcast(&ev, &mut self.editor);
         }
+    }
 
-        // LSP navigation jumps queued via `Host::open_location` (the `lsp-nav` plugin only
-        // expresses intent). Drained *after* the broadcast so a jump the plugin queued while
-        // reacting to an `LspGoto`/`LspLocations` event lands in the same pass: open the target
-        // and resolve its UTF-16 column to a char offset now that the doc is loaded (app owns IO).
+    /// Apply LSP navigation jumps queued via `Host::open_location` (the `lsp-nav` plugin only
+    /// expresses intent): open the target and resolve its UTF-16 column to a char offset now that
+    /// the doc is loaded (app owns IO).
+    fn drain_pending_locations(&mut self) {
         let locations: Vec<(PathBuf, u32, u32)> =
             std::mem::take(&mut self.editor.pending_locations);
         for (path, line, character) in locations {
@@ -74,22 +94,16 @@ impl App {
                 doc.set_caret(off);
             }
         }
+    }
 
-        // Multi-file rename edits queued via `Host::apply_workspace_edit` (the `rename` plugin only
-        // forwards the edit). Also drained after the broadcast so a rename applied while reacting to
-        // the event lands in the same pass; the app opens each file and applies the edits.
+    /// Apply multi-file rename/code-action edits queued via `Host::apply_workspace_edit` (the
+    /// `rename` plugin only forwards the edit); the app opens each file and applies the edits.
+    fn drain_pending_workspace_edits(&mut self) {
         let workspace_edits: Vec<editor_plugin::LspWorkspaceEdit> =
             std::mem::take(&mut self.editor.pending_workspace_edits);
         for edit in workspace_edits {
             self.apply_workspace_edit(edit);
         }
-
-        // LSP responses/notifications: diagnostics, hover, goto, completion, rename.
-        for event in self.lsp.poll() {
-            self.handle_lsp_event(event);
-        }
-
-        self.drain_worker_channel();
     }
 
     /// Drain background worker messages (FS watch, git, project search) into state.

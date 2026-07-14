@@ -56,21 +56,7 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
     let end = (offset + max_rows).min(total);
     let shown = &popup.rows[offset..end];
 
-    // Width from the widest "glyph label  detail" row, clamped to the pane.
-    let mut width = 14usize;
-    for row in shown {
-        let w = 3
-            + row.label.chars().count()
-            + row
-                .detail
-                .as_ref()
-                .map(|d| 2 + d.chars().count())
-                .unwrap_or(0);
-        width = width.max(w);
-    }
-    let width = (width + 1)
-        .min(editor_area.width.saturating_sub(1) as usize)
-        .max(4) as u16;
+    let width = popup_box_width(shown, editor_area.width);
 
     let rows = shown.len() as u16;
     // Prefer below the anchor; flip above when it would overflow the pane bottom.
@@ -83,11 +69,40 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
     let x = ax.min(editor_area.x + editor_area.width.saturating_sub(width));
     let rect = Rect::new(x, y, width, rows);
     f.render_widget(Clear, rect);
+    draw_completion_rows(f.buffer_mut(), shown, offset, popup.selected, x, y, width);
+}
 
-    let buf = f.buffer_mut();
+/// Box width from the widest "glyph label  detail" row, clamped to `area_width`.
+fn popup_box_width(shown: &[editor_plugin::PopupRow], area_width: u16) -> u16 {
+    let mut width = 14usize;
+    for row in shown {
+        let w = 3
+            + row.label.chars().count()
+            + row
+                .detail
+                .as_ref()
+                .map(|d| 2 + d.chars().count())
+                .unwrap_or(0);
+        width = width.max(w);
+    }
+    (width + 1)
+        .min(area_width.saturating_sub(1) as usize)
+        .max(4) as u16
+}
+
+/// Draw the visible popup rows (`shown`, a window into the full list at `offset`), highlighting the
+/// `selected` one; each row is truncated + padded to `width` so its background fills the box.
+fn draw_completion_rows(
+    buf: &mut ratatui::buffer::Buffer,
+    shown: &[editor_plugin::PopupRow],
+    offset: usize,
+    selected: usize,
+    x: u16,
+    y: u16,
+    width: u16,
+) {
     for (i, row) in shown.iter().enumerate() {
-        let selected = offset + i == popup.selected;
-        let (fg, bg) = if selected {
+        let (fg, bg) = if offset + i == selected {
             (Color::Black, CLR_ACCENT)
         } else {
             (Color::Gray, Color::Rgb(40, 44, 52))
@@ -97,7 +112,6 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
             text.push_str("  ");
             text.push_str(d);
         }
-        // Truncate then pad to the box width so the whole row carries the background.
         let mut s: String = text.chars().take(width as usize).collect();
         let len = s.chars().count();
         if len < width as usize {
