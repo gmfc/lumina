@@ -42,7 +42,7 @@ mod tests;
 const FUEL: u64 = 50_000_000;
 
 /// A loaded external plugin backed by a WebAssembly module.
-pub struct WasmPlugin {
+pub(crate) struct WasmPlugin {
     id: String,
     contributions: Contributions,
     capabilities: Vec<String>,
@@ -53,9 +53,18 @@ pub struct WasmPlugin {
 }
 
 /// Load a WebAssembly plugin from `dir`, or `None` if it isn't one / fails to compile.
-pub fn load_one(dir: &Path) -> Option<Box<dyn Plugin>> {
+pub(crate) fn load_one(dir: &Path) -> Option<Box<dyn Plugin>> {
+    // A missing `plugin.toml` means "this dir isn't a plugin" — stay quiet. But a *malformed*
+    // manifest or module is an authoring bug: surfacing it via `eprintln!` (per §5) keeps the
+    // plugin from silently vanishing the way the run path's `host.notify` avoids for traps.
     let src = std::fs::read_to_string(dir.join("plugin.toml")).ok()?;
-    let manifest: Manifest = toml::from_str(&src).ok()?;
+    let manifest: Manifest = match toml::from_str(&src) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            eprintln!("[plugin] {}: invalid plugin.toml: {e}", dir.display());
+            return None;
+        }
+    };
     if manifest.runtime.as_deref() != Some("wasm") {
         return None;
     }
@@ -63,7 +72,13 @@ pub fn load_one(dir: &Path) -> Option<Box<dyn Plugin>> {
     let raw = std::fs::read(dir.join(&entry)).ok()?;
     // Accept a `.wat` text module for readable authoring; assemble it to a binary module.
     let wasm = if entry.ends_with(".wat") {
-        wat::parse_bytes(&raw).ok()?.into_owned()
+        match wat::parse_bytes(&raw) {
+            Ok(bytes) => bytes.into_owned(),
+            Err(e) => {
+                eprintln!("[plugin] {}: invalid .wat module: {e}", dir.display());
+                return None;
+            }
+        }
     } else {
         raw
     };
@@ -71,7 +86,16 @@ pub fn load_one(dir: &Path) -> Option<Box<dyn Plugin>> {
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
-    let module = Module::new(&engine, &wasm[..]).ok()?;
+    let module = match Module::new(&engine, &wasm[..]) {
+        Ok(module) => module,
+        Err(e) => {
+            eprintln!(
+                "[plugin] {}: invalid WebAssembly module: {e}",
+                dir.display()
+            );
+            return None;
+        }
+    };
 
     let mut builder = Contributions::builder();
     let mut command_ids = Vec::new();
