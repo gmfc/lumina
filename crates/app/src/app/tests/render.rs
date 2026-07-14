@@ -219,6 +219,40 @@ fn long_line_scrolls_horizontally_to_follow_caret() {
 }
 
 #[test]
+fn wheel_scroll_moves_the_view_past_the_caret() {
+    // Regression: the per-tick viewport clamp used to snap the scroll back to the caret, so once
+    // the caret reached the top/bottom edge you could no longer scroll. `refresh_viewport` now
+    // re-clamps only when the caret actually moves, so a wheel scroll moves the view freely.
+    let path = temp_file(&"line\n".repeat(200));
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    app.page_height = 20;
+    let _ = render_to_string(&mut app, 40, 22); // populate laid-out regions
+
+    // Baseline: caret at line 0, view at the top.
+    app.refresh_viewport();
+    assert_eq!(app.editor.active_document().unwrap().view.scroll_line, 0);
+
+    // Scroll the view down without touching the caret — the clamp must not fight it.
+    app.scroll_editor(40);
+    app.refresh_viewport();
+    assert_eq!(
+        app.editor.active_document().unwrap().view.scroll_line,
+        40,
+        "a wheel scroll must move the view past the caret, not snap back to it"
+    );
+
+    // Moving the caret (to line 100) re-clamps the view to keep it visible.
+    app.editor.active_document_mut().unwrap().set_caret(5 * 100);
+    app.refresh_viewport();
+    assert!(
+        app.editor.active_document().unwrap().view.scroll_line > 40,
+        "moving the caret should scroll the view to follow it"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn renders_welcome_when_no_document_is_open() {
     let path = temp_file("x");
     let mut app = app_with(&path);

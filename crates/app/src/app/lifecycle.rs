@@ -124,6 +124,7 @@ impl App {
             lsp_pulled_revision: std::collections::HashMap::new(),
             lsp_pull_deadline: std::collections::HashMap::new(),
             last_active: None,
+            last_caret: None,
             closed_tabs: Vec::new(),
             settings: None,
             settings_doc: None,
@@ -170,13 +171,14 @@ impl App {
                     CtEvent::Key(k) if k.kind == KeyEventKind::Press => self.on_key(k),
                     CtEvent::Mouse(m) => self.on_mouse(m),
                     CtEvent::Paste(s) => self.on_paste(s),
-                    CtEvent::Resize(..) => {}
+                    // A resize changes the viewport height, so force the caret back into view.
+                    CtEvent::Resize(..) => self.last_caret = None,
                     _ => {}
                 }
             }
             // Drain background worker messages (FS/LSP/parse/terminal output).
             self.drain_workers();
-            self.ensure_cursor_visible();
+            self.refresh_viewport();
         }
         // Graceful LSP teardown on quit: shutdown→exit→wait per server, bounded so a hung
         // server can't delay exit beyond the deadline (§3.8).
@@ -212,6 +214,24 @@ impl App {
         }
         let session = crate::session::Session { files, active };
         crate::session::save(&ws.root, &session);
+    }
+
+    /// Re-clamp the viewport to the caret **only when the caret (or active doc) moved** since the
+    /// last clamp. A plain wheel-scroll moves only `scroll_line`, leaving the caret put — without
+    /// this gate, [`Self::ensure_cursor_visible`] would snap the view back to the caret every tick,
+    /// so scrolling would stall the moment the caret reached the viewport edge.
+    pub(super) fn refresh_viewport(&mut self) {
+        let cur = self.editor.workspace.active_doc().and_then(|id| {
+            self.editor
+                .workspace
+                .documents
+                .get(id)
+                .map(|d| (id, d.selections.primary().head))
+        });
+        if cur != self.last_caret {
+            self.ensure_cursor_visible();
+            self.last_caret = cur;
+        }
     }
 
     /// Keep the primary cursor within the viewport by adjusting the active doc's scroll,
