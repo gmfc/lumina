@@ -23,6 +23,7 @@ impl App {
             "config.reload" => self.reload_config(),
             // vim.enable/disable/toggle are the `vim` plugin's commands (resolved registry-first).
             "view.settings" => self.open_settings(),
+            "lsp.panel.toggle" => self.toggle_lsp_panel(),
             other => {
                 self.editor.status_message = Some(format!("Unknown command: {other}"));
             }

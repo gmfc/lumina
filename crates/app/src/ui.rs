@@ -30,7 +30,7 @@ pub(crate) use settings::settings_entry_at;
 use chrome::{render_status, render_tabs};
 use editor::render_editor;
 use overlays::{render_overlay, render_prompt};
-use panel::render_terminal_panel;
+use panel::render_dock;
 use pickers::{render_bottom_panel, render_completion, render_picker};
 use settings::render_settings;
 use sidebar::render_sidebar;
@@ -45,8 +45,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     ])
     .areas(area);
 
-    // Split the terminal dock off the bottom of the body (full width, below the editor).
-    let panel_rows = terminal_panel_rows(app, body.height);
+    // Split the shared bottom dock off the bottom of the body (full width, below the editor).
+    let panel_rows = dock_rows(app, body.height);
     let (main_body, panel_area) = if panel_rows > 0 {
         let [main, panel] =
             Layout::vertical([Constraint::Min(1), Constraint::Length(panel_rows)]).areas(body);
@@ -78,12 +78,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         render_editor(f, app, editor_area);
     }
-    render_status(f, app, status_area);
+    let lsp_status = render_status(f, app, status_area);
 
-    // The terminal dock draws after the editor so its cursor wins when the panel is focused.
-    let (panel_header, panel_content) = match panel_area {
-        Some(panel) => render_terminal_panel(f, app, panel),
-        None => (None, None),
+    // The dock draws after the editor so its cursor wins when the terminal tab is focused.
+    let (panel_header, panel_content, lsp_content) = match panel_area {
+        Some(panel) => render_dock(f, app, panel),
+        None => (None, None, None),
     };
 
     // Overlays draw last, on top of the body above the dock (plan §4).
@@ -101,16 +101,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         editor: editor_area,
         panel_header,
         panel_content,
+        lsp_content,
+        lsp_status,
     };
 }
 
-/// Rows the terminal dock occupies in the body: 0 when closed, 1 when minimized (header only),
-/// else `height + 1` (header + content), always leaving at least one row for the editor.
-fn terminal_panel_rows(app: &App, body_height: u16) -> u16 {
-    let view = &app.editor.terminal_view;
-    if !view.open || body_height <= 1 {
+/// Rows the shared bottom dock occupies in the body: 0 when no tab is open, 1 when the active tab
+/// is minimized (header only), else `height + 1` (tab strip + content), always leaving at least one
+/// row for the editor.
+fn dock_rows(app: &App, body_height: u16) -> u16 {
+    if app.dock_active_tab().is_none() || body_height <= 1 {
         0
-    } else if view.minimized {
+    } else if app.dock_minimized() {
         1
     } else {
         (app.editor.terminal_height + 1).min(body_height.saturating_sub(1))
@@ -127,10 +129,14 @@ pub struct Regions {
     /// maps against this, not `sidebar`, so clicks land on the row actually drawn there.
     pub sidebar_inner: Option<Rect>,
     pub editor: Rect,
-    /// The terminal panel's header (tab bar) row, when the dock is open.
+    /// The dock's header (tab strip) row, when the dock is open.
     pub panel_header: Option<Rect>,
-    /// The terminal panel's content region (the active shell's grid), when expanded.
+    /// The terminal tab's content region (the active shell's grid), when it is the expanded tab.
     pub panel_content: Option<Rect>,
+    /// The LSP tab's content region (the scrollable status list), when it is the expanded tab.
+    pub lsp_content: Option<Rect>,
+    /// The footer LSP indicator's clickable region (click → toggle the LSP panel).
+    pub lsp_status: Option<Rect>,
 }
 
 /// Gutter width for a document (digits + one padding space). Shared with the mouse router.

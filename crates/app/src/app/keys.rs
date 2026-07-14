@@ -45,6 +45,11 @@ impl App {
         if self.editor.focus == Focus::Panel && self.handle_terminal_key(key) {
             return true;
         }
+        // LSP panel focus: arrows / j / k scroll the list, Esc returns to the editor; other keys
+        // (e.g. the toggle chord) fall through to chord resolution.
+        if self.editor.focus == Focus::LspPanel && self.handle_lsp_panel_key(key) {
+            return true;
+        }
         // Caret popup (completion): its owner consumes navigation / accept / dismiss keys; other
         // keys fall through to editing, after which the plugin re-syncs on the resulting change.
         if self.editor.popup.is_some() && self.popup_key(key) {
@@ -155,6 +160,24 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// LSP panel navigation: arrows / j / k / PageUp/Down scroll the list; Esc returns focus to the
+    /// editor. Returns `false` for un-owned keys so chords (e.g. the toggle) still resolve.
+    fn handle_lsp_panel_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let plain = key.modifiers == KeyModifiers::NONE;
+        match key.code {
+            KeyCode::Up => self.scroll_lsp_panel(-1),
+            KeyCode::Down => self.scroll_lsp_panel(1),
+            KeyCode::Char('k') if plain => self.scroll_lsp_panel(-1),
+            KeyCode::Char('j') if plain => self.scroll_lsp_panel(1),
+            KeyCode::PageUp => self.scroll_lsp_panel(-10),
+            KeyCode::PageDown => self.scroll_lsp_panel(10),
+            KeyCode::Esc => self.editor.focus = Focus::Editor,
+            _ => return false,
+        }
+        true
     }
 
     /// Forward a key to the active terminal. `terminal.*` management chords (e.g. the toggle)

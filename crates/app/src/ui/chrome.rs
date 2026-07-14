@@ -206,7 +206,9 @@ pub(super) fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(out), area);
 }
 
-pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
+/// Render the status bar. Returns the LSP indicator's screen rect (when shown) so the mouse router
+/// can make it clickable (click → toggle the LSP panel).
+pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect> {
     let ws = &app.editor.workspace;
     let mut left;
     let mut right = String::new();
@@ -271,6 +273,8 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
 
     // LSP work-done progress (§1.5): an animated spinner + the active operation, shown just left
     // of the position cluster so it stays visible during indexing. Truncated to keep the bar sane.
+    // The progress prefix sits *left* of the LSP segment, so its width offsets the segment's rect.
+    let mut progress_prefix = 0usize;
     if let Some(prog) = app
         .editor
         .status_items
@@ -278,17 +282,28 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         .filter(|s| !s.is_empty())
     {
         let text: String = prog.replace('\n', " ").chars().take(48).collect();
-        right = format!("{} {text}   {right}", spinner_frame());
+        let prefix = format!("{} {text}   ", spinner_frame());
+        progress_prefix = display_len(&prefix);
+        right = format!("{prefix}{right}");
     }
 
     let bg = Style::default().bg(CLR_ACCENT).fg(Color::Black);
     let pad = (area.width as usize).saturating_sub(display_len(&left) + display_len(&right));
+    // The right cluster is right-justified: it starts where `left + pad` ends.
+    let right_start = area.x + area.width.saturating_sub(display_len(&right) as u16);
     let line = Line::from(vec![
         TSpan::styled(left, bg),
         TSpan::styled(" ".repeat(pad), bg),
         TSpan::styled(right, bg),
     ]);
     f.render_widget(Paragraph::new(line).style(bg), area);
+
+    // The LSP segment sits inside `right`, just after the progress prefix — hand its rect back for
+    // click hit-testing.
+    (!lsp_seg.is_empty()).then(|| {
+        let x = right_start.saturating_add(progress_prefix as u16);
+        Rect::new(x, area.y, display_len(&lsp_seg) as u16, 1)
+    })
 }
 
 /// Build the footer LSP segment from the mirrored status items: `"lsp.health"`
