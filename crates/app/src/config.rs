@@ -69,11 +69,18 @@ impl Config {
         directories::ProjectDirs::from("", "", "lumina").map(|d| d.config_dir().join("config.toml"))
     }
 
-    /// Load from the user config file, or defaults if absent/unreadable.
-    pub fn load() -> Config {
+    /// Load from the user config file. Returns the parsed config plus, when the file existed
+    /// but failed to parse, the parse error so the caller can surface it (§5 — never swallow
+    /// errors silently). A malformed file falls back to defaults, but the error is handed back
+    /// rather than dropped: otherwise one typo would silently revert every setting. An
+    /// absent/unreadable file is not an error — defaults with `None`.
+    pub fn load() -> (Config, Option<String>) {
         match Config::path().and_then(|p| std::fs::read_to_string(p).ok()) {
-            Some(src) => Config::from_toml_str(&src).unwrap_or_default(),
-            None => Config::default(),
+            Some(src) => match Config::from_toml_str(&src) {
+                Ok(cfg) => (cfg, None),
+                Err(e) => (Config::default(), Some(e)),
+            },
+            None => (Config::default(), None),
         }
     }
 
