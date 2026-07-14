@@ -39,7 +39,7 @@ use manifest::lines_to_panel;
 pub(crate) use manifest::Manifest;
 
 /// A loaded external plugin backed by a Rhai script.
-pub struct ScriptPlugin {
+pub(crate) struct ScriptPlugin {
     id: String,
     contributions: Contributions,
     capabilities: Vec<String>,
@@ -84,8 +84,17 @@ pub(crate) fn is_wasm_plugin(dir: &Path) -> bool {
 }
 
 fn load_one(dir: &Path) -> Option<ScriptPlugin> {
+    // A missing `plugin.toml` means "this dir isn't a plugin" — stay quiet. But a *malformed*
+    // manifest or an un-compilable script is an authoring bug: surfacing it via `eprintln!`
+    // (per §5) keeps the plugin from silently vanishing, mirroring the run path's `host.notify`.
     let manifest_src = std::fs::read_to_string(dir.join("plugin.toml")).ok()?;
-    let manifest: Manifest = toml::from_str(&manifest_src).ok()?;
+    let manifest: Manifest = match toml::from_str(&manifest_src) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            eprintln!("[plugin] {}: invalid plugin.toml: {e}", dir.display());
+            return None;
+        }
+    };
     if manifest.runtime.as_deref() == Some("wasm") {
         return None; // handled by the wasm tier
     }
@@ -99,7 +108,13 @@ fn load_one(dir: &Path) -> Option<ScriptPlugin> {
     engine.set_max_string_size(2_000_000);
     engine.set_max_array_size(200_000);
     engine.set_max_map_size(200_000);
-    let ast = engine.compile(&script).ok()?;
+    let ast = match engine.compile(&script) {
+        Ok(ast) => ast,
+        Err(e) => {
+            eprintln!("[plugin] {}: Rhai compile error: {e}", dir.display());
+            return None;
+        }
+    };
 
     let mut builder = Contributions::builder();
     let mut command_ids = Vec::new();

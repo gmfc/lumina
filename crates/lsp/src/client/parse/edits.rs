@@ -17,14 +17,16 @@ pub fn parse_text_edits(result: &Value) -> Vec<TextEdit> {
 
 /// Extract completion items. Accepts `CompletionItem[]` or `CompletionList {items}`.
 pub fn parse_completion(result: &Value) -> CompletionList {
-    let (items, is_incomplete) = if let Some(arr) = result.as_array() {
-        (arr.clone(), false)
+    // Borrow the array in place — cloning here would deep-copy every completion item (incl.
+    // fields we never read) on the per-keystroke completion path (§6/§13).
+    let (items, is_incomplete): (&[Value], bool) = if let Some(arr) = result.as_array() {
+        (arr, false)
     } else if let Some(arr) = result.get("items").and_then(|i| i.as_array()) {
         let inc = result
             .get("isIncomplete")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        (arr.clone(), inc)
+        (arr, inc)
     } else {
         return CompletionList::default();
     };

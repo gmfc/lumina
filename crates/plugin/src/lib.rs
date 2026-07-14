@@ -20,7 +20,7 @@ pub mod registry;
 pub mod runtime;
 pub mod terminal;
 pub mod vim;
-pub mod wasm;
+pub(crate) mod wasm;
 
 pub use contribution::CommandSpec;
 pub use contribution::{

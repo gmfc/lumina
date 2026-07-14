@@ -71,7 +71,16 @@ impl LspClient {
         let (tx, rx) = channel();
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
+            // Terminal drop by design (§5): a framing error (including the `InvalidData` cases
+            // `transport::read_message` builds), EOF (`Ok(None)`), or a JSON parse error all end
+            // the loop and the thread. The reader owns the only end of the pipe, so there is
+            // nowhere to log-and-continue *to* — a corrupt stream means the connection is over.
+            // The app observes this as the diagnostics channel disconnecting (the matching `rx`
+            // yields `Err`), which is the signal it acts on; re-surfacing each byte-level error
+            // would be noise, so we swallow it deliberately rather than silently.
             while let Ok(Some(body)) = transport::read_message(&mut reader) {
+                // Likewise: a body that fails to parse as JSON is unrecoverable framing garbage —
+                // skip it and read on until the stream ends.
                 if let Ok(value) = serde_json::from_str::<Value>(&body) {
                     if let Some(msg) = classify(&value) {
                         if tx.send(msg).is_err() {
