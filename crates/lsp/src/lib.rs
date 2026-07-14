@@ -1,9 +1,10 @@
 //! `editor_lsp` — a minimal Language Server Protocol client (plan §10).
 //!
-//! You write the transport (JSON-RPC over the server's stdio); `lsp-types` provides the
-//! message structs. This crate implements message framing, char↔UTF-16 position conversion
-//! (LSP counts UTF-16 code units), and a client that spawns a server, runs the initialize
-//! handshake, streams document changes, and surfaces `publishDiagnostics`.
+//! You write the transport (JSON-RPC over the server's stdio); the message models are
+//! hand-defined in this crate (see the types below), not pulled from `lsp-types`. This crate
+//! implements message framing, char↔UTF-16 position conversion (LSP counts UTF-16 code units),
+//! and a client that spawns a server, runs the initialize handshake, streams document changes,
+//! and surfaces `publishDiagnostics`.
 //!
 //! The transport + position code is deterministic and unit-tested; the spawning client is
 //! integration-only (needs a real server binary), so CI never depends on one.
