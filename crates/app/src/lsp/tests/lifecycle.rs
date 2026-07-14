@@ -119,3 +119,57 @@ fn breaker_trips_after_repeated_crashes() {
         .iter()
         .any(|e| matches!(e, LspEvent::Error(m) if m.contains("not restarting"))));
 }
+
+#[test]
+fn discovery_is_off_by_default_and_overrides_always_win() {
+    // A bare manager is inert: discovery off, no overrides → the layer stays disabled and nothing
+    // resolves (so a test that opens a `.rs` file never spawns a real server).
+    let mut mgr = manager();
+    assert!(!mgr.is_enabled());
+    assert_eq!(mgr.resolve_server("rust"), None);
+
+    // An explicit `[lsp]` override is honored verbatim and flips the manager on, even with
+    // discovery off — the override is the sole candidate and wins over the registry.
+    let mut over = LspManager::new(
+        Path::new("/tmp"),
+        std::collections::HashMap::from([(
+            "rust".to_string(),
+            vec!["my-ra".to_string(), "--flag".to_string()],
+        )]),
+        "test".into(),
+    );
+    assert!(over.is_enabled());
+    assert_eq!(
+        over.resolve_server("rust"),
+        Some(vec!["my-ra".into(), "--flag".into()])
+    );
+    // A language with neither an override nor discovery resolves to nothing.
+    assert_eq!(over.resolve_server("python"), None);
+}
+
+#[test]
+fn discovery_enables_the_layer_but_unknown_languages_stay_unresolved() {
+    let mut mgr = manager();
+    mgr.enable_discovery();
+    assert!(mgr.is_enabled(), "discovery turns the LSP layer on");
+    // A language the registry doesn't know never resolves, whatever is on `$PATH`.
+    assert_eq!(mgr.resolve_server("cobol"), None);
+    // Turning discovery back off makes a bare manager inert again.
+    mgr.disable_discovery();
+    assert!(!mgr.is_enabled());
+}
+
+#[test]
+fn discovery_probes_the_registry_against_path_and_memoizes() {
+    // With discovery on, a *known* language runs the registry candidate probe against the real
+    // `$PATH`. What resolves depends on the machine, so assert only that it runs without panicking
+    // (exercising `probe_server`/`first_installed`/`program_on_path`) and that the result is
+    // memoized — a second call returns the same thing from the cache.
+    let mut mgr = manager();
+    mgr.enable_discovery();
+    let first = mgr.resolve_server("go");
+    let second = mgr.resolve_server("go");
+    assert_eq!(first, second, "resolution is memoized across calls");
+    // `rust` also drives the probe (rust-analyzer may or may not be installed here).
+    let _ = mgr.resolve_server("rust");
+}

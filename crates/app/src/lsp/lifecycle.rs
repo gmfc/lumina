@@ -162,7 +162,7 @@ impl LspManager {
                 return false;
             }
         }
-        let Some(cmd) = self.servers.get(language).cloned() else {
+        let Some(cmd) = self.resolve_server(language) else {
             return false;
         };
         let (program, args) = cmd
@@ -237,9 +237,49 @@ impl LspManager {
         self.state.clear();
     }
 
-    /// True if any server is configured (so the app knows whether to bother notifying).
+    /// Whether the app should engage the LSP layer at all. True when discovery is on (the built-in
+    /// registry can serve many languages) or any explicit override is configured. Whether a *given*
+    /// file gets a server is decided lazily per language in [`Self::resolve_server`].
     pub fn is_enabled(&self) -> bool {
-        !self.servers.is_empty()
+        self.discover || !self.overrides.is_empty()
+    }
+
+    /// Turn on zero-config discovery (production). Off by default so tests never auto-spawn a real
+    /// language server that happens to be on `$PATH`.
+    pub(crate) fn enable_discovery(&mut self) {
+        self.discover = true;
+    }
+
+    /// Turn discovery off (used by the test harness to keep the App hermetic).
+    #[cfg(test)]
+    pub(crate) fn disable_discovery(&mut self) {
+        self.discover = false;
+        self.resolved.clear();
+    }
+
+    /// Resolve `language` to an installed server argv, memoizing the probe. An explicit `[lsp]`
+    /// override is honored verbatim and always wins; otherwise, when discovery is on, the built-in
+    /// [`registry`] candidates are probed against `$PATH` and the first installed one wins.
+    /// `None` = no server for this language (unknown, not installed, or discovery off).
+    pub(crate) fn resolve_server(&mut self, language: &str) -> Option<Vec<String>> {
+        if let Some(cached) = self.resolved.get(language) {
+            return cached.clone();
+        }
+        let resolution = self.probe_server(language);
+        self.resolved
+            .insert(language.to_string(), resolution.clone());
+        resolution
+    }
+
+    fn probe_server(&self, language: &str) -> Option<Vec<String>> {
+        if let Some(cmd) = self.overrides.get(language) {
+            return Some(cmd.clone());
+        }
+        if !self.discover {
+            return None;
+        }
+        let def = registry::registry().get(language)?;
+        registry::first_installed(def.candidates, registry::program_on_path)
     }
 
     /// Whether `language`'s server is `Running` and advertised pull diagnostics (§5.1) — the gate

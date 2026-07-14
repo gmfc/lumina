@@ -31,7 +31,13 @@ fn temp_file(contents: &str) -> PathBuf {
 }
 
 fn app_with(path: &std::path::Path) -> App {
-    App::new(Some(path.to_string_lossy().into_owned())).unwrap()
+    let mut app = App::new(Some(path.to_string_lossy().into_owned())).unwrap();
+    // Production enables zero-config discovery, which would probe `$PATH` and spawn a real server
+    // (rust-analyzer may be installed) when a test opens a `.rs` file. Keep tests hermetic: turn it
+    // off. Tests that want a server inject their own manager with an explicit override.
+    app.lsp.disable_discovery();
+    app.editor.lsp_enabled = false;
+    app
 }
 
 fn temp_dir_with_files() -> PathBuf {
