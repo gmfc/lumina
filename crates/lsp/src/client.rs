@@ -5,7 +5,7 @@
 //! CI. The framing ([`crate::transport`]) and position math ([`crate::position`]) it relies
 //! on are unit-tested independently.
 
-use std::io::{self, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::AtomicI64;
 use std::sync::mpsc::{channel, Receiver};
@@ -56,7 +56,9 @@ impl LspClient {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Capture stderr (rather than discarding it) so a server's own logs can be surfaced in
+            // the LSP panel — the primary way to diagnose a server that misbehaves.
+            .stderr(Stdio::piped())
             .spawn()?;
 
         let stdin = child
@@ -67,8 +69,25 @@ impl LspClient {
             .stdout
             .take()
             .ok_or_else(|| io::Error::other("no stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("no stderr"))?;
 
         let (tx, rx) = channel();
+        // stderr reader: forward each line as `Incoming::Log`. Ends on EOF (the server closed
+        // stderr) or when the receiver is gone; either way the thread simply exits.
+        {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    if tx.send(Incoming::Log(line)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             // Terminal drop by design (§5): a framing error (including the `InvalidData` cases

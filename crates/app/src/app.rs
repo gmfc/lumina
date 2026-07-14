@@ -75,6 +75,9 @@ pub struct App {
     lsp_pull_deadline: std::collections::HashMap<editor_core::DocId, (u64, std::time::Instant)>,
     /// The doc that was active on the previous tick, to emit `DidChangeActive` on a tab switch.
     last_active: Option<editor_core::DocId>,
+    /// Languages whose "server not installed" panel auto-open has already fired, so the nudge shows
+    /// exactly once per language per session (never nags).
+    lsp_autoopened: std::collections::HashSet<String>,
     /// The `(active doc, primary caret offset)` the viewport was last clamped to. The viewport is
     /// re-clamped to the caret only when this changes, so a plain wheel-scroll can move the view
     /// past the caret without being snapped back every tick. `None` forces a re-clamp next tick

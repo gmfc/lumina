@@ -203,3 +203,24 @@ fn server_exit_clears_dynamic_registrations() {
         "registrations not cleared on exit"
     );
 }
+
+#[test]
+fn log_message_and_stderr_populate_the_log_ring() {
+    let mut mgr = manager();
+    // A `window/logMessage` notification (previously dropped) → the log ring.
+    feed(
+        &mgr,
+        "rust",
+        Incoming::Notification {
+            method: "window/logMessage".into(),
+            params: serde_json::json!({ "type": 3, "message": "indexing crates" }),
+        },
+    );
+    // A raw stderr line (surfaced as `Incoming::Log`) → the log ring.
+    feed(&mgr, "rust", Incoming::Log("thread panicked at foo".into()));
+    let _ = mgr.poll();
+
+    let logs = mgr.recent_logs(10);
+    assert!(logs.iter().any(|l| l.contains("indexing crates")));
+    assert!(logs.iter().any(|l| l.contains("thread panicked at foo")));
+}
