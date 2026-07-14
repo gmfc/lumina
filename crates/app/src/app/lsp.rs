@@ -3,6 +3,7 @@
 //! Part of the [`crate::app`] module; these are `impl App` blocks split out by concern.
 
 use super::*;
+use std::path::Path;
 
 /// Quiet period after the last edit before a diagnostics pull fires (§5.1) — avoids a pull per
 /// keystroke while typing.
@@ -32,82 +33,85 @@ impl App {
             if !self.lsp.is_ready(&lang) {
                 continue;
             }
-            // Serialize the rope only when something actually changed (unchanged docs are a
-            // cheap no-op each tick); record the sent revision only on a real send.
-            let sent = self.lsp_sent_revision.get(&id).copied();
-            let text = || {
-                self.editor
-                    .workspace
-                    .documents
-                    .get(id)
-                    .map(|d| d.to_string())
-            };
-            let mut synced = false;
-            match sent {
-                None => {
-                    if let Some(text) = text() {
-                        if self.lsp.did_open(&path, &lang, &text) {
-                            self.lsp_sent_revision.insert(id, rev);
-                            synced = true;
-                        }
-                    }
+            // On a real (re)sync, refresh the passive whole-doc features for this doc.
+            if self.sync_document(id, &path, &lang, rev) {
+                self.request_passive_features(id, &path, &lang);
+            }
+            self.poll_pull_diagnostics(id, &path, &lang, rev);
+        }
+    }
+
+    /// Send `didOpen`/`didChange` for a doc when its revision advanced (the rope is serialized only
+    /// on a real change). Returns whether a notification was actually sent, recording the sent
+    /// revision so the next tick is a cheap no-op.
+    fn sync_document(&mut self, id: editor_core::DocId, path: &Path, lang: &str, rev: u64) -> bool {
+        let sent = self.lsp_sent_revision.get(&id).copied();
+        if sent == Some(rev) {
+            return false; // unchanged since the last send
+        }
+        let Some(text) = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .map(|d| d.to_string())
+        else {
+            return false;
+        };
+        let sent_ok = match sent {
+            None => self.lsp.did_open(path, lang, &text),
+            Some(_) => self.lsp.did_change(path, lang, &text),
+        };
+        if sent_ok {
+            self.lsp_sent_revision.insert(id, rev);
+        }
+        sent_ok
+    }
+
+    /// Re-request the passive whole-doc features (semantic tokens §7.1, inlay hints §7.2, code lens
+    /// §6.4, folding §7.3) for a just-synced doc — each gated so push/unsupported servers are inert
+    /// and cancelable so a typing burst supersedes intermediate requests.
+    fn request_passive_features(&mut self, id: editor_core::DocId, path: &Path, lang: &str) {
+        if self.lsp.supports_semantic_tokens(lang) {
+            self.lsp.request_semantic_tokens(path, lang);
+        }
+        if self.lsp.supports_inlay_hints(lang) {
+            let end_line = self
+                .editor
+                .workspace
+                .documents
+                .get(id)
+                .map(|d| d.len_lines() as u32)
+                .unwrap_or(0);
+            self.lsp.request_inlay_hints(path, lang, end_line);
+        }
+        if self.lsp.supports_code_lens(lang) {
+            self.lsp.request_code_lens(path, lang);
+        }
+        if self.lsp.supports_folding(lang) {
+            self.lsp.request_folding_ranges(path, lang);
+        }
+    }
+
+    /// Debounced diagnostics pull (§5.1): only for pull servers, and only after the buffer has been
+    /// quiet for [`PULL_DEBOUNCE`]. Re-arms the timer on each revision change; fires once quiet.
+    fn poll_pull_diagnostics(&mut self, id: editor_core::DocId, path: &Path, lang: &str, rev: u64) {
+        if !self.lsp.supports_pull(lang) || self.lsp_pulled_revision.get(&id).copied() == Some(rev)
+        {
+            return;
+        }
+        let now = std::time::Instant::now();
+        match self.lsp_pull_deadline.get(&id).copied() {
+            Some((armed_rev, fire_at)) if armed_rev == rev => {
+                if now >= fire_at && self.lsp.request_pull_diagnostics(path, lang) {
+                    self.lsp_pulled_revision.insert(id, rev);
+                    self.lsp_pull_deadline.remove(&id);
                 }
-                Some(prev) if prev != rev => {
-                    if let Some(text) = text() {
-                        if self.lsp.did_change(&path, &lang, &text) {
-                            self.lsp_sent_revision.insert(id, rev);
-                            synced = true;
-                        }
-                    }
-                }
-                _ => {}
             }
-            // Re-request full-document semantic tokens whenever the doc is (re)synced — on open
-            // (server just became ready → initial paint) and per edit (§7.1). Cancelable, so a
-            // typing burst supersedes intermediate requests; gated so push/unsupported servers
-            // never enter here.
-            if synced && self.lsp.supports_semantic_tokens(&lang) {
-                self.lsp.request_semantic_tokens(&path, &lang);
-            }
-            // Likewise re-request whole-document inlay hints on each sync (§7.2).
-            if synced && self.lsp.supports_inlay_hints(&lang) {
-                let end_line = self
-                    .editor
-                    .workspace
-                    .documents
-                    .get(id)
-                    .map(|d| d.len_lines() as u32)
-                    .unwrap_or(0);
-                self.lsp.request_inlay_hints(&path, &lang, end_line);
-            }
-            // …and code lenses (§6.4).
-            if synced && self.lsp.supports_code_lens(&lang) {
-                self.lsp.request_code_lens(&path, &lang);
-            }
-            // …and folding ranges (§7.3).
-            if synced && self.lsp.supports_folding(&lang) {
-                self.lsp.request_folding_ranges(&path, &lang);
-            }
-            // Debounced diagnostics pull (§5.1): only for servers that declared pull. Re-arm the
-            // timer on each revision change; fire once the buffer has been quiet for PULL_DEBOUNCE.
-            // Push-diagnostic servers never enter here (the gate is off), so nothing double-fires.
-            if self.lsp.supports_pull(&lang)
-                && self.lsp_pulled_revision.get(&id).copied() != Some(rev)
-            {
-                let now = std::time::Instant::now();
-                match self.lsp_pull_deadline.get(&id).copied() {
-                    Some((armed_rev, fire_at)) if armed_rev == rev => {
-                        if now >= fire_at && self.lsp.request_pull_diagnostics(&path, &lang) {
-                            self.lsp_pulled_revision.insert(id, rev);
-                            self.lsp_pull_deadline.remove(&id);
-                        }
-                    }
-                    // First sight of this revision (or the previous arm was for an older one) → arm.
-                    _ => {
-                        self.lsp_pull_deadline
-                            .insert(id, (rev, now + PULL_DEBOUNCE));
-                    }
-                }
+            // First sight of this revision (or a stale earlier arm) → (re)arm the timer.
+            _ => {
+                self.lsp_pull_deadline
+                    .insert(id, (rev, now + PULL_DEBOUNCE));
             }
         }
     }
@@ -155,25 +159,7 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspSignatureHelp(sig));
             }
-            LspEvent::CodeActions(actions) => {
-                // Resolve each action's edit URIs to paths (version-checked) and hand the list to
-                // the code-action plugin, which shows a picker and applies the chosen one.
-                let mut prim = Vec::with_capacity(actions.len());
-                for a in actions {
-                    let edit = a
-                        .edit
-                        .map(|e| self.resolve_workspace_edit(e))
-                        .unwrap_or_default();
-                    prim.push(editor_plugin::LspCodeAction {
-                        title: a.title,
-                        edit,
-                        command: a.command.map(|c| (c.command, c.arguments)),
-                    });
-                }
-                self.editor
-                    .pending_events
-                    .push(editor_plugin::event::Event::LspCodeActions(prim));
-            }
+            LspEvent::CodeActions(actions) => self.on_code_actions(actions),
             LspEvent::Highlights(hls) => {
                 // Hand the occurrence ranges to the document-highlight plugin (it paints them).
                 let hls = hls
@@ -214,17 +200,7 @@ impl App {
                     });
             }
             LspEvent::CompletionResolvedEdits { uri, edits } => {
-                // Late auto-import edits from resolve → apply to the doc they were resolved for.
-                if edits.is_empty() {
-                    return;
-                }
-                let Some(path) = crate::lsp::path_from_uri(&uri) else {
-                    return;
-                };
-                let edits = edits.into_iter().map(to_primitive_text_edit).collect();
-                self.apply_workspace_edit(editor_plugin::LspWorkspaceEdit {
-                    changes: vec![(path.to_string_lossy().into_owned(), edits)],
-                });
+                self.on_completion_resolved_edits(&uri, edits)
             }
             LspEvent::Rename(edit) => {
                 // Resolve each file's URI to a path (version-checked) and hand the edit to the
@@ -241,13 +217,9 @@ impl App {
                 // Store the rendered work-done progress as a statusline item (spinner added at
                 // render); an empty update clears it (§1.5).
                 match line {
-                    Some(line) => {
-                        self.editor.status_items.insert("lsp.progress".into(), line);
-                    }
-                    None => {
-                        self.editor.status_items.remove("lsp.progress");
-                    }
-                }
+                    Some(line) => self.editor.status_items.insert("lsp.progress".into(), line),
+                    None => self.editor.status_items.remove("lsp.progress"),
+                };
             }
             LspEvent::SemanticTokens { uri, tokens } => {
                 // Resolve to the doc it was computed for (not whatever is active now) and broadcast
@@ -262,20 +234,7 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspSemanticTokens { doc, tokens });
             }
-            LspEvent::SemanticTokensRefresh { lang } => {
-                // Re-request tokens for every open doc of this language (§7.1).
-                let docs: Vec<(PathBuf, String)> = self
-                    .editor
-                    .workspace
-                    .documents
-                    .iter()
-                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
-                    .filter_map(|(_, d)| Some((d.path.clone()?, d.language.clone()?)))
-                    .collect();
-                for (p, l) in docs {
-                    self.lsp.request_semantic_tokens(&p, &l);
-                }
-            }
+            LspEvent::SemanticTokensRefresh { lang } => self.resync_semantic_tokens(&lang),
             LspEvent::InlayHints { uri, hints } => {
                 let doc = crate::lsp::path_from_uri(&uri)
                     .and_then(|path| self.editor.workspace.find_by_path(&path));
@@ -284,22 +243,7 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspInlayHints { doc, hints });
             }
-            LspEvent::InlayHintRefresh { lang } => {
-                // Re-request hints for every open doc of this language (§7.2).
-                let docs: Vec<(PathBuf, String, u32)> = self
-                    .editor
-                    .workspace
-                    .documents
-                    .iter()
-                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
-                    .filter_map(|(_, d)| {
-                        Some((d.path.clone()?, d.language.clone()?, d.len_lines() as u32))
-                    })
-                    .collect();
-                for (p, l, end_line) in docs {
-                    self.lsp.request_inlay_hints(&p, &l, end_line);
-                }
-            }
+            LspEvent::InlayHintRefresh { lang } => self.resync_inlay_hints(&lang),
             LspEvent::CodeLenses { uri, lenses } => {
                 let doc = crate::lsp::path_from_uri(&uri)
                     .and_then(|path| self.editor.workspace.find_by_path(&path));
@@ -323,56 +267,9 @@ impl App {
                     .pending_events
                     .push(editor_plugin::event::Event::LspFoldingRanges { doc, ranges });
             }
-            LspEvent::CodeLensRefresh { lang } => {
-                // Re-request lenses for every open doc of this language (§6.4).
-                let docs: Vec<(PathBuf, String)> = self
-                    .editor
-                    .workspace
-                    .documents
-                    .iter()
-                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
-                    .filter_map(|(_, d)| Some((d.path.clone()?, d.language.clone()?)))
-                    .collect();
-                for (p, l) in docs {
-                    self.lsp.request_code_lens(&p, &l);
-                }
-            }
-            LspEvent::ServerExited { lang } => {
-                // The server (for this language) exited. Forget which docs we've synced so that,
-                // once it restarts, `update_lsp` re-sends `didOpen` for each (resync, §3.9). The
-                // per-doc version counter is not reset — versions stay monotonic. Also drop the
-                // diagnostics-pull bookkeeping so the docs re-pull after the restart.
-                let ids: Vec<editor_core::DocId> = self
-                    .editor
-                    .workspace
-                    .documents
-                    .iter()
-                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
-                    .map(|(id, _)| id)
-                    .collect();
-                for id in ids {
-                    self.lsp_sent_revision.remove(&id);
-                    self.lsp_pulled_revision.remove(&id);
-                    self.lsp_pull_deadline.remove(&id);
-                }
-            }
-            LspEvent::DiagnosticsRefresh { lang } => {
-                // The server asked for a re-pull (its resultIds were already dropped manager-side).
-                // Clear the per-doc pull bookkeeping for this language so `update_lsp` re-arms and
-                // fires a fresh full pull for each of its open docs.
-                let ids: Vec<editor_core::DocId> = self
-                    .editor
-                    .workspace
-                    .documents
-                    .iter()
-                    .filter(|(_, d)| d.language.as_deref() == Some(lang.as_str()))
-                    .map(|(id, _)| id)
-                    .collect();
-                for id in ids {
-                    self.lsp_pulled_revision.remove(&id);
-                    self.lsp_pull_deadline.remove(&id);
-                }
-            }
+            LspEvent::CodeLensRefresh { lang } => self.resync_code_lens(&lang),
+            LspEvent::ServerExited { lang } => self.forget_synced_docs(&lang),
+            LspEvent::DiagnosticsRefresh { lang } => self.rearm_pull(&lang),
             LspEvent::ServerRequest {
                 lang,
                 id,
@@ -445,6 +342,107 @@ impl App {
             LspEvent::Error(message) => {
                 self.editor.status_message = Some(format!("LSP: {message}"));
             }
+        }
+    }
+
+    /// Convert code actions (URIs → paths, version-checked) and hand the list to the code-action
+    /// plugin, which shows a picker and applies the chosen one.
+    fn on_code_actions(&mut self, actions: Vec<editor_lsp::CodeAction>) {
+        let prim: Vec<_> = actions
+            .into_iter()
+            .map(|a| editor_plugin::LspCodeAction {
+                title: a.title,
+                edit: a
+                    .edit
+                    .map(|e| self.resolve_workspace_edit(e))
+                    .unwrap_or_default(),
+                command: a.command.map(|c| (c.command, c.arguments)),
+            })
+            .collect();
+        self.editor
+            .pending_events
+            .push(editor_plugin::event::Event::LspCodeActions(prim));
+    }
+
+    /// Late auto-import edits from `completionItem/resolve` → apply to the doc they resolved for.
+    fn on_completion_resolved_edits(&mut self, uri: &str, edits: Vec<editor_lsp::TextEdit>) {
+        if edits.is_empty() {
+            return;
+        }
+        let Some(path) = crate::lsp::path_from_uri(uri) else {
+            return;
+        };
+        let edits = edits.into_iter().map(to_primitive_text_edit).collect();
+        self.apply_workspace_edit(editor_plugin::LspWorkspaceEdit {
+            changes: vec![(path.to_string_lossy().into_owned(), edits)],
+        });
+    }
+
+    /// The `(path, language)` of every open doc of `lang` — the fan-out set for a server refresh.
+    fn docs_of_lang(&self, lang: &str) -> Vec<(PathBuf, String)> {
+        self.editor
+            .workspace
+            .documents
+            .iter()
+            .filter(|(_, d)| d.language.as_deref() == Some(lang))
+            .filter_map(|(_, d)| Some((d.path.clone()?, d.language.clone()?)))
+            .collect()
+    }
+
+    /// The [`DocId`](editor_core::DocId)s of every open doc of `lang`.
+    fn doc_ids_of_lang(&self, lang: &str) -> Vec<editor_core::DocId> {
+        self.editor
+            .workspace
+            .documents
+            .iter()
+            .filter(|(_, d)| d.language.as_deref() == Some(lang))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Re-request semantic tokens for every open doc of `lang` (§7.1 refresh).
+    fn resync_semantic_tokens(&mut self, lang: &str) {
+        for (p, l) in self.docs_of_lang(lang) {
+            self.lsp.request_semantic_tokens(&p, &l);
+        }
+    }
+
+    /// Re-request inlay hints for every open doc of `lang` (§7.2 refresh).
+    fn resync_inlay_hints(&mut self, lang: &str) {
+        for (p, l) in self.docs_of_lang(lang) {
+            let end_line = self
+                .editor
+                .workspace
+                .find_by_path(&p)
+                .and_then(|id| self.editor.workspace.documents.get(id))
+                .map(|d| d.len_lines() as u32)
+                .unwrap_or(0);
+            self.lsp.request_inlay_hints(&p, &l, end_line);
+        }
+    }
+
+    /// Re-request code lenses for every open doc of `lang` (§6.4 refresh).
+    fn resync_code_lens(&mut self, lang: &str) {
+        for (p, l) in self.docs_of_lang(lang) {
+            self.lsp.request_code_lens(&p, &l);
+        }
+    }
+
+    /// A server for `lang` exited: forget the per-doc sync + pull bookkeeping so `update_lsp`
+    /// re-sends `didOpen` and re-pulls after the restart (§3.9). Versions stay monotonic.
+    fn forget_synced_docs(&mut self, lang: &str) {
+        for id in self.doc_ids_of_lang(lang) {
+            self.lsp_sent_revision.remove(&id);
+            self.lsp_pulled_revision.remove(&id);
+            self.lsp_pull_deadline.remove(&id);
+        }
+    }
+
+    /// Re-arm the debounced diagnostics pull for `lang`'s open docs (§5.1 `diagnostic/refresh`).
+    fn rearm_pull(&mut self, lang: &str) {
+        for id in self.doc_ids_of_lang(lang) {
+            self.lsp_pulled_revision.remove(&id);
+            self.lsp_pull_deadline.remove(&id);
         }
     }
 

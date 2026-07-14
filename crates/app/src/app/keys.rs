@@ -63,20 +63,28 @@ impl App {
             return true;
         }
         // Registry-contributed raw-key capturers (the `vim` plugin) get the last refusal before
-        // chord resolution — but only when the editor itself is focused and no Settings tab is
-        // active, matching vim's old entry gate. Insert-mode text + un-owned chords return `false`
-        // and fall through. Drain after a consumed key so vim's queued commands (undo/save/quit
-        // via `Host::execute`) and its edit events are applied this tick.
-        if self.editor.focus == Focus::Editor && !self.settings_active() {
-            if let Some(pk) = to_plugin_key(key) {
-                if self.registry.capture_key(pk, &mut self.editor) {
-                    self.pending.clear();
-                    self.drain_workers();
-                    return true;
-                }
-            }
+        // chord resolution.
+        self.capture_registry_key(key)
+    }
+
+    /// Give registry raw-key capturers (the `vim` plugin) the last refusal before chord resolution
+    /// — but only when the editor itself is focused and no Settings tab is active, matching vim's
+    /// entry gate. Insert-mode text + un-owned chords return `false` and fall through. Drains after
+    /// a consumed key so vim's queued commands (undo/save/quit via `Host::execute`) and edit events
+    /// apply this tick.
+    fn capture_registry_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        if self.editor.focus != Focus::Editor || self.settings_active() {
+            return false;
         }
-        false
+        let Some(pk) = to_plugin_key(key) else {
+            return false;
+        };
+        if !self.registry.capture_key(pk, &mut self.editor) {
+            return false;
+        }
+        self.pending.clear();
+        self.drain_workers();
+        true
     }
 
     /// Route a key to an active modal (confirm-close overlay / plugin prompt / picker), in

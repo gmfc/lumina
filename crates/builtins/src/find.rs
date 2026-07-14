@@ -341,6 +341,25 @@ impl FindReplacePlugin {
     }
 
     /// Step the current match (next/prev), keep the caret on it, and re-publish.
+    /// Apply `f` to the find state (if any), then recompute matches — the shared body of the
+    /// option toggles + text edits driven from the find prompt.
+    fn mutate_and_refresh(&mut self, host: &mut dyn Host, f: impl FnOnce(&mut FindState)) {
+        if let Some(s) = self.state.as_mut() {
+            f(s);
+        }
+        self.refresh(host);
+    }
+
+    /// Tab between the find and replace input fields, republishing the widget for the active doc.
+    fn switch_field(&mut self, host: &mut dyn Host) {
+        if let Some(s) = self.state.as_mut() {
+            s.toggle_field();
+        }
+        if let Some(id) = host.active_doc() {
+            self.publish(host, id);
+        }
+    }
+
     fn navigate(&mut self, host: &mut dyn Host, forward: bool) {
         let Some(id) = host.active_doc() else {
             return;
@@ -479,45 +498,21 @@ impl Plugin for FindReplacePlugin {
             KeyCode::Enter if key.alt => self.replace_current(host),
             KeyCode::Char('a' | 'A') if key.alt => self.replace_all(host),
             KeyCode::Char('c' | 'C') if key.alt => {
-                if let Some(s) = self.state.as_mut() {
-                    s.case_sensitive = !s.case_sensitive;
-                }
-                self.refresh(host);
+                self.mutate_and_refresh(host, |s| s.case_sensitive = !s.case_sensitive)
             }
             KeyCode::Char('w' | 'W') if key.alt => {
-                if let Some(s) = self.state.as_mut() {
-                    s.whole_word = !s.whole_word;
-                }
-                self.refresh(host);
+                self.mutate_and_refresh(host, |s| s.whole_word = !s.whole_word)
             }
             KeyCode::Char('r' | 'R') if key.alt => {
-                if let Some(s) = self.state.as_mut() {
-                    s.regex = !s.regex;
-                }
-                self.refresh(host);
+                self.mutate_and_refresh(host, |s| s.regex = !s.regex)
             }
             KeyCode::Up => self.navigate(host, false),
             KeyCode::Enter if key.shift => self.navigate(host, false),
             KeyCode::Enter | KeyCode::Down => self.navigate(host, true),
-            KeyCode::Tab => {
-                if let Some(s) = self.state.as_mut() {
-                    s.toggle_field();
-                }
-                if let Some(id) = host.active_doc() {
-                    self.publish(host, id);
-                }
-            }
-            KeyCode::Backspace => {
-                if let Some(s) = self.state.as_mut() {
-                    s.backspace();
-                }
-                self.refresh(host);
-            }
+            KeyCode::Tab => self.switch_field(host),
+            KeyCode::Backspace => self.mutate_and_refresh(host, |s| s.backspace()),
             KeyCode::Char(c) if !key.ctrl && !key.alt => {
-                if let Some(s) = self.state.as_mut() {
-                    s.input_char(c);
-                }
-                self.refresh(host);
+                self.mutate_and_refresh(host, |s| s.input_char(c))
             }
             _ => {}
         }
