@@ -75,6 +75,11 @@ pub struct App {
     lsp_pull_deadline: std::collections::HashMap<editor_core::DocId, (u64, std::time::Instant)>,
     /// The doc that was active on the previous tick, to emit `DidChangeActive` on a tab switch.
     last_active: Option<editor_core::DocId>,
+    /// The `(active doc, primary caret offset)` the viewport was last clamped to. The viewport is
+    /// re-clamped to the caret only when this changes, so a plain wheel-scroll can move the view
+    /// past the caret without being snapped back every tick. `None` forces a re-clamp next tick
+    /// (startup, resize).
+    last_caret: Option<(editor_core::DocId, usize)>,
     /// Paths of recently closed tabs, newest last — the "reopen closed editor" stack.
     closed_tabs: Vec<PathBuf>,
     /// The Settings tab's model + UI state, when a settings tab is open.
