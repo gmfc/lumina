@@ -43,6 +43,22 @@ impl App {
             }
             self.poll_pull_diagnostics(id, &path, &lang, rev);
         }
+        self.mirror_lsp_health();
+    }
+
+    /// Mirror the *active* file's server health onto the status line (the footer LSP indicator),
+    /// via the shared `status_items` map since the renderer can't reach the private manager.
+    fn mirror_lsp_health(&mut self) {
+        let active_lang = self
+            .editor
+            .workspace
+            .active_doc()
+            .and_then(|id| self.editor.workspace.documents.get(id))
+            .and_then(|d| d.language.clone());
+        let tag = self.lsp.health_tag_for(active_lang.as_deref());
+        self.editor
+            .status_items
+            .insert("lsp.health".into(), tag.to_string());
     }
 
     /// Send `didOpen`/`didChange` for a doc when its revision advanced (the rope is serialized only

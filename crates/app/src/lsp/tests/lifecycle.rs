@@ -173,3 +173,25 @@ fn discovery_probes_the_registry_against_path_and_memoizes() {
     // `rust` also drives the probe (rust-analyzer may or may not be installed here).
     let _ = mgr.resolve_server("rust");
 }
+
+#[test]
+fn health_tag_reflects_the_active_languages_connection_state() {
+    let mut mgr = manager();
+    // No language, or a language with no connection → empty (footer shows nothing).
+    assert_eq!(mgr.health_tag_for(None), "");
+    assert_eq!(mgr.health_tag_for(Some("rust")), "");
+    // Handshake in progress → starting (spinner).
+    mgr.state
+        .insert("rust".into(), ClientState::Initializing { init_id: 1 });
+    assert_eq!(mgr.health_tag_for(Some("rust")), "starting");
+    // Serving → ready.
+    mgr.state
+        .insert("rust".into(), ClientState::Running(ServerCaps::default()));
+    assert_eq!(mgr.health_tag_for(Some("rust")), "ready");
+    // Crashed / spawn-failed (no state entry, in the `failed` set) → error.
+    mgr.state.remove("rust");
+    mgr.failed.insert("rust".into(), ());
+    assert_eq!(mgr.health_tag_for(Some("rust")), "error");
+    // A different, unconnected language is still empty.
+    assert_eq!(mgr.health_tag_for(Some("go")), "");
+}

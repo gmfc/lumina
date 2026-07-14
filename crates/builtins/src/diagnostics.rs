@@ -17,6 +17,9 @@ use editor_plugin::{
 
 /// The status item id the caret-diagnostic message is published under.
 const STATUS_ID: &str = "lsp.diag";
+/// The status item id the active doc's `"<errors> <warnings>"` count is published under, for the
+/// footer LSP badge (empty when the active doc is clean).
+const COUNT_ID: &str = "lsp.diag.count";
 const LAYER: &str = "lsp.diag";
 
 fn sev_suffix(s: LspSeverity) -> &'static str {
@@ -142,6 +145,28 @@ impl DiagnosticsPlugin {
         host.set_status(STATUS_ID, msg.unwrap_or_default());
     }
 
+    /// Publish the *active* doc's error/warning counts as `"<errors> <warnings>"` for the footer
+    /// LSP badge, or empty when it is clean. Keyed on the active doc (not an arbitrary one) so the
+    /// badge always tracks the focused file, even when diagnostics arrive for a background buffer.
+    fn refresh_diag_count(&self, host: &mut dyn Host) {
+        let counts = host
+            .active_doc()
+            .and_then(|doc| self.diags.get(&doc))
+            .map(|ds| {
+                ds.iter()
+                    .fold((0usize, 0usize), |(e, w), d| match d.severity {
+                        LspSeverity::Error => (e + 1, w),
+                        LspSeverity::Warning => (e, w + 1),
+                        _ => (e, w),
+                    })
+            });
+        let text = match counts {
+            Some((e, w)) if e > 0 || w > 0 => format!("{e} {w}"),
+            _ => String::new(),
+        };
+        host.set_status(COUNT_ID, text);
+    }
+
     /// Jump the caret to the next (`dir > 0`) / previous diagnostic, wrapping.
     fn navigate(&self, host: &mut dyn Host, dir: isize) {
         let Some(doc) = host.active_doc() else {
@@ -217,11 +242,13 @@ impl Plugin for DiagnosticsPlugin {
                 }
                 self.publish_decorations(host, *id);
                 self.refresh_status(host, *id);
+                self.refresh_diag_count(host);
             }
             // An edit remaps char offsets (the stored line/utf16 positions are re-resolved).
             Event::DidChange(id) => {
                 self.publish_decorations(host, *id);
                 self.refresh_status(host, *id);
+                self.refresh_diag_count(host);
             }
             Event::DidChangeCursor(id) => self.refresh_status(host, *id),
             Event::DidChangeActive(_) => {
@@ -229,6 +256,7 @@ impl Plugin for DiagnosticsPlugin {
                 if let Some(id) = host.active_doc() {
                     self.refresh_status(host, id);
                 }
+                self.refresh_diag_count(host);
             }
             _ => {}
         }

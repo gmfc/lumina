@@ -244,6 +244,23 @@ impl LspManager {
         self.discover || !self.overrides.is_empty()
     }
 
+    /// A coarse health tag for `lang`'s connection (the active file's language), for the footer
+    /// status indicator. `""` = no server applies; `"starting"` during the handshake; `"ready"`
+    /// when serving; `"error"` when the connection failed / the crash breaker tripped. Stringly
+    /// typed on purpose: it is mirrored into `editor.status_items` for the renderer, which cannot
+    /// read the private manager field.
+    pub(crate) fn health_tag_for(&self, lang: Option<&str>) -> &'static str {
+        let Some(lang) = lang else {
+            return "";
+        };
+        match self.state.get(lang) {
+            Some(ClientState::Initializing { .. }) => "starting",
+            Some(ClientState::Running(_)) => "ready",
+            None if self.failed.contains_key(lang) => "error",
+            None => "",
+        }
+    }
+
     /// Turn on zero-config discovery (production). Off by default so tests never auto-spawn a real
     /// language server that happens to be on `$PATH`.
     pub(crate) fn enable_discovery(&mut self) {

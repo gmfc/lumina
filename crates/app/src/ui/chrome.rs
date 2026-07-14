@@ -262,6 +262,13 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         left = format!("{badge}{}", left.trim_start());
     }
 
+    // LSP status indicator: the active file's server health (spinner while starting, ● ready,
+    // ✗ error) plus its diagnostic badge, sat just left of the position cluster (VSCode-style).
+    let lsp_seg = lsp_status_segment(app);
+    if !lsp_seg.is_empty() {
+        right = format!("{lsp_seg}{right}");
+    }
+
     // LSP work-done progress (§1.5): an animated spinner + the active operation, shown just left
     // of the position cluster so it stays visible during indexing. Truncated to keep the bar sane.
     if let Some(prog) = app
@@ -282,6 +289,41 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         TSpan::styled(right, bg),
     ]);
     f.render_widget(Paragraph::new(line).style(bg), area);
+}
+
+/// Build the footer LSP segment from the mirrored status items: `"lsp.health"`
+/// (`starting`/`ready`/`error`, published by `update_lsp`) and `"lsp.diag.count"`
+/// (`"<errors> <warnings>"`, published by the `diagnostics` plugin). Empty when no server applies
+/// to the active file, so the bar shows nothing rather than a stray glyph.
+fn lsp_status_segment(app: &App) -> String {
+    let item = |k: &str| app.editor.status_items.get(k).filter(|s| !s.is_empty());
+    let head = match item("lsp.health").map(String::as_str) {
+        Some("starting") => format!("{} LSP", spinner_frame()),
+        Some("ready") => "● LSP".to_string(),
+        Some("error") => "✗ LSP".to_string(),
+        _ => return String::new(),
+    };
+    let (errors, warnings) = parse_diag_counts(item("lsp.diag.count"));
+    let badge = if errors > 0 {
+        format!(" ✗{errors}")
+    } else if warnings > 0 {
+        format!(" ⚠{warnings}")
+    } else {
+        String::new()
+    };
+    format!("{head}{badge}   ")
+}
+
+/// Parse the `"<errors> <warnings>"` diagnostic-count status item into a `(errors, warnings)` pair;
+/// `(0, 0)` when absent or malformed.
+fn parse_diag_counts(s: Option<&String>) -> (usize, usize) {
+    let Some(s) = s else {
+        return (0, 0);
+    };
+    let mut it = s.split_whitespace();
+    let errors = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let warnings = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    (errors, warnings)
 }
 
 /// The current Braille spinner frame, advanced ~10×/s off a process-wide start instant (the run

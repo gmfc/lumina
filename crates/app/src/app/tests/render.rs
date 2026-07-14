@@ -307,3 +307,97 @@ fn welcome_screen_reflects_remapped_binding() {
 }
 
 // ---- mouse routing -------------------------------------------------------
+
+#[test]
+fn diagnostics_publish_the_active_doc_error_warning_count() {
+    // The `diagnostics` plugin publishes the active doc's counts as "<errors> <warnings>" under
+    // `lsp.diag.count`, for the footer LSP badge.
+    let path = temp_file("line one\nline two\n");
+    let mut app = app_with(&path);
+    let id = app.editor.workspace.active_doc().unwrap();
+    let warn = editor_plugin::LspDiagnostic {
+        severity: editor_plugin::LspSeverity::Warning,
+        ..diag(1, 0, 1, 4, "w")
+    };
+    // An info diagnostic must not count toward the error/warning badge.
+    let info = editor_plugin::LspDiagnostic {
+        severity: editor_plugin::LspSeverity::Info,
+        ..diag(0, 9, 0, 10, "i")
+    };
+    feed_diagnostics(
+        &mut app,
+        id,
+        vec![diag(0, 0, 0, 4, "e1"), diag(0, 5, 0, 8, "e2"), warn, info],
+    );
+    assert_eq!(
+        app.editor
+            .status_items
+            .get("lsp.diag.count")
+            .map(String::as_str),
+        Some("2 1"),
+        "publishes '<errors> <warnings>' for the active doc"
+    );
+    // Clearing diagnostics empties the count (footer badge disappears).
+    feed_diagnostics(&mut app, id, vec![]);
+    assert_eq!(
+        app.editor
+            .status_items
+            .get("lsp.diag.count")
+            .map(String::as_str),
+        Some(""),
+        "a clean doc publishes an empty count"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn footer_shows_the_lsp_status_indicator() {
+    let path = temp_file("hello");
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    // Nothing mirrored yet → no LSP segment in the status bar.
+    assert!(
+        !render_to_string(&mut app, 100, 6).contains("LSP"),
+        "no LSP indicator before health is published"
+    );
+
+    // A 'ready' server with 2 errors → the ● LSP indicator + the ✗2 badge render.
+    app.editor
+        .status_items
+        .insert("lsp.health".into(), "ready".into());
+    app.editor
+        .status_items
+        .insert("lsp.diag.count".into(), "2 1".into());
+    let bar = render_to_string(&mut app, 100, 6);
+    assert!(bar.contains("LSP"), "the ready indicator shows");
+    assert!(bar.contains("✗2"), "the error badge shows the error count");
+
+    // Errors take priority over warnings; a warnings-only doc shows the ⚠ badge.
+    app.editor
+        .status_items
+        .insert("lsp.diag.count".into(), "0 3".into());
+    assert!(
+        render_to_string(&mut app, 100, 6).contains("⚠3"),
+        "a warnings-only doc shows the warning badge"
+    );
+
+    // 'starting' health shows the spinner + LSP indicator.
+    app.editor
+        .status_items
+        .insert("lsp.health".into(), "starting".into());
+    app.editor.status_items.remove("lsp.diag.count");
+    assert!(
+        render_to_string(&mut app, 100, 6).contains("LSP"),
+        "the starting/spinner indicator shows"
+    );
+
+    // 'error' health shows the ✗ LSP indicator even with no diagnostics.
+    app.editor
+        .status_items
+        .insert("lsp.health".into(), "error".into());
+    assert!(
+        render_to_string(&mut app, 100, 6).contains("LSP"),
+        "the error indicator shows"
+    );
+    std::fs::remove_file(&path).ok();
+}
