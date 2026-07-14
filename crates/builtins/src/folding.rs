@@ -17,7 +17,7 @@ const LAYER: &str = "lsp.fold";
 const GLYPH: char = '⌄';
 
 #[derive(Default)]
-pub struct FoldingPlugin;
+pub(crate) struct FoldingPlugin;
 
 impl FoldingPlugin {
     fn publish(host: &mut dyn Host, doc: DocId, ranges: &[LspFoldingRange]) {

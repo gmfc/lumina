@@ -9,7 +9,7 @@
 use editor_core::{motion, view, Document, Selection, Selections};
 use editor_plugin::{Contributions, Host, Plugin};
 
-pub struct MultiCursorPlugin;
+pub(crate) struct MultiCursorPlugin;
 
 impl Plugin for MultiCursorPlugin {
     fn id(&self) -> &str {

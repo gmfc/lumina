@@ -15,30 +15,30 @@
 
 use editor_plugin::Plugin;
 
-pub mod clipboard;
-pub mod code_action;
-pub mod code_lens;
-pub mod completion;
-pub mod diagnostics;
-pub mod document_highlight;
-pub mod explorer;
-pub mod find;
-pub mod folding;
-pub mod git_nav;
-pub mod hover;
-pub mod inlay_hints;
-pub mod lsp;
-pub mod lsp_nav;
-pub mod multicursor;
-pub mod palette;
-pub mod project_search;
-pub mod rename;
-pub mod semantic_tokens;
-pub mod signature_help;
-pub mod snippet;
-pub mod terminal;
-pub mod theme;
-pub mod vim;
+mod clipboard;
+mod code_action;
+mod code_lens;
+mod completion;
+mod diagnostics;
+mod document_highlight;
+mod explorer;
+mod find;
+mod folding;
+mod git_nav;
+mod hover;
+mod inlay_hints;
+mod lsp;
+mod lsp_nav;
+mod multicursor;
+mod palette;
+mod project_search;
+mod rename;
+mod semantic_tokens;
+mod signature_help;
+mod snippet;
+mod terminal;
+mod theme;
+mod vim;
 
 /// The full set of built-in plugins, in registration order. `app` registers these; a user
 /// config can filter the list to disable any of them (the litmus test for self-hosting).

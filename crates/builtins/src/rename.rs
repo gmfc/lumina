@@ -9,7 +9,7 @@
 
 use editor_plugin::{Event, Host, Plugin};
 
-pub struct RenamePlugin;
+pub(crate) struct RenamePlugin;
 
 impl Plugin for RenamePlugin {
     fn id(&self) -> &str {

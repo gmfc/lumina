@@ -11,7 +11,7 @@
 use editor_plugin::{Event, Host, LspLocation, PickerItem, PickerRequest, Plugin};
 
 #[derive(Default)]
-pub struct LspNavPlugin {
+pub(crate) struct LspNavPlugin {
     /// Jump targets backing the current picker (references / symbols); a picker row's id is the
     /// index into this.
     locations: Vec<LspLocation>,

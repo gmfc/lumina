@@ -13,7 +13,7 @@
 use editor_plugin::{Contributions, Host, Plugin, TerminalId, TerminalView};
 
 #[derive(Default)]
-pub struct TerminalPlugin {
+pub(crate) struct TerminalPlugin {
     /// The tab order, left to right.
     order: Vec<TerminalId>,
     /// Index into `order` of the focused tab.

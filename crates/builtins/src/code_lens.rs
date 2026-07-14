@@ -13,7 +13,7 @@ use editor_plugin::{DecorationSet, Event, Host, LspCodeLens, Plugin, VirtualText
 const LAYER: &str = "lsp.lens";
 
 #[derive(Default)]
-pub struct CodeLensPlugin;
+pub(crate) struct CodeLensPlugin;
 
 impl CodeLensPlugin {
     fn publish(host: &mut dyn Host, doc: DocId, lenses: &[LspCodeLens]) {

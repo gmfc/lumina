@@ -10,7 +10,7 @@
 use editor_plugin::{Contributions, Event, Host, LspRequestKind, Plugin};
 
 #[derive(Default)]
-pub struct SignatureHelpPlugin {
+pub(crate) struct SignatureHelpPlugin {
     /// Whether a hint is currently showing (drives retrigger-on-edit and clean close).
     open: bool,
 }

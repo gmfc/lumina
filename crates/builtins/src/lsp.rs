@@ -13,7 +13,7 @@ use editor_plugin::{
 };
 
 #[derive(Default)]
-pub struct LspPlugin {
+pub(crate) struct LspPlugin {
     /// The identifier typed into the rename prompt while it's open.
     rename_buf: String,
     /// The query typed into the workspace-symbol prompt while it's open.

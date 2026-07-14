@@ -14,7 +14,7 @@ use editor_plugin::{
 };
 
 #[derive(Default)]
-pub struct PalettePlugin {
+pub(crate) struct PalettePlugin {
     /// Digits typed into the goto-line prompt while it is open.
     goto_line: String,
 }
