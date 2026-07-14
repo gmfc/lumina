@@ -53,7 +53,7 @@ fn dir_marker(expanded: bool, icons: bool) -> &'static str {
     }
 }
 
-pub struct ExplorerPlugin {
+pub(crate) struct ExplorerPlugin {
     root: PathBuf,
     expanded: BTreeSet<PathBuf>,
     visible: Vec<Row>,
@@ -126,7 +126,7 @@ impl Plugin for ExplorerPlugin {
 
 impl ExplorerPlugin {
     /// Build an explorer, optionally rendering Nerd Font glyphs.
-    pub fn new(icons: bool) -> Self {
+    pub(crate) fn new(icons: bool) -> Self {
         ExplorerPlugin {
             root: PathBuf::new(),
             expanded: BTreeSet::new(),

@@ -53,7 +53,7 @@ fn scope_for(token_type: &str, modifiers: &[String]) -> String {
 }
 
 #[derive(Default)]
-pub struct SemanticTokensPlugin;
+pub(crate) struct SemanticTokensPlugin;
 
 impl SemanticTokensPlugin {
     fn publish(host: &mut dyn Host, doc: DocId, tokens: &[LspSemanticToken]) {

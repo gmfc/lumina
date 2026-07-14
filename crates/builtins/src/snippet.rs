@@ -8,22 +8,22 @@
 
 /// A tabstop's number and its char range within the expanded [`Snippet::text`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tabstop {
-    pub number: u32,
-    pub range: (usize, usize),
+pub(crate) struct Tabstop {
+    pub(crate) number: u32,
+    pub(crate) range: (usize, usize),
 }
 
 /// The result of expanding a snippet: plain text + tabstops.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Snippet {
-    pub text: String,
-    pub tabstops: Vec<Tabstop>,
+pub(crate) struct Snippet {
+    pub(crate) text: String,
+    pub(crate) tabstops: Vec<Tabstop>,
 }
 
 impl Snippet {
     /// The tabstop the caret should land on after insertion: the lowest positive tabstop, else
     /// `$0`, else `None` (caret goes to the end of the inserted text).
-    pub fn first_stop(&self) -> Option<&Tabstop> {
+    pub(crate) fn first_stop(&self) -> Option<&Tabstop> {
         self.tabstops
             .iter()
             .filter(|t| t.number > 0)
@@ -33,7 +33,7 @@ impl Snippet {
 }
 
 /// Expand a snippet string.
-pub fn expand(src: &str) -> Snippet {
+pub(crate) fn expand(src: &str) -> Snippet {
     let chars: Vec<char> = src.chars().collect();
     let mut out = String::new();
     let mut stops = Vec::new();

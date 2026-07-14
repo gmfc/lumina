@@ -20,7 +20,7 @@ fn scope_for(kind: u8) -> &'static str {
 }
 
 #[derive(Default)]
-pub struct InlayHintsPlugin;
+pub(crate) struct InlayHintsPlugin;
 
 impl InlayHintsPlugin {
     fn publish(host: &mut dyn Host, doc: DocId, hints: &[LspInlayHint]) {

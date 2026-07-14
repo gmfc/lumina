@@ -23,14 +23,19 @@ const HIT_CAP: usize = 2000;
 
 /// One match: a file, a 1-based line number, and the matching line's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchHit {
-    pub path: PathBuf,
-    pub line: usize,
-    pub text: String,
+pub(crate) struct SearchHit {
+    pub(crate) path: PathBuf,
+    pub(crate) line: usize,
+    pub(crate) text: String,
 }
 
 /// Run a project search under `root` for `pattern`. Blocking — call on a worker thread.
-pub fn run_search(root: &Path, pattern: &str, case_sensitive: bool, cap: usize) -> Vec<SearchHit> {
+pub(crate) fn run_search(
+    root: &Path,
+    pattern: &str,
+    case_sensitive: bool,
+    cap: usize,
+) -> Vec<SearchHit> {
     let matcher = match RegexMatcherBuilder::new()
         .case_insensitive(!case_sensitive)
         .build(pattern)
@@ -54,6 +59,8 @@ pub fn run_search(root: &Path, pattern: &str, case_sensitive: bool, cap: usize) 
         let path = entry.path().to_path_buf();
         let mut searcher = Searcher::new();
         let path_for_sink = path.clone();
+        // best-effort: an unreadable, binary, or non-UTF-8 file is an expected skip, not an
+        // error — drop the per-file io::Result (no log dep exists here) and move on.
         let _ = searcher.search_path(
             &matcher,
             &path,
@@ -72,7 +79,7 @@ pub fn run_search(root: &Path, pattern: &str, case_sensitive: bool, cap: usize) 
 
 /// The project-search feature as a plugin.
 #[derive(Default)]
-pub struct ProjectSearchPlugin {
+pub(crate) struct ProjectSearchPlugin {
     query: String,
     case_sensitive: bool,
     results: Vec<SearchHit>,

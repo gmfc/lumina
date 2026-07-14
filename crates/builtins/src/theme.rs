@@ -7,7 +7,7 @@
 
 use editor_plugin::{Contributions, Host, Plugin};
 
-pub struct ThemePlugin;
+pub(crate) struct ThemePlugin;
 
 impl Plugin for ThemePlugin {
     fn id(&self) -> &str {

@@ -64,7 +64,7 @@ fn format_diagnostic(d: &LspDiagnostic) -> String {
 }
 
 #[derive(Default)]
-pub struct DiagnosticsPlugin {
+pub(crate) struct DiagnosticsPlugin {
     diags: HashMap<DocId, Vec<LspDiagnostic>>,
 }
 

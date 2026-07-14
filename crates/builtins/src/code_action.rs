@@ -14,7 +14,7 @@ use editor_plugin::{
 };
 
 #[derive(Default)]
-pub struct CodeActionPlugin {
+pub(crate) struct CodeActionPlugin {
     /// The actions backing the current picker; a row's id is the index into this list.
     actions: Vec<LspCodeAction>,
 }

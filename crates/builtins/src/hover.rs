@@ -8,7 +8,7 @@
 
 use editor_plugin::{Event, Host, Plugin};
 
-pub struct HoverPlugin;
+pub(crate) struct HoverPlugin;
 
 impl Plugin for HoverPlugin {
     fn id(&self) -> &str {

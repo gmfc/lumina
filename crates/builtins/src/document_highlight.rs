@@ -16,7 +16,7 @@ fn is_word(c: char) -> bool {
 }
 
 #[derive(Default)]
-pub struct DocumentHighlightPlugin;
+pub(crate) struct DocumentHighlightPlugin;
 
 impl DocumentHighlightPlugin {
     /// Whether the primary cursor is on or just after a word character — i.e. there is a symbol

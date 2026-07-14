@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use editor_core::{Document, Selection, Selections};
 use editor_plugin::{Contributions, Host, Plugin};
 
-pub struct GitNavPlugin;
+pub(crate) struct GitNavPlugin;
 
 impl Plugin for GitNavPlugin {
     fn id(&self) -> &str {

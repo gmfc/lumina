@@ -13,7 +13,7 @@ use editor_core::edit::selection_edit_transaction;
 use editor_core::Motion;
 use editor_plugin::{Contributions, Host, Plugin};
 
-pub struct ClipboardPlugin;
+pub(crate) struct ClipboardPlugin;
 
 impl ClipboardPlugin {
     const ID: &'static str = "clipboard";
