@@ -8,7 +8,11 @@ impl App {
     pub fn new(arg: Option<String>) -> Result<App> {
         let (root, open_file) = resolve_arg(arg);
         let mut editor = EditorState::new(root);
-        let config = crate::config::Config::load();
+        let (config, config_error) = crate::config::Config::load();
+        // Surface a malformed config instead of silently booting on defaults (§5).
+        if let Some(e) = &config_error {
+            editor.status_message = Some(config_parse_status(e));
+        }
 
         // Built-in plugins + any external (script) plugins from the plugins dirs. Both
         // register through the same Registry — the external tier has no special path.
@@ -128,7 +132,8 @@ impl App {
 
     /// Reload the config file and rebuild the keymap (the `config.reload` command).
     pub(super) fn reload_config(&mut self) {
-        self.config = crate::config::Config::load();
+        let (config, config_error) = crate::config::Config::load();
+        self.config = config;
         self.editor.sidebar_width = self.config.sidebar_width;
         self.editor.terminal_height = self.config.terminal_height.clamp(3, 60);
         self.editor.terminal_shell =
@@ -141,7 +146,12 @@ impl App {
             "vim.disable"
         };
         self.registry.dispatch_command(vim_cmd, &mut self.editor);
-        self.editor.status_message = Some("Configuration reloaded".into());
+        // Report the parse failure rather than a misleading "reloaded" when the file is
+        // malformed (§5) — a typo reverts to defaults, so say so instead of lying.
+        self.editor.status_message = Some(match config_error {
+            Some(e) => config_parse_status(&e),
+            None => "Configuration reloaded".into(),
+        });
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -232,6 +242,12 @@ impl App {
             doc.view.scroll_to_col(display_col, text_width);
         }
     }
+}
+
+/// Status line shown when the user config exists but fails to parse: the settings fall back
+/// to defaults, so say the parse failed rather than pretending everything applied (§5).
+fn config_parse_status(err: &str) -> String {
+    format!("Config failed to parse, using defaults: {err}")
 }
 
 /// Directories to scan for external plugins: the user config dir and the project-local

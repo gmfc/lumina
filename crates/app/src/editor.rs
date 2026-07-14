@@ -4,16 +4,17 @@
 //! `registry.dispatch_command(id, &mut self.editor)` without aliasing.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use editor_core::{DocId, Document, Selections, Transaction, Workspace};
+use editor_core::{DocId, Document, Workspace};
 use editor_plugin::event::Event;
-use editor_plugin::host::DirEntry;
-use editor_plugin::{CommandInfo, DecorationSet, Host, PanelContent, PickerRequest, Popup, Prompt};
+use editor_plugin::{CommandInfo, DecorationSet, PanelContent, Popup, Prompt};
+
+mod host;
 
 /// Which region has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
+pub(crate) enum Focus {
     Editor,
     Sidebar,
     /// The bottom terminal panel — keystrokes are forwarded to the active shell.
@@ -24,7 +25,7 @@ pub enum Focus {
 /// picker ports (which the find/palette plugins drive) replaced most bespoke overlays; only
 /// confirm-close, the LSP hover info box, and save-as remain here.
 #[derive(Debug, Clone)]
-pub enum Overlay {
+pub(crate) enum Overlay {
     /// Closing a dirty tab: save / discard / cancel.
     ConfirmClose { tab: usize },
     /// A dismissable information popup (e.g. LSP hover).
@@ -34,95 +35,95 @@ pub enum Overlay {
 }
 
 /// Everything rendered + mutated by plugins.
-pub struct EditorState {
-    pub workspace: Workspace,
-    pub sidebar_width: u16,
-    pub sidebar_visible: bool,
-    pub focus: Focus,
-    pub status_message: Option<String>,
+pub(crate) struct EditorState {
+    pub(crate) workspace: Workspace,
+    pub(crate) sidebar_width: u16,
+    pub(crate) sidebar_visible: bool,
+    pub(crate) focus: Focus,
+    pub(crate) status_message: Option<String>,
     /// Rendered panel content, keyed by panel id (set by plugins).
-    pub panels: HashMap<String, PanelContent>,
+    pub(crate) panels: HashMap<String, PanelContent>,
     /// Status-bar item text, keyed by item id.
-    pub status_items: HashMap<String, String>,
+    pub(crate) status_items: HashMap<String, String>,
     /// Events queued during a dispatch, drained + broadcast by `App`.
-    pub pending_events: Vec<Event>,
+    pub(crate) pending_events: Vec<Event>,
     /// Command ids queued via `Host::execute`, run by `App` after the current dispatch.
-    pub pending_commands: Vec<String>,
+    pub(crate) pending_commands: Vec<String>,
     /// Paths requested via `Host::open_path`/`open_path_at`, opened by `App` (it owns file IO
     /// policy) on the next drain. The optional line positions the caret (project search / goto).
-    pub pending_opens: Vec<(PathBuf, Option<usize>)>,
+    pub(crate) pending_opens: Vec<(PathBuf, Option<usize>)>,
     /// LSP navigation jumps requested via `Host::open_location`: `(path, line, utf16_char)`. The
     /// app opens the path and resolves the UTF-16 column to a char offset on the next drain.
-    pub pending_locations: Vec<(PathBuf, u32, u32)>,
+    pub(crate) pending_locations: Vec<(PathBuf, u32, u32)>,
     /// Multi-file rename edits requested via `Host::apply_workspace_edit`; the app opens each file
     /// and applies the edits as history-recorded transactions on the next drain (effect-queue).
-    pub pending_workspace_edits: Vec<editor_plugin::LspWorkspaceEdit>,
+    pub(crate) pending_workspace_edits: Vec<editor_plugin::LspWorkspaceEdit>,
     /// Sender to the app's bounded worker channel, so `Host::spawn_job` can run plugin work off
     /// the main thread and fold the result back as `Event::JobComplete`. Set at construction.
-    pub job_tx: Option<crate::worker::WorkerTx>,
+    pub(crate) job_tx: Option<crate::worker::WorkerTx>,
     /// Set by `Host::toggle_theme`; the app flips its (app-owned) theme on the next drain.
-    pub pending_theme_toggle: bool,
+    pub(crate) pending_theme_toggle: bool,
     /// LSP requests queued via `Host::lsp_request`; the app resolves the cursor position and
     /// forwards them to the (app-owned) `LspManager` on the next drain (effect-queue idiom).
-    pub pending_lsp_requests: Vec<editor_plugin::LspRequestKind>,
+    pub(crate) pending_lsp_requests: Vec<editor_plugin::LspRequestKind>,
     /// Mirror of `App.lsp.is_enabled()` so `Host::lsp_enabled` can answer across the split-borrow
     /// wall. Set at construction / config reload (the server set is config-stable per session).
-    pub lsp_enabled: bool,
+    pub(crate) lsp_enabled: bool,
     /// The app-owned PTY sessions, keyed by the `TerminalId` the `terminal` plugin allocated via
     /// `Host::terminal_open`. The plugin owns the dock lifecycle (which ids, order, active); this
     /// map owns the concrete vt100/pty state the app feeds, resizes, and renders.
-    pub terminals: HashMap<editor_plugin::TerminalId, crate::terminal::Terminal>,
+    pub(crate) terminals: HashMap<editor_plugin::TerminalId, crate::terminal::Terminal>,
     /// Monotonic allocator for `TerminalId`s.
-    pub next_terminal_id: u64,
+    pub(crate) next_terminal_id: u64,
     /// The dock lifecycle the `terminal` plugin publishes via `Host::set_terminal_view`; the pure
     /// renderer + key/mouse routing read it (invariant #8).
-    pub terminal_view: editor_plugin::TerminalView,
+    pub(crate) terminal_view: editor_plugin::TerminalView,
     /// Resolved default shell for new terminals (from `config.terminal_shell`), so the Host can
     /// spawn without reaching `App.config`. Set at construction / config reload.
-    pub terminal_shell: String,
+    pub(crate) terminal_shell: String,
     /// Dock content height (rows) when expanded, from `config.terminal_height`. App-owned render
     /// param (not part of the plugin's lifecycle), fed to the layout.
-    pub terminal_height: u16,
+    pub(crate) terminal_height: u16,
     /// Active modal overlay, if any.
-    pub overlay: Option<Overlay>,
+    pub(crate) overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
-    pub highlighters: HashMap<DocId, editor_syntax::DocHighlighter>,
+    pub(crate) highlighters: HashMap<DocId, editor_syntax::DocHighlighter>,
     /// Per-document, per-layer decorations (styled spans + gutter marks) published by plugins
     /// via `Host::set_decorations`. The renderer merges these layers on top of syntax; keeping
     /// them here (not on the plugin) keeps render a pure function of state (invariant #8).
-    pub decorations: HashMap<DocId, HashMap<String, DecorationSet>>,
+    pub(crate) decorations: HashMap<DocId, HashMap<String, DecorationSet>>,
     /// The active modal input prompt (find/replace today), owned by a plugin and rendered
     /// generically. `Some` while a prompt is up; the app routes keys to its owner.
-    pub prompt: Option<Prompt>,
+    pub(crate) prompt: Option<Prompt>,
     /// Active fuzzy picker (command palette / quick open / goto line), if open.
-    pub picker: Option<crate::picker::Picker>,
+    pub(crate) picker: Option<crate::picker::Picker>,
     /// Snapshot of every command (built-in + contributed) a palette plugin can enumerate through
     /// `Host::commands`, taken after plugins register. Mirrors the registry across the split-borrow
     /// wall (the palette plugin sees only `&mut EditorState`).
-    pub command_catalog: Vec<CommandInfo>,
+    pub(crate) command_catalog: Vec<CommandInfo>,
     /// Precomputed bracket-match highlight for the active doc: `(bracket, partner)` char
     /// offsets, refreshed after cursor moves so the pure renderer just reads it (plan §1.3).
-    pub bracket_match: Option<(usize, usize)>,
+    pub(crate) bracket_match: Option<(usize, usize)>,
     /// Active caret-anchored popup (the completion list), published by a plugin and rendered
     /// generically. `Some` while a popup is up; the app routes nav keys to its owner.
-    pub popup: Option<Popup>,
+    pub(crate) popup: Option<Popup>,
     /// Per-document git change map for the gutter (plan §4.1), computed off-thread.
-    pub git_hunks: HashMap<DocId, crate::git::LineStatuses>,
+    pub(crate) git_hunks: HashMap<DocId, crate::git::LineStatuses>,
     /// The Vim render mirror published by the `vim` plugin via `Host::set_vim_view`: the mode (for
     /// the status badge + visual-selection shading) and any pending-command hint. `Some` while the
     /// vim layer is enabled. The whole modal state machine lives in the plugin.
-    pub vim_view: Option<editor_plugin::VimView>,
+    pub(crate) vim_view: Option<editor_plugin::VimView>,
     /// The editor's visible height in rows, mirrored from the layout each frame so the `vim` plugin
     /// can read it through `Host::viewport_height` for page motions / recentering.
-    pub page_height: usize,
+    pub(crate) page_height: usize,
     /// The system clipboard (arboard + OSC 52 + an in-process register). App-owned I/O, kept here
     /// so the `clipboard` plugin can reach it through `Host::clipboard_read`/`clipboard_write`
     /// across the split-borrow wall (the plugin only sees `&mut EditorState`).
-    pub clipboard: crate::clipboard::Clipboard,
+    pub(crate) clipboard: crate::clipboard::Clipboard,
 }
 
 impl EditorState {
-    pub fn new(root: PathBuf) -> EditorState {
+    pub(crate) fn new(root: PathBuf) -> EditorState {
         EditorState {
             workspace: Workspace::new(root),
             sidebar_width: 30,
@@ -164,7 +165,7 @@ impl EditorState {
     /// Highlights the bracket the caret is on, or (failing that) the one just before it, plus
     /// its partner. Cheap — a single bracket scan; run once per frame before draw so the
     /// renderer stays a pure function of state (invariant #2).
-    pub fn update_bracket_match(&mut self) {
+    pub(crate) fn update_bracket_match(&mut self) {
         self.bracket_match = self.active_document().and_then(|doc| {
             let head = doc.selections.primary().head;
             let at = |p: usize| editor_core::motion::matching_bracket(doc, p).map(|q| (p, q));
@@ -174,7 +175,7 @@ impl EditorState {
 
     /// Refresh the active document's syntax highlighting for the visible line range.
     /// Cheap when nothing changed (the highlighter caches by revision + range).
-    pub fn update_highlights(&mut self, viewport_height: usize) {
+    pub(crate) fn update_highlights(&mut self, viewport_height: usize) {
         let Some(id) = self.workspace.active_doc() else {
             return;
         };
@@ -210,280 +211,24 @@ impl EditorState {
         hl.ensure(&rope, rev, &edits, edits_valid, first, last);
     }
 
-    pub fn active_document(&self) -> Option<&Document> {
+    pub(crate) fn active_document(&self) -> Option<&Document> {
         self.workspace.active_document()
     }
 
-    pub fn active_document_mut(&mut self) -> Option<&mut Document> {
+    pub(crate) fn active_document_mut(&mut self) -> Option<&mut Document> {
         self.workspace.active_document_mut()
     }
 
     /// Queue an event for `App` to broadcast to plugins.
-    pub fn emit(&mut self, event: Event) {
+    pub(crate) fn emit(&mut self, event: Event) {
         self.pending_events.push(event);
-    }
-}
-
-impl Host for EditorState {
-    fn workspace(&self) -> &Workspace {
-        &self.workspace
-    }
-
-    fn apply_transaction(&mut self, doc: DocId, txn: Transaction) {
-        if let Some(d) = self.workspace.documents.get_mut(doc) {
-            let before = d.selections.clone();
-            let inverse = txn.apply(d);
-            d.dirty = true;
-            d.history.record(
-                txn,
-                inverse,
-                before,
-                d.selections.clone(),
-                editor_core::GroupBreak::Force,
-            );
-        }
-        self.emit(Event::DidChange(doc));
-    }
-
-    fn set_selections(&mut self, doc: DocId, selections: Selections) {
-        if let Some(d) = self.workspace.documents.get_mut(doc) {
-            // Normalize at the port boundary: a plugin may hand us a set built with single+push,
-            // and downstream edit code relies on it being sorted/non-overlapping (invariant #2).
-            d.set_selections(selections);
-        }
-        self.emit(Event::DidChangeCursor(doc));
-    }
-
-    fn open_path(&mut self, path: &Path) {
-        self.pending_opens.push((path.to_path_buf(), None));
-    }
-
-    fn open_path_at(&mut self, path: &Path, line: usize) {
-        self.pending_opens.push((path.to_path_buf(), Some(line)));
-    }
-
-    fn open_location(&mut self, path: &Path, line: u32, character: u32) {
-        self.pending_locations
-            .push((path.to_path_buf(), line, character));
-    }
-
-    fn show_info(&mut self, text: String) {
-        self.overlay = Some(Overlay::Info(text));
-    }
-
-    fn apply_workspace_edit(&mut self, edit: editor_plugin::LspWorkspaceEdit) {
-        self.pending_workspace_edits.push(edit);
-    }
-
-    fn spawn_job(&mut self, id: String, work: Box<dyn FnOnce() -> Vec<u8> + Send + 'static>) {
-        // Run the plugin's closure on an OS thread and fold the result back into the single-
-        // threaded loop as a WorkerMsg the drain turns into Event::JobComplete. The app owns the
-        // threading + bounded channel; the plugin owns the work. No channel ⇒ silent no-op.
-        let Some(tx) = self.job_tx.clone() else {
-            return;
-        };
-        std::thread::spawn(move || {
-            let payload = work();
-            let _ = tx.send(crate::worker::WorkerMsg::JobComplete { id, payload });
-        });
-    }
-
-    fn changed_lines(&self, doc: DocId) -> Vec<usize> {
-        let mut lines: Vec<usize> = self
-            .git_hunks
-            .get(&doc)
-            .map(|m| m.keys().copied().collect())
-            .unwrap_or_default();
-        lines.sort_unstable();
-        lines
-    }
-
-    fn commands(&self) -> Vec<CommandInfo> {
-        self.command_catalog.clone()
-    }
-
-    fn project_files(&self) -> Vec<DirEntry> {
-        // Ignore-honoring walk of the project root (files only), capped so a huge tree can't
-        // stall the picker. The app owns this policy so builtins need no `ignore` dependency.
-        let mut out = Vec::new();
-        let walker = ignore::WalkBuilder::new(&self.workspace.root)
-            .hidden(false)
-            .git_ignore(true)
-            .filter_entry(|e| e.file_name() != ".git")
-            .build();
-        for entry in walker.flatten().take(10_000) {
-            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                out.push(DirEntry {
-                    path: entry.path().to_path_buf(),
-                    is_dir: false,
-                });
-            }
-        }
-        out
-    }
-
-    fn open_picker(&mut self, request: PickerRequest) {
-        let to_items = |v: Vec<editor_plugin::PickerItem>| -> Vec<crate::picker::PickerItem> {
-            v.into_iter()
-                .map(|i| crate::picker::PickerItem {
-                    id: i.id,
-                    label: i.label,
-                })
-                .collect()
-        };
-        self.picker = Some(
-            crate::picker::Picker::unified(
-                &request.title,
-                to_items(request.items),
-                to_items(request.commands),
-                request.start_in_commands,
-            )
-            .owned_by(request.owner, request.token),
-        );
-    }
-
-    fn set_prompt(&mut self, prompt: Prompt) {
-        self.prompt = Some(prompt);
-    }
-
-    fn dismiss_prompt(&mut self) {
-        self.prompt = None;
-    }
-
-    fn set_popup(&mut self, popup: Option<Popup>) {
-        self.popup = popup;
-    }
-
-    fn set_decorations(&mut self, doc: DocId, layer: &str, decos: DecorationSet) {
-        // An empty set is a clear: don't leave a dead layer the renderer must skip every frame.
-        if decos.is_empty() {
-            self.clear_decorations(doc, layer);
-            return;
-        }
-        self.decorations
-            .entry(doc)
-            .or_default()
-            .insert(layer.to_string(), decos);
-    }
-
-    fn clear_decorations(&mut self, doc: DocId, layer: &str) {
-        if let Some(layers) = self.decorations.get_mut(&doc) {
-            layers.remove(layer);
-            if layers.is_empty() {
-                self.decorations.remove(&doc);
-            }
-        }
-    }
-
-    fn set_panel(&mut self, panel_id: &str, content: PanelContent) {
-        self.panels.insert(panel_id.to_string(), content);
-    }
-
-    fn set_status(&mut self, item_id: &str, text: String) {
-        self.status_items.insert(item_id.to_string(), text);
-    }
-
-    fn notify(&mut self, message: String) {
-        self.status_message = Some(message);
-    }
-
-    fn toggle_theme(&mut self) {
-        self.pending_theme_toggle = true;
-    }
-
-    fn lsp_request(&mut self, kind: editor_plugin::LspRequestKind) {
-        self.pending_lsp_requests.push(kind);
-    }
-
-    fn lsp_enabled(&self) -> bool {
-        self.lsp_enabled
-    }
-
-    fn lsp_pos_to_offset(&self, doc: DocId, line: u32, character: u32) -> usize {
-        self.workspace
-            .documents
-            .get(doc)
-            .map(|d| crate::app::lsp_pos_to_char(d, line, character))
-            .unwrap_or(0)
-    }
-
-    fn terminal_open(&mut self, cwd: &Path) -> Option<editor_plugin::TerminalId> {
-        let tx = self.job_tx.clone()?;
-        let id = editor_plugin::TerminalId(self.next_terminal_id);
-        // Spawn at a default size; the app resizes to the drawn region on the next frame
-        // (`sync_terminals`), so this is corrected before the terminal is first shown.
-        let term = crate::terminal::Terminal::new(id.0, cwd, &self.terminal_shell, 24, 80, tx)?;
-        self.next_terminal_id += 1;
-        self.terminals.insert(id, term);
-        Some(id)
-    }
-
-    fn terminal_close(&mut self, id: editor_plugin::TerminalId) {
-        // Dropping the `Terminal` kills the shell + reaps the child.
-        self.terminals.remove(&id);
-    }
-
-    fn set_terminal_view(&mut self, view: editor_plugin::TerminalView) {
-        self.terminal_view = view;
-    }
-
-    fn set_terminal_focus(&mut self, focused: bool) {
-        self.focus = if focused { Focus::Panel } else { Focus::Editor };
-    }
-
-    fn viewport_height(&self) -> usize {
-        self.page_height
-    }
-
-    fn move_lines(&mut self, doc: DocId, delta: isize, extend: bool) {
-        let page = self.page_height;
-        let motion = if delta < 0 {
-            editor_core::Motion::Up
-        } else {
-            editor_core::Motion::Down
-        };
-        if let Some(d) = self.workspace.documents.get_mut(doc) {
-            for _ in 0..delta.unsigned_abs() {
-                editor_core::edit::move_selections(d, motion, page, extend);
-            }
-        }
-        self.emit(Event::DidChangeCursor(doc));
-    }
-
-    fn set_scroll(&mut self, doc: DocId, line: usize) {
-        if let Some(d) = self.workspace.documents.get_mut(doc) {
-            let max = d.len_lines().saturating_sub(1);
-            d.view.scroll_line = line.min(max);
-        }
-    }
-
-    fn set_dirty(&mut self, doc: DocId, dirty: bool) {
-        if let Some(d) = self.workspace.documents.get_mut(doc) {
-            d.dirty = dirty;
-        }
-    }
-
-    fn set_vim_view(&mut self, view: Option<editor_plugin::VimView>) {
-        self.vim_view = view;
-    }
-
-    fn clipboard_read(&mut self) -> String {
-        self.clipboard.get()
-    }
-
-    fn clipboard_write(&mut self, text: String) {
-        self.clipboard.set(text);
-    }
-
-    fn execute(&mut self, command_id: &str) {
-        self.pending_commands.push(command_id.to_string());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use editor_plugin::{Decoration, DecorationSet};
+    use editor_plugin::{Decoration, DecorationSet, Host};
 
     #[test]
     fn set_and_clear_decorations() {

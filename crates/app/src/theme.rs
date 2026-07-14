@@ -160,6 +160,10 @@ impl Theme {
         if let Some(dirs) = directories::ProjectDirs::from("", "", "lumina") {
             let path = dirs.config_dir().join("theme.toml");
             if let Ok(src) = std::fs::read_to_string(&path) {
+                // Best-effort: a malformed theme.toml just leaves the built-in theme in place
+                // (purely cosmetic, non-fatal). This runs at startup with only the `Theme` in
+                // hand — no editor/status channel to surface to and no logger (§5) — so the
+                // parse error is deliberately dropped rather than aborting the boot over colors.
                 let _ = self.apply_toml(&src);
             }
         }
