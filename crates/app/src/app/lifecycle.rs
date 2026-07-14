@@ -69,13 +69,18 @@ impl App {
         editor.terminal_height = config.terminal_height.clamp(3, 60);
         editor.terminal_shell = crate::terminal::default_shell(config.terminal_shell.as_deref());
         let follow_mode = config.follow_mode;
-        let lsp = crate::lsp::LspManager::new(
-            &editor.workspace.root,
+        // Root the servers at the nearest project marker (walk up for Cargo.toml/.git/…), so an
+        // LSP started from a file opened deep in a tree still sees the workspace manifest.
+        let mut lsp = crate::lsp::LspManager::new(
+            &crate::files::project_root(&editor.workspace.root),
             config.lsp_servers.clone(),
             env!("CARGO_PKG_VERSION").to_string(),
         );
+        // Zero-config discovery: with no `[lsp]` override, probe `$PATH` for a known server per
+        // language on demand (the built-in registry). Off in tests to stay hermetic.
+        lsp.enable_discovery();
         // Mirror LSP availability onto EditorState so the `lsp` plugin can no-op through
-        // `Host::lsp_enabled` when no server is configured.
+        // `Host::lsp_enabled` when the layer is off.
         editor.lsp_enabled = lsp.is_enabled();
         let keymap = build_keymap(&config, &registry);
 

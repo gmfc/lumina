@@ -28,22 +28,68 @@ fn fnv1a_hash(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Map a file extension to a language id (drives syntax highlighting later).
+/// Map a file extension to a language id. This one id drives both syntax highlighting
+/// ([`editor_syntax::lang`]) and LSP server selection ([`crate::lsp::registry`]), so `.tsx`/`.jsx`
+/// map to `typescript`/`javascript` (highlight-compatible ids that tsserver still serves) rather
+/// than the LSP-spec `typescriptreact`/`javascriptreact`, which have no grammar wired.
 pub fn language_for(path: &Path) -> Option<String> {
     let ext = path.extension()?.to_str()?;
     let lang = match ext {
         "rs" => "rust",
-        "py" => "python",
-        "js" | "mjs" | "cjs" => "javascript",
-        "ts" => "typescript",
-        "json" => "json",
+        "py" | "pyi" => "python",
+        "js" | "mjs" | "cjs" | "jsx" => "javascript",
+        "ts" | "mts" | "cts" | "tsx" => "typescript",
+        "json" | "jsonc" => "json",
         "toml" => "toml",
         "md" | "markdown" => "markdown",
         "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => "cpp",
         "go" => "go",
+        "java" => "java",
+        "kt" | "kts" => "kotlin",
+        "rb" => "ruby",
+        "php" => "php",
+        "cs" => "csharp",
+        "lua" => "lua",
+        "sh" | "bash" | "zsh" => "bash",
+        "yaml" | "yml" => "yaml",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "scss" | "less" => "scss",
+        "sql" => "sql",
+        "swift" => "swift",
+        "zig" => "zig",
         _ => return None,
     };
     Some(lang.to_string())
+}
+
+/// Walk up from `start` to the nearest ancestor holding a project marker (a VCS dir or a language
+/// manifest), returning it as the LSP root. Falls back to `start` when none is found, so a language
+/// server always gets a sane `rootUri` even for a loose file — this is what lets rust-analyzer work
+/// when a file is opened deep inside a workspace rather than from its root.
+pub fn project_root(start: &Path) -> PathBuf {
+    const MARKERS: &[&str] = &[
+        ".git",
+        "Cargo.toml",
+        "package.json",
+        "go.mod",
+        "pyproject.toml",
+        "tsconfig.json",
+        "pom.xml",
+        "build.gradle",
+        "composer.json",
+    ];
+    let mut dir = start;
+    loop {
+        if MARKERS.iter().any(|m| dir.join(m).exists()) {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return start.to_path_buf(),
+        }
+    }
 }
 
 /// Decode raw file bytes into text, detecting a UTF-8 BOM or UTF-16 LE/BE by BOM.
@@ -212,6 +258,95 @@ mod tests {
         let doc = Document::from_str("a\r\nb"); // detected CRLF, stored LF internally
         let bytes = encode(&doc);
         assert_eq!(bytes, b"a\r\nb");
+    }
+
+    #[test]
+    fn language_for_maps_every_known_extension() {
+        // Exhaustive: one representative per match arm, so the whole mapping is exercised and the
+        // `.tsx`/`.jsx` → highlight-compatible-id decision is pinned.
+        let cases = [
+            ("a.rs", "rust"),
+            ("a.py", "python"),
+            ("a.pyi", "python"),
+            ("a.js", "javascript"),
+            ("a.mjs", "javascript"),
+            ("a.cjs", "javascript"),
+            ("a.jsx", "javascript"),
+            ("a.ts", "typescript"),
+            ("a.mts", "typescript"),
+            ("a.cts", "typescript"),
+            ("a.tsx", "typescript"),
+            ("a.json", "json"),
+            ("a.jsonc", "json"),
+            ("a.toml", "toml"),
+            ("a.md", "markdown"),
+            ("a.markdown", "markdown"),
+            ("a.c", "c"),
+            ("a.h", "c"),
+            ("a.cc", "cpp"),
+            ("a.cpp", "cpp"),
+            ("a.cxx", "cpp"),
+            ("a.hpp", "cpp"),
+            ("a.hh", "cpp"),
+            ("a.hxx", "cpp"),
+            ("a.go", "go"),
+            ("a.java", "java"),
+            ("a.kt", "kotlin"),
+            ("a.kts", "kotlin"),
+            ("a.rb", "ruby"),
+            ("a.php", "php"),
+            ("a.cs", "csharp"),
+            ("a.lua", "lua"),
+            ("a.sh", "bash"),
+            ("a.bash", "bash"),
+            ("a.zsh", "bash"),
+            ("a.yaml", "yaml"),
+            ("a.yml", "yaml"),
+            ("a.html", "html"),
+            ("a.htm", "html"),
+            ("a.css", "css"),
+            ("a.scss", "scss"),
+            ("a.less", "scss"),
+            ("a.sql", "sql"),
+            ("a.swift", "swift"),
+            ("a.zig", "zig"),
+        ];
+        for (path, lang) in cases {
+            assert_eq!(
+                language_for(Path::new(path)).as_deref(),
+                Some(lang),
+                "{path} should map to {lang}"
+            );
+        }
+        // An unknown extension (and a no-extension path) yields no language.
+        assert_eq!(language_for(Path::new("a.unknownext")), None);
+        assert_eq!(language_for(Path::new("README")), None);
+    }
+
+    #[test]
+    fn project_root_walks_up_to_the_nearest_marker() {
+        let base = std::env::temp_dir().join(format!("lumina_root_{}", std::process::id()));
+        let nested = base.join("crates").join("app").join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(base.join("Cargo.toml"), b"[workspace]\n").unwrap();
+
+        // From deep inside the tree, the root resolves to the dir holding the manifest.
+        assert_eq!(project_root(&nested), base);
+        // From the marker dir itself, it returns that dir.
+        assert_eq!(project_root(&base), base);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn project_root_falls_back_to_start_when_no_marker() {
+        // A directory with no marker anywhere up the (temp) tree falls back to itself.
+        let dir = std::env::temp_dir().join(format!("lumina_noroot_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // No marker in `dir`; `project_root` may find one further up the real filesystem, so only
+        // assert it returns *some* existing ancestor (never panics, always a real dir).
+        let root = project_root(&dir);
+        assert!(root.exists(), "project_root returns an existing directory");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]

@@ -31,6 +31,7 @@ mod diagnostics;
 mod documents;
 mod lifecycle;
 mod progress;
+mod registry;
 mod requests;
 mod response;
 mod server_msgs;
@@ -156,8 +157,17 @@ pub struct LspManager {
     /// connection numbers ids from 1).
     tx: Sender<(String, ClientMsg)>,
     rx: Receiver<(String, ClientMsg)>,
-    /// Configured `language → server command` (with args split on whitespace).
-    servers: HashMap<String, Vec<String>>,
+    /// Explicit `[lsp]` overrides: `language → server command` (args split on whitespace). An
+    /// override is honored verbatim and always wins over the built-in registry (§10, user config).
+    overrides: HashMap<String, Vec<String>>,
+    /// Whether zero-config discovery is on: when a language has no override, consult the built-in
+    /// [`registry`] and probe `$PATH`. Opt-in (production enables it); off by default so unit tests
+    /// and the headless harness never auto-spawn a real server.
+    discover: bool,
+    /// Memoized per-language resolution: `Some(argv)` = an installed server to spawn, `None` =
+    /// probed and nothing installed (so we don't re-scan `$PATH` every tick). Overrides resolve to
+    /// themselves. Cleared only on construction — a mid-session install is picked up on restart.
+    resolved: HashMap<String, Option<Vec<String>>>,
     /// Live handles by language id.
     clients: HashMap<String, LspHandle>,
     /// Per-connection handshake/lifecycle state by language id.
@@ -208,14 +218,16 @@ pub struct LspManager {
 impl LspManager {
     pub fn new(
         root: &Path,
-        servers: HashMap<String, Vec<String>>,
+        overrides: HashMap<String, Vec<String>>,
         client_version: String,
     ) -> LspManager {
         let (tx, rx) = channel();
         LspManager {
             tx,
             rx,
-            servers,
+            overrides,
+            discover: false,
+            resolved: HashMap::new(),
             clients: HashMap::new(),
             state: HashMap::new(),
             failed: HashMap::new(),
