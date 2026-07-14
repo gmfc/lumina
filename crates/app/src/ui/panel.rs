@@ -100,11 +100,12 @@ fn header_seg_style(
     }
 }
 
-/// Render the LSP servers list into `area`: one row per language the session has touched, with a
-/// state glyph, the language, its state, and the resolved command or an install hint. Empty state
-/// shows a hint. Scrolled by `lsp_panel.scroll`.
+/// Render the LSP panel into `area`: a per-language status list (state glyph, language, resolved
+/// command or install hint), and — when there are logs — a `server log` tail below a separator.
+/// Empty state shows a hint. The status list is scrolled by `lsp_panel.scroll`.
 fn render_lsp_panel(f: &mut Frame, app: &App, area: Rect) {
     let bg = Style::default().bg(Color::Rgb(24, 26, 31));
+    let dim = bg.fg(Color::DarkGray);
     let buf = f.buffer_mut();
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -117,33 +118,50 @@ fn render_lsp_panel(f: &mut Frame, app: &App, area: Rect) {
     let rows = app.lsp_status_rows();
     if rows.is_empty() {
         let hint = " No language servers active — open a source file to start one.";
-        put_str(
-            buf,
-            area.x,
-            area.y,
-            hint,
-            bg.fg(Color::DarkGray),
-            area.right(),
-        );
+        put_str(buf, area.x, area.y, hint, dim, area.right());
         return;
     }
+
+    let total = area.height as usize;
+    let logs = app.lsp_recent_logs(total);
+    // When there are logs, split the panel: status list on top, a log tail below a separator.
+    let rows_h = if logs.is_empty() {
+        total
+    } else {
+        total.saturating_sub(1).div_ceil(2).max(1)
+    };
+
     let scroll = app.editor.lsp_panel.scroll as usize;
-    for (row, status) in rows.iter().skip(scroll).enumerate() {
+    for (row, status) in rows.iter().skip(scroll).take(rows_h).enumerate() {
         let y = area.y + row as u16;
-        if y >= area.bottom() {
-            break;
-        }
         let (glyph, glyph_style) = lang_glyph(status.state, bg);
         put_str(buf, area.x + 1, y, glyph, glyph_style, area.right());
         let lang = format!("{:<12}", status.lang);
         put_str(buf, area.x + 3, y, &lang, bg.fg(Color::White), area.right());
-        let detail = lang_detail(status);
         put_str(
             buf,
             area.x + 16,
             y,
-            &detail,
+            &lang_detail(status),
             bg.fg(Color::Gray),
+            area.right(),
+        );
+    }
+
+    if logs.is_empty() {
+        return;
+    }
+    let sep_y = area.y + rows_h as u16;
+    put_str(buf, area.x, sep_y, " ── server log ", dim, area.right());
+    let log_h = total.saturating_sub(rows_h + 1);
+    let start = logs.len().saturating_sub(log_h);
+    for (i, line) in logs[start..].iter().enumerate() {
+        put_str(
+            buf,
+            area.x + 1,
+            sep_y + 1 + i as u16,
+            line,
+            dim,
             area.right(),
         );
     }

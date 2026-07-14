@@ -44,6 +44,9 @@ pub enum Incoming {
         method: String,
         params: serde_json::Value,
     },
+    /// A raw log line from the server's stderr (not JSON-RPC). Surfaced in the LSP panel's log tail
+    /// so a misbehaving server is diagnosable.
+    Log(String),
 }
 
 /// A source location in (line, UTF-16 char) coordinates — the result of go-to-definition.

@@ -9,7 +9,7 @@
 //! single concern (lifecycle, response correlation, server-initiated messages, diagnostics,
 //! progress, document sync, requests) — that share the private struct fields declared here.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -174,6 +174,9 @@ pub struct LspManager {
     /// The most recent error message per language (handshake/spawn/crash), shown in the LSP panel's
     /// status row. Set at each `LspEvent::Error` push site; overwritten by the next error.
     last_error: HashMap<String, String>,
+    /// A bounded per-language ring of recent log lines (server stderr + `window/logMessage`), shown
+    /// in the LSP panel's log tail. Oldest lines drop past [`Self::LOG_CAP`].
+    logs: HashMap<String, VecDeque<String>>,
     /// Live handles by language id.
     clients: HashMap<String, LspHandle>,
     /// Per-connection handshake/lifecycle state by language id.
@@ -235,6 +238,7 @@ impl LspManager {
             discover: false,
             resolved: HashMap::new(),
             last_error: HashMap::new(),
+            logs: HashMap::new(),
             clients: HashMap::new(),
             state: HashMap::new(),
             failed: HashMap::new(),
@@ -278,6 +282,7 @@ impl LspManager {
                 Incoming::Notification { method, params } => {
                     self.on_notification(&lang, &method, &params, &mut out)
                 }
+                Incoming::Log(line) => self.push_log(&lang, line),
             }
         }
         out

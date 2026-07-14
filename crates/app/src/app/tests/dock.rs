@@ -242,3 +242,55 @@ fn focus_dock_tab_terminal_opens_one_when_none_exists() {
     assert_eq!(app.dock_active_tab(), Some(DockTab::Terminal));
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn missing_server_auto_opens_the_lsp_panel_once() {
+    // A `.zig` file whose zig server (zls) is probed as not installed.
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let mut path = std::env::temp_dir();
+    path.push(format!("lumina_dock_{}_{}.zig", std::process::id(), n));
+    std::fs::write(&path, "const x = 1;\n").unwrap();
+    let mut app = app_with(&path);
+    app.lsp = crate::lsp::LspManager::new(
+        std::path::Path::new("/tmp"),
+        std::collections::HashMap::new(),
+        "test".into(),
+    );
+    app.lsp.set_resolved_for_test("zig", None); // known server, not installed
+
+    assert_eq!(app.dock_active_tab(), None);
+    app.maybe_auto_open_lsp();
+    assert_eq!(
+        app.dock_active_tab(),
+        Some(DockTab::Lsp),
+        "auto-opens the panel on a missing server"
+    );
+    assert_eq!(
+        app.editor.focus,
+        Focus::Editor,
+        "but keeps editor focus so it never disrupts typing"
+    );
+
+    // Close it; the once-per-language guard must not re-open it.
+    app.editor.lsp_open = false;
+    app.editor.dock_active = DockTab::Terminal;
+    app.maybe_auto_open_lsp();
+    assert_eq!(app.dock_active_tab(), None, "does not nag a second time");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn lsp_panel_renders_the_server_log_tail() {
+    let path = temp_file("hi");
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    let servers = std::collections::HashMap::from([("rust".to_string(), vec!["ra".to_string()])]);
+    app.lsp = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), servers, "test".into());
+    app.lsp
+        .push_log_for_test("rust", "indexing 342 of 1200 crates");
+    app.toggle_lsp_panel();
+    let out = render_to_string(&mut app, 100, 24);
+    assert!(out.contains("server log"), "the log separator renders");
+    assert!(out.contains("indexing 342"), "the log line renders");
+    std::fs::remove_file(&path).ok();
+}

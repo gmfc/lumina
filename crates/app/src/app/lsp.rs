@@ -44,6 +44,7 @@ impl App {
             self.poll_pull_diagnostics(id, &path, &lang, rev);
         }
         self.mirror_lsp_health();
+        self.maybe_auto_open_lsp();
     }
 
     /// Mirror the *active* file's server health onto the status line (the footer LSP indicator),

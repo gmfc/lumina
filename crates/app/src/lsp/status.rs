@@ -35,6 +35,9 @@ pub(crate) struct LangStatus {
 }
 
 impl LspManager {
+    /// Cap on retained log lines per language.
+    const LOG_CAP: usize = 500;
+
     /// One row per language the session has encountered (opened, configured, started, or failed),
     /// sorted by language id. Empty before any language-detected file is opened.
     pub(crate) fn status_rows(&self) -> Vec<LangStatus> {
@@ -80,9 +83,53 @@ impl LspManager {
         }
     }
 
+    /// Whether `lang` has a *known* server (in the registry) that probed as not installed — the
+    /// trigger for the one-time "install it" nudge. False for unknown languages (no server to
+    /// install) and for anything installed/running.
+    pub(crate) fn server_missing(&self, lang: &str) -> bool {
+        matches!(self.resolved.get(lang), Some(None)) && registry::install_hint(lang).is_some()
+    }
+
     /// Record the most recent error for `lang` (shown in the panel's status row).
     pub(super) fn set_last_error(&mut self, lang: &str, message: String) {
         self.last_error.insert(lang.to_string(), message);
+    }
+
+    /// Force a language's memoized resolution, so tests can exercise the not-installed path without
+    /// depending on what happens to be on the real `$PATH`.
+    #[cfg(test)]
+    pub(crate) fn set_resolved_for_test(&mut self, lang: &str, argv: Option<Vec<String>>) {
+        self.resolved.insert(lang.to_string(), argv);
+    }
+
+    /// Inject a log line, so a render test can populate the panel's log tail without a live server.
+    #[cfg(test)]
+    pub(crate) fn push_log_for_test(&mut self, lang: &str, line: &str) {
+        self.push_log(lang, line.to_string());
+    }
+
+    /// Append a log line for `lang`, trimming the ring to the newest [`Self::LOG_CAP`] lines.
+    pub(super) fn push_log(&mut self, lang: &str, line: String) {
+        let ring = self.logs.entry(lang.to_string()).or_default();
+        if ring.len() >= Self::LOG_CAP {
+            ring.pop_front();
+        }
+        ring.push_back(line);
+    }
+
+    /// The most recent log lines for the LSP panel's log tail, each tagged with its language.
+    /// Grouped by language (sorted) — cross-server order isn't meaningful without global timestamps,
+    /// and a stable order keeps the panel from jumping around as lines arrive. Bounded by `limit`.
+    pub(crate) fn recent_logs(&self, limit: usize) -> Vec<String> {
+        let mut langs: Vec<&String> = self.logs.keys().collect();
+        langs.sort();
+        let mut lines: Vec<String> = langs
+            .into_iter()
+            .flat_map(|lang| self.logs[lang].iter().map(move |l| format!("[{lang}] {l}")))
+            .collect();
+        let start = lines.len().saturating_sub(limit);
+        lines.drain(..start);
+        lines
     }
 }
 
@@ -126,5 +173,48 @@ mod tests {
     fn status_rows_are_empty_before_any_language_is_touched() {
         let mgr = LspManager::new(std::path::Path::new("/tmp"), HashMap::new(), "test".into());
         assert!(mgr.status_rows().is_empty());
+    }
+
+    #[test]
+    fn logs_are_bounded_and_tailed() {
+        let mut mgr = LspManager::new(std::path::Path::new("/tmp"), HashMap::new(), "test".into());
+        // Push more than the cap; only the newest LOG_CAP survive.
+        for i in 0..(LspManager::LOG_CAP + 10) {
+            mgr.push_log("rust", format!("line {i}"));
+        }
+        assert_eq!(mgr.logs["rust"].len(), LspManager::LOG_CAP);
+        assert_eq!(mgr.logs["rust"].front().unwrap(), "line 10"); // oldest 10 dropped
+                                                                  // recent_logs returns a bounded, language-tagged tail.
+        let tail = mgr.recent_logs(3);
+        assert_eq!(tail.len(), 3);
+        assert!(tail[0].starts_with("[rust] line "));
+    }
+
+    #[test]
+    fn recent_logs_group_by_language_in_sorted_order() {
+        let mut mgr = LspManager::new(std::path::Path::new("/tmp"), HashMap::new(), "test".into());
+        mgr.push_log("rust", "r1".into());
+        mgr.push_log("go", "g1".into());
+        // Deterministic: grouped by language, sorted (`go` before `rust`).
+        assert_eq!(
+            mgr.recent_logs(10),
+            vec!["[go] g1".to_string(), "[rust] r1".to_string()]
+        );
+    }
+
+    #[test]
+    fn server_missing_only_for_known_uninstalled_languages() {
+        let mut mgr = LspManager::new(std::path::Path::new("/tmp"), HashMap::new(), "test".into());
+        // A known language probed as not installed → missing.
+        mgr.set_resolved_for_test("go", None);
+        assert!(mgr.server_missing("go"));
+        // A known language that resolved → not missing.
+        mgr.set_resolved_for_test("rust", Some(vec!["rust-analyzer".into()]));
+        assert!(!mgr.server_missing("rust"));
+        // An unknown language (no registry entry) → never "missing" (nothing to install).
+        mgr.set_resolved_for_test("cobol", None);
+        assert!(!mgr.server_missing("cobol"));
+        // Never probed → not missing.
+        assert!(!mgr.server_missing("python"));
     }
 }

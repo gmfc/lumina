@@ -66,6 +66,28 @@ impl App {
         }
     }
 
+    /// Auto-open the LSP panel — once per language — the first time the active file's language has a
+    /// known-but-uninstalled server, surfacing the install command. The panel becomes visible on the
+    /// LSP tab, but keyboard focus stays on the editor so it never disrupts typing.
+    pub(super) fn maybe_auto_open_lsp(&mut self) {
+        let Some(lang) = self
+            .editor
+            .workspace
+            .active_doc()
+            .and_then(|id| self.editor.workspace.documents.get(id))
+            .and_then(|d| d.language.clone())
+        else {
+            return;
+        };
+        if self.lsp_autoopened.contains(&lang) || !self.lsp.server_missing(&lang) {
+            return;
+        }
+        self.lsp_autoopened.insert(lang);
+        self.editor.lsp_open = true;
+        self.editor.lsp_panel.minimized = false;
+        self.editor.dock_active = DockTab::Lsp;
+    }
+
     /// Minimize / restore the visible dock tab (header chevron).
     pub(super) fn dock_minimize_active(&mut self) {
         match self.dock_active_tab() {
@@ -94,5 +116,11 @@ impl App {
     /// the `crate::ui` renderer cannot reach directly).
     pub(crate) fn lsp_status_rows(&self) -> Vec<crate::lsp::LangStatus> {
         self.lsp.status_rows()
+    }
+
+    /// The most recent server log lines for the LSP panel's log tail (accessor over the private
+    /// manager).
+    pub(crate) fn lsp_recent_logs(&self, limit: usize) -> Vec<String> {
+        self.lsp.recent_logs(limit)
     }
 }

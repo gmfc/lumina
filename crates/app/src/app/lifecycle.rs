@@ -129,6 +129,7 @@ impl App {
             lsp_pulled_revision: std::collections::HashMap::new(),
             lsp_pull_deadline: std::collections::HashMap::new(),
             last_active: None,
+            lsp_autoopened: std::collections::HashSet::new(),
             last_caret: None,
             closed_tabs: Vec::new(),
             settings: None,

@@ -74,8 +74,9 @@ impl LspManager {
         }
     }
 
-    /// A server→client notification: `window/showMessage` → statusline, `$/progress` → the
-    /// work-done spinner (§1.5). Everything else (logMessage / telemetry / unknown) is dropped.
+    /// A server→client notification: `window/showMessage` → statusline, `window/logMessage` → the
+    /// LSP panel's log tail, `$/progress` → the work-done spinner (§1.5). Telemetry / unknown are
+    /// dropped.
     pub(crate) fn on_notification(
         &mut self,
         lang: &str,
@@ -86,6 +87,11 @@ impl LspManager {
         if method == "window/showMessage" {
             if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
                 out.push(LspEvent::Message(msg.to_string()));
+            }
+        } else if method == "window/logMessage" {
+            // Previously dropped; now folded into the LSP panel's log tail.
+            if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
+                self.push_log(lang, msg.to_string());
             }
         } else if method == "$/progress" {
             if let Some(ev) = self.handle_progress(lang, params) {
