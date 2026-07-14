@@ -41,6 +41,18 @@ fn file_glyph(path: &Path) -> &'static str {
     }
 }
 
+/// The marker prefix for a directory row: an expand chevron plus, in Nerd Font `icons` mode, a
+/// **single** folder glyph (open when `expanded`). Non-icon mode is the chevron alone. It carries
+/// exactly one folder glyph — earlier it showed two side by side, which read as a duplicated icon.
+fn dir_marker(expanded: bool, icons: bool) -> &'static str {
+    match (icons, expanded) {
+        (true, true) => "▾ \u{f07c} ",  // caret-down + open-folder
+        (true, false) => "▸ \u{f07b} ", // caret-right + folder
+        (false, true) => "▾ ",
+        (false, false) => "▸ ",
+    }
+}
+
 pub struct ExplorerPlugin {
     root: PathBuf,
     expanded: BTreeSet<PathBuf>,
@@ -193,18 +205,7 @@ impl ExplorerPlugin {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let (marker, style) = if row.is_dir {
-                    let m = if self.icons {
-                        if row.expanded {
-                            "\u{e5fe} \u{f07c} " //   open-folder
-                        } else {
-                            "\u{e5ff} \u{f07b} " //   folder
-                        }
-                    } else if row.expanded {
-                        "▾ "
-                    } else {
-                        "▸ "
-                    };
-                    (m.to_string(), "dir")
+                    (dir_marker(row.expanded, self.icons).to_string(), "dir")
                 } else if self.icons {
                     (format!("  {} ", file_glyph(&row.path)), "file")
                 } else {
@@ -309,5 +310,35 @@ impl ExplorerPlugin {
                 self.reveal(&path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dir_marker;
+
+    /// Regression: a directory shows exactly one folder glyph (it used to render two side by
+    /// side), always led by an expand chevron.
+    #[test]
+    fn directory_marker_has_a_single_folder_icon() {
+        let is_folder = |c: char| matches!(c, '\u{f07b}' | '\u{f07c}' | '\u{e5fe}' | '\u{e5ff}');
+        for expanded in [true, false] {
+            let m = dir_marker(expanded, true);
+            let folders = m.chars().filter(|&c| is_folder(c)).count();
+            assert_eq!(
+                folders, 1,
+                "expanded={expanded}: expected one folder glyph in {m:?}"
+            );
+            assert!(
+                m.starts_with('▾') || m.starts_with('▸'),
+                "icon marker should start with an expand chevron: {m:?}"
+            );
+        }
+        // Open vs closed folder is distinguished by the glyph.
+        assert!(dir_marker(true, true).contains('\u{f07c}')); // open
+        assert!(dir_marker(false, true).contains('\u{f07b}')); // closed
+                                                               // Non-icon mode is the chevron alone.
+        assert_eq!(dir_marker(true, false), "▾ ");
+        assert_eq!(dir_marker(false, false), "▸ ");
     }
 }
