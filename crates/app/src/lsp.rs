@@ -641,16 +641,14 @@ impl LspManager {
                 });
             }
             "report" => {
-                if let Some(item) = self.progress.iter_mut().find(|p| same(p)) {
-                    // A report omitting a field leaves the prior value in place.
-                    if let Some(m) = value.get("message").and_then(|v| v.as_str()) {
-                        item.message = Some(m.to_string());
-                    }
-                    if let Some(p) = value.get("percentage").and_then(|v| v.as_u64()) {
-                        item.percentage = Some(p as u32);
-                    }
-                } else {
-                    return None; // report for an unknown token → nothing to re-render
+                // A report for an unknown token has nothing to re-render → drop it (None).
+                let item = self.progress.iter_mut().find(|p| same(p))?;
+                // A report omitting a field leaves the prior value in place.
+                if let Some(m) = value.get("message").and_then(|v| v.as_str()) {
+                    item.message = Some(m.to_string());
+                }
+                if let Some(p) = value.get("percentage").and_then(|v| v.as_u64()) {
+                    item.percentage = Some(p as u32);
                 }
             }
             "end" => {
@@ -2049,6 +2047,134 @@ mod tests {
             matches!(mgr.poll().as_slice(), [LspEvent::FoldingRanges { uri, ranges }]
                 if uri == "file:///x.rs" && ranges.len() == 1 && ranges[0].start_line == 2)
         );
+    }
+
+    /// Path to the `mock_lsp_server` workspace bin (built alongside the test binary), resolved
+    /// relative to the current test executable so it works under any target dir.
+    fn mock_server_bin() -> std::path::PathBuf {
+        let mut p = std::env::current_exe().expect("current_exe");
+        p.pop(); // drop the test binary (…/deps/<name>)
+        if p.ends_with("deps") {
+            p.pop(); // …/deps → …/debug
+        }
+        p.push(format!("mock_lsp_server{}", std::env::consts::EXE_SUFFIX));
+        p
+    }
+
+    #[test]
+    fn mock_server_drives_passive_feature_requests_end_to_end() {
+        // Spawn the real transport against the scripted mock through the manager, then run the
+        // full passive-feature flow (handshake → didOpen → semantic tokens / inlay hints / code
+        // lens / folding / pull diagnostics / hover) and assert each result surfaces as an event.
+        let bin = mock_server_bin();
+        if !bin.exists() {
+            // Built only by `cargo test --workspace` (as CI + coverage run); skip a narrow run.
+            eprintln!("skipping: mock_lsp_server not found at {bin:?}");
+            return;
+        }
+        let transcript = r#"[
+            {"expect": "initialize"},
+            {"respond": {"capabilities": {
+                "hoverProvider": true,
+                "semanticTokensProvider": {"legend": {"tokenTypes": ["keyword"], "tokenModifiers": []}, "full": true},
+                "inlayHintProvider": true,
+                "codeLensProvider": {"resolveProvider": false},
+                "foldingRangeProvider": true,
+                "diagnosticProvider": {"interFileDependencies": false, "workspaceDiagnostics": false}
+            }}},
+            {"expect": "initialized"},
+            {"expect": "textDocument/didOpen"},
+            {"expect": "textDocument/semanticTokens/full"},
+            {"respond": {"data": [0, 0, 2, 0, 0]}},
+            {"expect": "textDocument/inlayHint"},
+            {"respond": [{"position": {"line": 0, "character": 0}, "label": ": i32"}]},
+            {"expect": "textDocument/codeLens"},
+            {"respond": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "command": {"title": "Run"}}]},
+            {"expect": "textDocument/foldingRange"},
+            {"respond": [{"startLine": 0, "endLine": 2}]},
+            {"expect": "textDocument/diagnostic"},
+            {"respond": {"kind": "full", "items": []}},
+            {"expect": "textDocument/hover"},
+            {"respond": {"contents": "docs"}},
+            {"exit": 0}
+        ]"#;
+        let mut tpath = std::env::temp_dir();
+        tpath.push(format!("lumina_mgr_transcript_{}.json", std::process::id()));
+        std::fs::write(&tpath, transcript).unwrap();
+
+        let servers = HashMap::from([(
+            "rust".to_string(),
+            vec![
+                bin.to_string_lossy().into_owned(),
+                tpath.to_string_lossy().into_owned(),
+            ],
+        )]);
+        let mut mgr = LspManager::new(Path::new("/tmp"), servers, "test".into());
+        mgr.ensure_started("rust");
+
+        // Wait for the async handshake to complete.
+        let mut ready = false;
+        for _ in 0..300 {
+            let _ = mgr.poll();
+            if mgr.is_ready("rust") {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready, "handshake did not complete");
+
+        let doc = Path::new("/tmp/mock_doc.rs");
+        assert!(
+            mgr.did_open(doc, "rust", "fn x() {}"),
+            "didOpen should send"
+        );
+        assert!(mgr.request_semantic_tokens(doc, "rust"));
+        assert!(mgr.request_inlay_hints(doc, "rust", 3));
+        assert!(mgr.request_code_lens(doc, "rust"));
+        assert!(mgr.request_folding_ranges(doc, "rust"));
+        assert!(mgr.request_pull_diagnostics(doc, "rust"));
+        assert!(mgr.request_hover(doc, "rust", 0, 0));
+
+        let mut events = Vec::new();
+        for _ in 0..300 {
+            events.extend(mgr.poll());
+            if events.len() >= 6 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LspEvent::SemanticTokens { .. })),
+            "no semantic tokens event"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LspEvent::InlayHints { .. })),
+            "no inlay hints event"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LspEvent::CodeLenses { .. })),
+            "no code lens event"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, LspEvent::FoldingRanges { .. })),
+            "no folding event"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, LspEvent::Hover(_))),
+            "no hover event"
+        );
+
+        mgr.stop_all(Duration::from_secs(2));
+        std::fs::remove_file(&tpath).ok();
     }
 
     #[test]

@@ -418,7 +418,333 @@ fn lsp_manager_is_inert_without_a_configured_server() {
     assert!(!mgr.request_references(p, "rust", 0, 0));
     assert!(!mgr.request_rename(p, "rust", 0, 0, "new"));
     assert!(!mgr.request_document_symbols(p, "rust"));
+    // The passive whole-doc feature requests are inert too (gated on a Running connection).
+    assert!(!mgr.request_semantic_tokens(p, "rust"));
+    assert!(!mgr.request_inlay_hints(p, "rust", 10));
+    assert!(!mgr.request_code_lens(p, "rust"));
+    assert!(!mgr.request_folding_ranges(p, "rust"));
+    assert!(!mgr.request_pull_diagnostics(p, "rust"));
+    // …and their capability gates report unsupported without a handshake.
+    assert!(!mgr.supports_semantic_tokens("rust"));
+    assert!(!mgr.supports_inlay_hints("rust"));
+    assert!(!mgr.supports_code_lens("rust"));
+    assert!(!mgr.supports_folding("rust"));
+    assert!(!mgr.supports_pull("rust"));
+    // Forwarding a disk change with no registered watcher is a no-op (must not panic).
+    mgr.notify_watched_file_change(p);
     mgr.did_open(p, "rust", "text"); // no server → no-op
     mgr.did_change(p, "rust", "text"); // no open doc → no-op
     assert!(mgr.poll().is_empty());
+}
+
+/// The decoration layer id published for the active doc, if any.
+fn active_layer<'a>(app: &'a App, layer: &str) -> Option<&'a editor_plugin::DecorationSet> {
+    let id = app.editor.workspace.active_doc()?;
+    app.editor.decorations.get(&id)?.get(layer)
+}
+
+/// A temp `.rs` file (so language detection gives `rust` and `lsp_position` resolves).
+fn temp_rs_file(contents: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let mut p = std::env::temp_dir();
+    p.push(format!(
+        "lumina_lsp_{}_{}.rs",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::write(&p, contents).unwrap();
+    p
+}
+
+#[test]
+fn dispatch_lsp_request_covers_every_request_kind() {
+    // With a rust doc but no server, every request kind dispatches through its arm (the requests
+    // no-op at the capability gate) and the two client-command shims queue follow-up requests.
+    use editor_plugin::LspRequestKind as K;
+    let path = temp_rs_file("fn main() { let x = 1; }\n");
+    let mut app = app_with(&path);
+    app.editor.active_document_mut().unwrap().set_caret(3); // on a word
+    for kind in [
+        K::Hover,
+        K::Definition,
+        K::Implementation,
+        K::TypeDefinition,
+        K::Completion,
+        K::References,
+        K::DocumentSymbols,
+        K::Rename("y".into()),
+        K::Formatting,
+        K::SignatureHelp,
+        K::DocumentHighlight,
+        K::WorkspaceSymbols("q".into()),
+        K::CodeAction,
+        K::ResolveCompletion {
+            label: "l".into(),
+            data: serde_json::Value::Null,
+        },
+        K::ExecuteCommand {
+            command: "editor.action.triggerSuggest".into(),
+            arguments: serde_json::Value::Null,
+        },
+        K::ExecuteCommand {
+            command: "editor.action.triggerParameterHints".into(),
+            arguments: serde_json::Value::Null,
+        },
+        K::ExecuteCommand {
+            command: "some.server.command".into(),
+            arguments: serde_json::json!([]),
+        },
+    ] {
+        app.dispatch_lsp_request(kind); // must not panic
+    }
+    assert!(
+        !app.editor.pending_lsp_requests.is_empty(),
+        "the triggerSuggest/triggerParameterHints shims should queue follow-up requests"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// Broadcast a plugin event the way the LSP poll loop does, then drain it.
+fn feed_event(app: &mut App, ev: editor_plugin::event::Event) {
+    app.editor.pending_events.push(ev);
+    app.drain_workers();
+}
+
+#[test]
+fn document_highlight_event_publishes_then_clears() {
+    use editor_plugin::event::Event;
+    let path = temp_rs_file("let foo = foo;\n");
+    let mut app = app_with(&path);
+    app.drain_workers(); // flush the initial DidChangeActive (else it clears the layer we set)
+    feed_event(
+        &mut app,
+        Event::LspHighlights(vec![
+            editor_plugin::LspHighlight {
+                line: 0,
+                start_char16: 4,
+                end_line: 0,
+                end_char16: 7,
+                kind: 2,
+            },
+            editor_plugin::LspHighlight {
+                line: 0,
+                start_char16: 10,
+                end_line: 0,
+                end_char16: 13,
+                kind: 3,
+            },
+        ]),
+    );
+    assert!(active_layer(&app, "lsp.highlight").is_some_and(|s| s.spans.len() == 2));
+    // A cursor move onto a word with LSP enabled re-requests (exercises cursor_on_word).
+    app.editor.lsp_enabled = true;
+    app.editor.active_document_mut().unwrap().set_caret(5);
+    let id = app.editor.workspace.active_doc().unwrap();
+    feed_event(&mut app, Event::DidChangeCursor(id));
+    // An edit clears the (now-stale) highlights.
+    feed_event(&mut app, Event::DidChange(id));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn signature_help_event_sets_and_clears_the_status_item() {
+    use editor_plugin::event::Event;
+    let path = temp_rs_file("fn f(a: i32) {}\n");
+    let mut app = app_with(&path);
+    app.drain_workers(); // flush the initial DidChangeActive (else it closes the hint we set)
+    feed_event(&mut app, Event::LspSignatureHelp(Some("f([a])".into())));
+    assert_eq!(
+        app.editor
+            .status_items
+            .get("lsp.signature")
+            .map(String::as_str),
+        Some("f([a])")
+    );
+    feed_event(&mut app, Event::LspSignatureHelp(None));
+    assert!(app
+        .editor
+        .status_items
+        .get("lsp.signature")
+        .map(String::as_str)
+        .unwrap_or("")
+        .is_empty());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn code_action_event_opens_a_picker() {
+    use editor_plugin::event::Event;
+    let path = temp_rs_file("let x = 1;\n");
+    let mut app = app_with(&path);
+    feed_event(
+        &mut app,
+        Event::LspCodeActions(vec![editor_plugin::LspCodeAction {
+            title: "Fix it".into(),
+            edit: editor_plugin::LspWorkspaceEdit::default(),
+            command: Some(("cmd".into(), serde_json::Value::Null)),
+        }]),
+    );
+    assert!(
+        app.editor.picker.is_some(),
+        "offered code actions should open a picker"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn handle_server_request_covers_window_methods_and_unknown() {
+    let path = temp_rs_file("let foo = 1;\n");
+    let mut app = app_with(&path);
+    // showMessageRequest surfaces on the statusline and is answered.
+    app.handle_server_request(
+        "rust".into(),
+        serde_json::json!(2),
+        "window/showMessageRequest",
+        serde_json::json!({ "type": 1, "message": "reload?", "actions": [{"title": "OK"}] }),
+    );
+    assert_eq!(app.editor.status_message.as_deref(), Some("LSP: reload?"));
+    // showDocument for a non-file / missing target claims no success but still answers.
+    app.handle_server_request(
+        "rust".into(),
+        serde_json::json!(3),
+        "window/showDocument",
+        serde_json::json!({ "uri": "file:///does/not/exist", "external": false }),
+    );
+    // Any other routed method is still answered (never hangs the server).
+    app.handle_server_request(
+        "rust".into(),
+        serde_json::json!(4),
+        "some/unknown/request",
+        serde_json::Value::Null,
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn semantic_tokens_event_publishes_and_renders_a_decoration_layer() {
+    // handle_lsp_event → to_primitive → semantic-tokens plugin → lsp.semantic layer → render.
+    let path = temp_file("fn main() {}\n");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::SemanticTokens {
+        uri: crate::lsp::uri_for(&path),
+        tokens: vec![editor_lsp::SemanticToken {
+            line: 0,
+            start_char16: 0,
+            length: 2,
+            token_type: "keyword".into(),
+            modifiers: vec!["declaration".into()],
+        }],
+    });
+    app.drain_workers();
+    assert!(
+        active_layer(&app, "lsp.semantic").is_some_and(|s| !s.spans.is_empty()),
+        "semantic tokens should publish span decorations"
+    );
+    let out = render_to_string(&mut app, 100, 10);
+    assert!(
+        out.contains("fn main"),
+        "the doc still renders with the overlay"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn inlay_hints_event_publishes_and_renders_virtual_text() {
+    let path = temp_file("let x = 5;\n");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::InlayHints {
+        uri: crate::lsp::uri_for(&path),
+        hints: vec![editor_lsp::InlayHint {
+            line: 0,
+            char16: 5,
+            label: ": i32".into(),
+            kind: 1,
+            pad_left: true,
+            pad_right: false,
+        }],
+    });
+    app.drain_workers();
+    assert!(active_layer(&app, "lsp.inlay").is_some_and(|s| s.virtual_text.len() == 1));
+    let out = render_to_string(&mut app, 100, 10);
+    assert!(out.contains(": i32"), "the inlay hint renders inline");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn code_lenses_event_publishes_and_renders_virtual_text() {
+    let path = temp_file("fn run() {}\n");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::CodeLenses {
+        uri: crate::lsp::uri_for(&path),
+        lenses: vec![editor_lsp::CodeLens {
+            line: 0,
+            char16: 0,
+            title: Some("Run".into()),
+            raw: serde_json::Value::Null,
+        }],
+    });
+    app.drain_workers();
+    assert!(active_layer(&app, "lsp.lens").is_some_and(|s| s.virtual_text.len() == 1));
+    let out = render_to_string(&mut app, 100, 10);
+    assert!(out.contains("Run"), "the code lens renders inline");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn folding_ranges_event_publishes_gutter_marks() {
+    let path = temp_file("fn a() {\n  1\n}\n");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::FoldingRanges {
+        uri: crate::lsp::uri_for(&path),
+        ranges: vec![editor_lsp::FoldingRange {
+            start_line: 0,
+            end_line: 2,
+            kind: Some("region".into()),
+        }],
+    });
+    app.drain_workers();
+    assert!(active_layer(&app, "lsp.fold").is_some_and(|s| s.gutter.len() == 1));
+    let _ = render_to_string(&mut app, 100, 10); // exercises the gutter-mark render path
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn progress_event_sets_and_clears_the_status_item() {
+    let path = temp_file("x\n");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::Progress(Some(
+        "rust: Indexing 10%".into(),
+    )));
+    assert_eq!(
+        app.editor
+            .status_items
+            .get("lsp.progress")
+            .map(String::as_str),
+        Some("rust: Indexing 10%")
+    );
+    app.handle_lsp_event(crate::lsp::LspEvent::Progress(None));
+    assert!(!app.editor.status_items.contains_key("lsp.progress"));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn refresh_events_reissue_requests_without_panicking() {
+    // The refresh arms collect the language's open docs and re-request; with no server the
+    // requests are inert, but the collection + dispatch paths run.
+    let path = temp_file("fn x() {}\n");
+    let mut app = app_with(&path);
+    app.handle_lsp_event(crate::lsp::LspEvent::SemanticTokensRefresh {
+        lang: "rust".into(),
+    });
+    app.handle_lsp_event(crate::lsp::LspEvent::InlayHintRefresh {
+        lang: "rust".into(),
+    });
+    app.handle_lsp_event(crate::lsp::LspEvent::CodeLensRefresh {
+        lang: "rust".into(),
+    });
+    app.handle_lsp_event(crate::lsp::LspEvent::DiagnosticsRefresh {
+        lang: "rust".into(),
+    });
+    std::fs::remove_file(&path).ok();
 }

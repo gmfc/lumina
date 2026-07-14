@@ -99,6 +99,62 @@ fn drives_init_hover_notification_and_server_request() {
 }
 
 #[test]
+fn drives_the_decoration_and_watched_files_request_builders() {
+    // Exercise the newer request builders end to end through the real transport: each is sent,
+    // the mock expects its method, and (for the request-shaped ones) a response round-trips back.
+    let transcript = r#"[
+        {"expect": "initialize"},
+        {"respond": {"capabilities": {}}},
+        {"expect": "initialized"},
+        {"expect": "textDocument/semanticTokens/full"},
+        {"respond": {"data": [0, 0, 1, 0, 0]}},
+        {"expect": "textDocument/inlayHint"},
+        {"respond": []},
+        {"expect": "textDocument/codeLens"},
+        {"respond": []},
+        {"expect": "codeLens/resolve"},
+        {"respond": {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}}},
+        {"expect": "textDocument/foldingRange"},
+        {"respond": []},
+        {"expect": "textDocument/diagnostic"},
+        {"respond": {"kind": "full", "items": []}},
+        {"expect": "workspace/didChangeWatchedFiles"},
+        {"exit": 0}
+    ]"#;
+    let (mut handle, rx, _init, path) = spawn(transcript);
+    // Drain the init response and finish the handshake.
+    let _ = recv(&rx);
+    handle.send_initialized().unwrap();
+
+    // Each request builder produces a framed request the mock recognizes, and its response comes
+    // back correlated to the id the builder returned.
+    let checks: Vec<i64> = vec![
+        handle.semantic_tokens_full("file:///x.rs").unwrap(),
+        handle.inlay_hint("file:///x.rs", 0, 0, 5, 0).unwrap(),
+        handle.code_lens("file:///x.rs").unwrap(),
+        handle
+            .resolve_code_lens(&serde_json::json!({"data": 1}))
+            .unwrap(),
+        handle.folding_range("file:///x.rs").unwrap(),
+        handle.diagnostic("file:///x.rs", None, None).unwrap(),
+    ];
+    for expected_id in checks {
+        match recv(&rx) {
+            Incoming::Response { id, .. } => assert_eq!(id, expected_id),
+            _ => panic!("expected a response for request id {expected_id}"),
+        }
+    }
+
+    // A notification (no response) — the mock just expects it.
+    handle
+        .did_change_watched_files(&[serde_json::json!({"uri": "file:///x.rs", "type": 2})])
+        .unwrap();
+
+    handle.stop(Duration::from_secs(2));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn initialize_error_is_surfaced_as_an_error_response() {
     let transcript = r#"[
         {"expect": "initialize"},
