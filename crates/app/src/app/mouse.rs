@@ -66,6 +66,19 @@ impl App {
             && self.active_terminal().is_some()
         {
             self.editor.focus = Focus::Panel;
+        } else if self
+            .regions
+            .lsp_content
+            .is_some_and(|r| in_rect(r, col, row))
+        {
+            self.editor.focus = Focus::LspPanel;
+        } else if self
+            .regions
+            .lsp_status
+            .is_some_and(|r| in_rect(r, col, row))
+        {
+            // Clicking the footer LSP indicator opens/closes the LSP panel.
+            self.toggle_lsp_panel();
         }
     }
 
@@ -229,7 +242,8 @@ impl App {
         }
     }
 
-    /// Route a wheel scroll: the terminal's scrollback when over the panel, else the editor.
+    /// Route a wheel scroll: the terminal's scrollback when over the terminal tab, the LSP list
+    /// when over the LSP tab, else the editor.
     pub(super) fn scroll_at(&mut self, col: u16, row: u16, delta: isize) {
         if self
             .regions
@@ -239,6 +253,12 @@ impl App {
             if let Some(t) = self.active_terminal_mut() {
                 t.scroll(delta);
             }
+        } else if self
+            .regions
+            .lsp_content
+            .is_some_and(|r| in_rect(r, col, row))
+        {
+            self.scroll_lsp_panel(delta);
         } else {
             self.scroll_editor(delta);
         }

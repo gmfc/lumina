@@ -213,7 +213,15 @@ impl Host for EditorState {
     }
 
     fn set_terminal_focus(&mut self, focused: bool) {
-        self.focus = if focused { Focus::Panel } else { Focus::Editor };
+        // The terminal grabbing focus (open/new/select/restore) makes it the *visible* dock tab, so
+        // keystrokes can never route to a terminal hidden behind the LSP tab. The terminal plugin is
+        // unaware of the dock's tab model — this is where its lifecycle is folded into it.
+        if focused {
+            self.dock_active = super::DockTab::Terminal;
+            self.focus = Focus::Panel;
+        } else {
+            self.focus = Focus::Editor;
+        }
     }
 
     fn viewport_height(&self) -> usize {

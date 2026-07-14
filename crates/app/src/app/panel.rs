@@ -24,25 +24,39 @@ impl App {
         self.editor.terminals.get_mut(&id)
     }
 
-    /// The header laid out left-to-right as `(label, hit)` segments — the minimize control, one tab
-    /// per terminal (from the plugin's `order`, titled/marked from the app-owned session), and `+`.
-    /// Labels use only width-1 glyphs, so callers treat one char as one display column.
-    pub(crate) fn terminal_header_segments(&self) -> Vec<(String, HeaderHit)> {
-        let view = &self.editor.terminal_view;
-        let mut segs = Vec::with_capacity(view.order.len() + 2);
-        let ctrl = if view.minimized { " ▸ " } else { " ▾ " };
+    /// The dock header laid out left-to-right as `(label, hit)` segments: the minimize control, the
+    /// two dock tab buttons (`Terminal`/`LSP`), and — when the terminal tab is showing — one tab per
+    /// terminal session (from the plugin's `order`) plus `+`. Labels use only width-1 glyphs, so
+    /// callers treat one char as one display column.
+    pub(crate) fn dock_header_segments(&self) -> Vec<(String, HeaderHit)> {
+        use crate::editor::DockTab;
+        let mut segs = Vec::new();
+        let ctrl = if self.dock_minimized() {
+            " ▸ "
+        } else {
+            " ▾ "
+        };
         segs.push((ctrl.to_string(), HeaderHit::Minimize));
-        for (i, id) in view.order.iter().enumerate() {
-            let (title, exited) = self
-                .editor
-                .terminals
-                .get(id)
-                .map(|t| (t.title.as_str(), t.exited))
-                .unwrap_or(("", false));
-            let mark = if exited { '·' } else { '×' };
-            segs.push((format!(" {}: {title} {mark} ", i + 1), HeaderHit::Tab(i)));
+        segs.push((
+            " Terminal ".to_string(),
+            HeaderHit::DockTab(DockTab::Terminal),
+        ));
+        segs.push((" LSP ".to_string(), HeaderHit::DockTab(DockTab::Lsp)));
+        // The terminal's per-session tabs only appear while the terminal tab is the visible one.
+        if self.dock_active_tab() == Some(DockTab::Terminal) {
+            let view = &self.editor.terminal_view;
+            for (i, id) in view.order.iter().enumerate() {
+                let (title, exited) = self
+                    .editor
+                    .terminals
+                    .get(id)
+                    .map(|t| (t.title.as_str(), t.exited))
+                    .unwrap_or(("", false));
+                let mark = if exited { '·' } else { '×' };
+                segs.push((format!(" {}: {title} {mark} ", i + 1), HeaderHit::Tab(i)));
+            }
+            segs.push((" + ".to_string(), HeaderHit::New));
         }
-        segs.push((" + ".to_string(), HeaderHit::New));
         segs
     }
 
@@ -59,9 +73,9 @@ impl App {
         }
     }
 
-    /// Handle a left click on the panel header: hit-test a segment and hand the `terminal` plugin
-    /// the corresponding lifecycle action (`minimize` / `new` / `select:N` / `close:N`). The close
-    /// mark sits in a tab's last two columns.
+    /// Handle a left click on the dock header: hit-test a segment and act on it. Dock-level hits
+    /// (minimize, tab switch) are app-owned; terminal session hits (`new` / `select:N` / `close:N`)
+    /// route to the `terminal` plugin. The close mark sits in a tab's last two columns.
     pub(super) fn panel_header_click(&mut self, col: u16, row: u16) {
         let Some(header) = self.regions.panel_header else {
             return;
@@ -70,18 +84,25 @@ impl App {
             return;
         }
         let mut x = header.x;
-        for (label, hit) in self.terminal_header_segments() {
+        for (label, hit) in self.dock_header_segments() {
             let w = label.chars().count() as u16;
             let seg_end = x.saturating_add(w);
             if col >= x && col < seg_end {
-                let payload = match hit {
-                    HeaderHit::Minimize => "minimize".to_string(),
+                let terminal_payload = match hit {
+                    HeaderHit::Minimize => {
+                        self.dock_minimize_active();
+                        return;
+                    }
+                    HeaderHit::DockTab(tab) => {
+                        self.focus_dock_tab(tab);
+                        return;
+                    }
                     HeaderHit::New => "new".to_string(),
                     HeaderHit::Tab(i) if col >= seg_end.saturating_sub(2) => format!("close:{i}"),
                     HeaderHit::Tab(i) => format!("select:{i}"),
                 };
                 self.registry
-                    .dispatch_owned("terminal", &payload, &mut self.editor);
+                    .dispatch_owned("terminal", &terminal_payload, &mut self.editor);
                 self.drain_workers();
                 return;
             }

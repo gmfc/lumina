@@ -91,6 +91,7 @@ pub struct App {
 
 mod cursors;
 mod dispatch;
+mod dock;
 mod file_ops;
 mod git;
 mod keys;

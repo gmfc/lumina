@@ -43,6 +43,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         // view.toggleTheme title comes from the `theme` plugin; terminal.* from the `terminal` plugin.
         // view.commandPalette / view.quickOpen / view.gotoLine titles come from the `palette` plugin.
         ("view.settings", "Preferences: Open Settings"),
+        ("lsp.panel.toggle", "LSP: Toggle Servers Panel"),
         ("config.reload", "Preferences: Reload Configuration"),
         // vim.toggle/enable/disable titles come from the `vim` plugin via the registry.
         ("app.quit", "Quit"),
@@ -77,6 +78,9 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         // ctrl+shift+p (palette) + ctrl+p (quick-open) + ctrl+g (goto-line) are contributed by
         // the `palette` plugin.
         ("ctrl+,", "view.settings"),
+        // `ctrl+shift+l` folds to `ctrl+l` (edit.selectLine) in this keymap, so the LSP panel uses
+        // a `ctrl+k` multi-chord instead (also on the palette as "LSP: Toggle Servers Panel").
+        ("ctrl+k ctrl+l", "lsp.panel.toggle"),
         // NOTE: `cursor.addNextMatch` (ctrl+d), `cursor.selectAllMatches` (ctrl+f2), and
         // `cursor.addAbove`/`addBelow` (ctrl+alt+up/down) are contributed by the `multicursor`
         // plugin; `git.nextHunk`/`git.prevHunk` (alt+j/alt+k) by `git-nav`. The keymap folds in

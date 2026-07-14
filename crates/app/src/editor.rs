@@ -19,6 +19,24 @@ pub(crate) enum Focus {
     Sidebar,
     /// The bottom terminal panel — keystrokes are forwarded to the active shell.
     Panel,
+    /// The bottom LSP panel — keys scroll the status/log view.
+    LspPanel,
+}
+
+/// Which tab the shared bottom dock is displaying. The terminal and LSP tabs coexist in one dock
+/// region with a tab strip; `dock_active` picks which is shown (display clamps it to an open tab).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DockTab {
+    Terminal,
+    Lsp,
+}
+
+/// App-owned UI state for the LSP dock tab (the terminal tab's lifecycle is plugin-owned).
+#[derive(Default)]
+pub(crate) struct LspPanelUi {
+    pub(crate) minimized: bool,
+    /// First visible row of the (scrollable) status list.
+    pub(crate) scroll: u16,
 }
 
 /// A modal overlay drawn on top of the body, capturing input while active. The generic prompt +
@@ -84,6 +102,13 @@ pub(crate) struct EditorState {
     /// Dock content height (rows) when expanded, from `config.terminal_height`. App-owned render
     /// param (not part of the plugin's lifecycle), fed to the layout.
     pub(crate) terminal_height: u16,
+    /// Whether the LSP dock tab is open. The dock is visible when this or `terminal_view.open` is
+    /// set; the two tabs share the one bottom region.
+    pub(crate) lsp_open: bool,
+    /// Which dock tab is displayed (clamped to an open tab by `App::dock_active_tab`).
+    pub(crate) dock_active: DockTab,
+    /// App-owned UI state for the LSP dock tab.
+    pub(crate) lsp_panel: LspPanelUi,
     /// Active modal overlay, if any.
     pub(crate) overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
@@ -146,6 +171,9 @@ impl EditorState {
             terminal_view: editor_plugin::TerminalView::default(),
             terminal_shell: crate::terminal::default_shell(None),
             terminal_height: 12,
+            lsp_open: false,
+            dock_active: DockTab::Terminal,
+            lsp_panel: LspPanelUi::default(),
             overlay: None,
             highlighters: HashMap::new(),
             decorations: HashMap::new(),

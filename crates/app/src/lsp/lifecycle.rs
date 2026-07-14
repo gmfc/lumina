@@ -57,10 +57,9 @@ impl LspManager {
                 self.clients.remove(lang);
                 self.state.remove(lang);
                 self.failed.insert(lang.to_string(), ());
-                out.push(LspEvent::Error(format!(
-                    "initialize failed: {}",
-                    err.message
-                )));
+                let msg = format!("initialize failed: {}", err.message);
+                self.set_last_error(lang, msg.clone());
+                out.push(LspEvent::Error(msg));
             }
             None => {
                 let caps = parse_capabilities(&result);
@@ -137,9 +136,9 @@ impl LspManager {
         if breaker_tripped(times, now) {
             self.failed.insert(lang.to_string(), ());
             self.restart_after.remove(lang);
-            out.push(LspEvent::Error(format!(
-                "{lang}: language server crashed {count} times; not restarting"
-            )));
+            let msg = format!("{lang}: language server crashed {count} times; not restarting");
+            self.set_last_error(lang, msg.clone());
+            out.push(LspEvent::Error(msg));
         } else {
             self.restart_after
                 .insert(lang.to_string(), now + restart_backoff(count));
@@ -198,7 +197,8 @@ impl LspManager {
                     .insert(language.to_string(), ClientState::Initializing { init_id });
                 true
             }
-            Err(_) => {
+            Err(e) => {
+                self.set_last_error(language, format!("failed to start `{program}`: {e}"));
                 self.failed.insert(language.to_string(), ());
                 false
             }

@@ -13,11 +13,8 @@ use std::sync::OnceLock;
 pub(crate) struct ServerDef {
     /// argv candidates in priority order; the first whose program resolves on `$PATH` wins.
     pub(crate) candidates: &'static [&'static [&'static str]],
-    /// One-line, copy-paste install hint surfaced when no candidate resolves.
-    // Read only via `install_hint` (module-private field), which the LSP status panel consumes in
-    // the next PR of this spec; the registry tests already exercise it, so it is live under
-    // `cfg(test)`.
-    #[allow(dead_code)]
+    /// One-line, copy-paste install hint surfaced when no candidate resolves (read via
+    /// `install_hint`, which the LSP panel shows on a `NotInstalled` row).
     install: &'static str,
 }
 
@@ -29,7 +26,6 @@ pub(crate) fn registry() -> &'static HashMap<&'static str, ServerDef> {
 }
 
 /// The install hint for a language, if it has a known server.
-#[allow(dead_code)] // Consumed by the LSP status panel in the next PR of this spec.
 pub(crate) fn install_hint(lang: &str) -> Option<&'static str> {
     registry().get(lang).map(|d| d.install)
 }

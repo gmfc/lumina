@@ -35,7 +35,10 @@ mod registry;
 mod requests;
 mod response;
 mod server_msgs;
+mod status;
 mod watchers;
+
+pub(crate) use status::{LangState, LangStatus};
 
 // Re-export the items moved into the submodules back into the `lsp` namespace, so that every
 // submodule's `use super::*` (and the in-crate test module) reaches them, and so `LspManager`'s
@@ -168,6 +171,9 @@ pub struct LspManager {
     /// probed and nothing installed (so we don't re-scan `$PATH` every tick). Overrides resolve to
     /// themselves. Cleared only on construction — a mid-session install is picked up on restart.
     resolved: HashMap<String, Option<Vec<String>>>,
+    /// The most recent error message per language (handshake/spawn/crash), shown in the LSP panel's
+    /// status row. Set at each `LspEvent::Error` push site; overwritten by the next error.
+    last_error: HashMap<String, String>,
     /// Live handles by language id.
     clients: HashMap<String, LspHandle>,
     /// Per-connection handshake/lifecycle state by language id.
@@ -228,6 +234,7 @@ impl LspManager {
             overrides,
             discover: false,
             resolved: HashMap::new(),
+            last_error: HashMap::new(),
             clients: HashMap::new(),
             state: HashMap::new(),
             failed: HashMap::new(),

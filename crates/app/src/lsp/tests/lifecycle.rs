@@ -195,3 +195,50 @@ fn health_tag_reflects_the_active_languages_connection_state() {
     // A different, unconnected language is still empty.
     assert_eq!(mgr.health_tag_for(Some("go")), "");
 }
+
+#[test]
+fn spawn_failure_records_an_error_and_marks_the_language_crashed() {
+    // An override pointing at a nonexistent binary fails to spawn: the language is marked failed
+    // and the error is recorded for the LSP panel's status row.
+    let mut mgr = LspManager::new(
+        std::path::Path::new("/tmp"),
+        std::collections::HashMap::from([(
+            "rust".to_string(),
+            vec!["/no/such/lumina-binary-xyz".to_string()],
+        )]),
+        "test".into(),
+    );
+    assert!(!mgr.ensure_started("rust"), "spawn fails, no connection");
+    let rust = mgr
+        .status_rows()
+        .into_iter()
+        .find(|r| r.lang == "rust")
+        .unwrap();
+    assert_eq!(rust.state, crate::lsp::LangState::Crashed);
+    assert!(rust.error.unwrap().contains("failed to start"));
+}
+
+#[test]
+fn init_failure_records_the_error() {
+    // An error response to `initialize` drops the connection and records the message.
+    let mut mgr = manager();
+    mgr.state
+        .insert("rust".into(), ClientState::Initializing { init_id: 1 });
+    let mut out = Vec::new();
+    mgr.complete_handshake(
+        "rust",
+        serde_json::Value::Null,
+        Some(ResponseError {
+            code: -1,
+            message: "nope".into(),
+        }),
+        &mut out,
+    );
+    assert!(mgr.failed.contains_key("rust"));
+    let rust = mgr
+        .status_rows()
+        .into_iter()
+        .find(|r| r.lang == "rust")
+        .unwrap();
+    assert_eq!(rust.error.as_deref(), Some("initialize failed: nope"));
+}
