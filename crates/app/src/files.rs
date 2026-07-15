@@ -123,13 +123,22 @@ fn decode_utf16(bytes: &[u8], be: bool) -> String {
     String::from_utf16_lossy(&units)
 }
 
-/// Load a file into a `Document`, recording its path, language, encoding, and fingerprint.
+/// Make a path absolute without touching the filesystem. Every open document's path is stored
+/// absolute so the `file://` URIs sent to language servers are well-formed — a *relative* path
+/// yields `file://rel/dir/file.rs`, where the first segment is parsed as the URL host, and servers
+/// (rust-analyzer) reject it as "url is not a file". Falls back to the input if the cwd is
+/// unavailable.
+pub fn absolute_path(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Load a file into a `Document`, recording its (absolute) path, language, encoding, and fingerprint.
 pub fn load(path: &Path) -> Result<Document> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let fp = fingerprint(&bytes);
     let (text, encoding) = decode(&bytes);
     let mut doc = Document::from_str(&text);
-    doc.path = Some(path.to_path_buf());
+    doc.path = Some(absolute_path(path));
     doc.language = language_for(path);
     doc.encoding = encoding;
     doc.disk = fp;
@@ -321,6 +330,30 @@ mod tests {
         // An unknown extension (and a no-extension path) yields no language.
         assert_eq!(language_for(Path::new("a.unknownext")), None);
         assert_eq!(language_for(Path::new("README")), None);
+    }
+
+    #[test]
+    fn absolute_path_makes_file_uris_well_formed() {
+        // A relative path becomes absolute, so `uri_for` yields `file:///…` rather than the
+        // malformed `file://rel/…` that servers reject as "url is not a file".
+        let abs = absolute_path(Path::new("crates/app/src/app.rs"));
+        assert!(abs.is_absolute(), "relative paths are absolutized");
+        let uri = crate::lsp::uri_for(&abs);
+        assert!(uri.starts_with("file:///"), "well-formed file URI: {uri}");
+        // An already-absolute path stays absolute.
+        assert!(absolute_path(Path::new("/tmp/x.rs")).is_absolute());
+    }
+
+    #[test]
+    fn loaded_document_has_an_absolute_path() {
+        let p = std::env::temp_dir().join(format!("lumina_abs_{}.rs", std::process::id()));
+        std::fs::write(&p, "fn main() {}\n").unwrap();
+        let doc = load(&p).unwrap();
+        assert!(
+            doc.path.as_ref().unwrap().is_absolute(),
+            "a loaded document's path is stored absolute"
+        );
+        std::fs::remove_file(&p).ok();
     }
 
     #[test]
