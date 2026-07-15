@@ -5,6 +5,8 @@ use super::*;
 use crate::editor::Overlay;
 use editor_core::Selection;
 
+// ---- shared fixtures -----------------------------------------------------
+
 fn menu_labels(app: &App) -> Vec<String> {
     match &app.editor.overlay {
         Some(Overlay::ContextMenu { items, .. }) => items.iter().map(|i| i.label.clone()).collect(),
@@ -12,26 +14,62 @@ fn menu_labels(app: &App) -> Vec<String> {
     }
 }
 
-#[test]
-fn right_click_opens_menu_with_only_applicable_items() {
-    // A `.txt` file (no language server). With a selection, the Edit group's Cut/Copy/Paste show;
-    // every LSP item is hidden because no server is running.
-    let path = temp_file("hello world");
+/// An app on a `.txt` file (no server), sidebar hidden, with `regions` laid out by a first render.
+fn menu_app(contents: &str) -> (App, PathBuf) {
+    let path = temp_file(contents);
     let mut app = app_with(&path);
     app.editor.sidebar_visible = false;
-    let _ = render_to_string(&mut app, 60, 12); // lay out regions.editor
+    let _ = render_to_string(&mut app, 60, 12);
+    (app, path)
+}
+
+/// An app on a `.rs` file with a *running* rust server injected, sidebar hidden.
+fn rust_ready_app(contents: &str) -> (App, PathBuf) {
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let mut path = std::env::temp_dir();
+    path.push(format!("lumina_ctx_{}_{}.rs", std::process::id(), n));
+    std::fs::write(&path, contents).unwrap();
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    app.lsp = crate::lsp::LspManager::new(
+        std::path::Path::new("/tmp"),
+        std::collections::HashMap::new(),
+        "test".into(),
+    );
+    app.lsp.set_ready_for_test("rust");
+    (app, path)
+}
+
+/// Select `[a, b)` in the active document.
+fn select(app: &mut App, a: usize, b: usize) {
     app.editor
         .active_document_mut()
         .unwrap()
         .selections
-        .set_single(Selection::new(0, 5)); // select "hello"
+        .set_single(Selection::new(a, b));
+}
 
+/// The screen position `dx` columns into the editor pane's first row.
+fn click_pos(app: &App, dx: u16) -> (u16, u16) {
     let ed = app.regions.editor;
-    app.on_mouse(mouse(
-        MouseEventKind::Down(MouseButton::Right),
-        ed.x + 2,
-        ed.y,
-    ));
+    (ed.x + dx, ed.y)
+}
+
+/// Right-click `dx` columns into the editor pane.
+fn right_click(app: &mut App, dx: u16) {
+    let (cx, cy) = click_pos(app, dx);
+    app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Right), cx, cy));
+}
+
+// ---- tests ---------------------------------------------------------------
+
+#[test]
+fn right_click_opens_menu_with_only_applicable_items() {
+    // A `.txt` file (no server). With a selection, the Edit group's Cut/Copy/Paste show; every LSP
+    // item is hidden because no server is running.
+    let (mut app, path) = menu_app("hello world");
+    select(&mut app, 0, 5); // "hello"
+    right_click(&mut app, 2);
 
     let labels = menu_labels(&app);
     assert!(labels.contains(&"Copy".to_string()));
@@ -48,17 +86,9 @@ fn right_click_opens_menu_with_only_applicable_items() {
 #[test]
 fn menu_without_a_selection_hides_cut_and_copy() {
     // No selection → Cut/Copy (HasSelection) are hidden, but Paste (Always) remains.
-    let path = temp_file("hello");
-    let mut app = app_with(&path);
-    app.editor.sidebar_visible = false;
-    let _ = render_to_string(&mut app, 60, 12);
+    let (mut app, path) = menu_app("hello");
+    right_click(&mut app, 1);
 
-    let ed = app.regions.editor;
-    app.on_mouse(mouse(
-        MouseEventKind::Down(MouseButton::Right),
-        ed.x + 1,
-        ed.y,
-    ));
     let labels = menu_labels(&app);
     assert!(labels.contains(&"Paste".to_string()));
     assert!(
@@ -70,14 +100,10 @@ fn menu_without_a_selection_hides_cut_and_copy() {
 
 #[test]
 fn right_click_places_the_caret_at_the_click() {
-    let path = temp_file("alpha beta gamma");
-    let mut app = app_with(&path);
-    app.editor.sidebar_visible = false;
-    let _ = render_to_string(&mut app, 60, 12);
-    let ed = app.regions.editor;
-    let (cx, cy) = (ed.x + 9, ed.y);
+    let (mut app, path) = menu_app("alpha beta gamma");
+    let (cx, cy) = click_pos(&app, 9);
     let expected = app.editor_offset_at(cx, cy);
-    app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Right), cx, cy));
+    right_click(&mut app, 9);
 
     if let Some(off) = expected {
         assert_eq!(
@@ -100,22 +126,10 @@ fn right_click_places_the_caret_at_the_click() {
 
 #[test]
 fn right_click_inside_a_selection_keeps_it() {
-    let path = temp_file("hello world");
-    let mut app = app_with(&path);
-    app.editor.sidebar_visible = false;
-    let _ = render_to_string(&mut app, 60, 12);
-    app.editor
-        .active_document_mut()
-        .unwrap()
-        .selections
-        .set_single(Selection::new(0, 5));
-    let ed = app.regions.editor;
+    let (mut app, path) = menu_app("hello world");
+    select(&mut app, 0, 5);
     // Click within the selected span → the selection is preserved (so Copy still applies).
-    app.on_mouse(mouse(
-        MouseEventKind::Down(MouseButton::Right),
-        ed.x + 2,
-        ed.y,
-    ));
+    right_click(&mut app, 2);
     let sel = app.editor.active_document().unwrap().selections.primary();
     assert!(!sel.is_empty(), "the clicked-inside selection is kept");
     std::fs::remove_file(&path).ok();
@@ -123,14 +137,9 @@ fn right_click_inside_a_selection_keeps_it() {
 
 #[test]
 fn menu_navigates_with_keys_and_dismisses() {
-    let path = temp_file("hi there");
-    let mut app = app_with(&path);
     // A selection gives three Edit items (Cut/Copy/Paste), enough to move the selection.
-    app.editor
-        .active_document_mut()
-        .unwrap()
-        .selections
-        .set_single(Selection::new(0, 2));
+    let (mut app, path) = menu_app("hi there");
+    select(&mut app, 0, 2);
     app.open_context_menu(2, 2);
     let selected = |app: &App| match &app.editor.overlay {
         Some(Overlay::ContextMenu { selected, .. }) => *selected,
@@ -157,14 +166,8 @@ fn menu_navigates_with_keys_and_dismisses() {
 
 #[test]
 fn menu_item_click_runs_and_outside_click_dismisses() {
-    let path = temp_file("hello");
-    let mut app = app_with(&path);
-    app.editor.sidebar_visible = false;
-    app.editor
-        .active_document_mut()
-        .unwrap()
-        .selections
-        .set_single(Selection::new(0, 3));
+    let (mut app, path) = menu_app("hello");
+    select(&mut app, 0, 3);
 
     // A left click outside the menu dismisses it.
     app.open_context_menu(6, 3);
@@ -190,21 +193,21 @@ fn menu_item_click_runs_and_outside_click_dismisses() {
 }
 
 #[test]
+fn context_menu_renders_its_item_labels() {
+    let (mut app, path) = menu_app("hello");
+    select(&mut app, 0, 3);
+    app.open_context_menu(4, 3);
+    let out = render_to_string(&mut app, 60, 16);
+    assert!(out.contains("Paste"), "the menu draws its item labels");
+    assert!(out.contains("Copy"));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn menu_shows_lsp_items_when_a_server_is_running_and_caret_on_a_word() {
     // A `.rs` file with a running server + the caret on a symbol → the LSP groups appear.
-    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let mut path = std::env::temp_dir();
-    path.push(format!("lumina_ctx_{}_{}.rs", std::process::id(), n));
-    std::fs::write(&path, "fn main() {}\n").unwrap();
-    let mut app = app_with(&path);
-    app.lsp = crate::lsp::LspManager::new(
-        std::path::Path::new("/tmp"),
-        std::collections::HashMap::new(),
-        "test".into(),
-    );
-    app.lsp.set_ready_for_test("rust");
-    // Caret on 'n' (a word char) so `LspOnWord` holds.
-    app.editor.active_document_mut().unwrap().set_caret(1);
+    let (mut app, path) = rust_ready_app("fn main() {}\n");
+    app.editor.active_document_mut().unwrap().set_caret(1); // on 'n' (a word char)
 
     app.open_context_menu(5, 5);
     let labels = menu_labels(&app);
@@ -219,44 +222,12 @@ fn menu_shows_lsp_items_when_a_server_is_running_and_caret_on_a_word() {
 }
 
 #[test]
-fn context_menu_renders_its_item_labels() {
-    let path = temp_file("hello");
-    let mut app = app_with(&path);
-    app.editor.sidebar_visible = false;
-    app.editor
-        .active_document_mut()
-        .unwrap()
-        .selections
-        .set_single(Selection::new(0, 3));
-    app.open_context_menu(4, 3);
-    let out = render_to_string(&mut app, 60, 16);
-    assert!(out.contains("Paste"), "the menu draws its item labels");
-    assert!(out.contains("Copy"));
-    std::fs::remove_file(&path).ok();
-}
-
-#[test]
 fn tall_menu_clips_items_without_ghost_click_targets() {
     // Many items (LSP running + a selection) in a short terminal → the menu box is clipped. The
     // clipped rows must NOT keep clickable rects (regression: a click below the visible menu ran a
     // hidden command instead of dismissing).
-    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let mut path = std::env::temp_dir();
-    path.push(format!("lumina_ctx_tall_{}_{}.rs", std::process::id(), n));
-    std::fs::write(&path, "fn main() {}\n").unwrap();
-    let mut app = app_with(&path);
-    app.editor.sidebar_visible = false;
-    app.lsp = crate::lsp::LspManager::new(
-        std::path::Path::new("/tmp"),
-        std::collections::HashMap::new(),
-        "test".into(),
-    );
-    app.lsp.set_ready_for_test("rust");
-    app.editor
-        .active_document_mut()
-        .unwrap()
-        .selections
-        .set_single(Selection::new(0, 2));
+    let (mut app, path) = rust_ready_app("fn main() {}\n");
+    select(&mut app, 0, 2);
     app.open_context_menu(2, 1);
     let _ = render_to_string(&mut app, 60, 8); // short: the menu is taller than the body
 
@@ -265,7 +236,6 @@ fn tall_menu_clips_items_without_ghost_click_targets() {
         rects.iter().any(|r| r.width == 0),
         "items past the clipped box get no hit rect"
     );
-    // Every *clickable* rect stays on-screen (never a ghost below the visible menu).
     assert!(
         rects
             .iter()
