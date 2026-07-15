@@ -202,3 +202,89 @@ fn handle_server_request_covers_window_methods_and_unknown() {
     );
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn goto_definition_via_menu_command_jumps_through_exec_id() {
+    // Proves the exact path the right-click menu uses: exec_id("lsp.gotoDefinition") → lsp plugin
+    // → host.lsp_request → manager → mock server → LspEvent::Goto → jump. If this works, the menu
+    // works (its Enter/click just call exec_id).
+    let bin = mock_server_bin();
+    if !bin.exists() {
+        eprintln!("skipping: mock_lsp_server not found at {bin:?}");
+        return;
+    }
+    let path = temp_rs_file("fn foo() {\n    foo();\n}\n");
+    let uri = format!("file://{}", path.display());
+    let transcript = format!(
+        r#"[
+        {{"expect":"initialize"}},
+        {{"respond":{{"capabilities":{{"definitionProvider":true}}}}}},
+        {{"expect":"initialized"}},
+        {{"expect":"textDocument/didOpen"}},
+        {{"expect":"textDocument/definition"}},
+        {{"respond":{{"uri":"{uri}","range":{{"start":{{"line":0,"character":3}},"end":{{"line":0,"character":6}}}}}}}},
+        {{"exit":0}}
+    ]"#
+    );
+    let mut tpath = std::env::temp_dir();
+    tpath.push(format!("lumina_gotodef_{}.json", std::process::id()));
+    std::fs::write(&tpath, &transcript).unwrap();
+
+    let mut app = app_with(&path);
+    app.editor.lsp_enabled = true; // production sets this true (discovery on)
+    let servers = std::collections::HashMap::from([(
+        "rust".to_string(),
+        vec![
+            bin.to_string_lossy().into_owned(),
+            tpath.to_string_lossy().into_owned(),
+        ],
+    )]);
+    app.lsp = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), servers, "test".into());
+
+    // Drive the handshake until the server is Running.
+    let mut ready = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        if app.lsp.is_ready("rust") {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(ready, "the server handshake completes");
+
+    // Caret on the call-site `foo` (line 1), then invoke the menu's command.
+    // Let the doc's didOpen go out before issuing a request (production does this on the tick
+    // after the server becomes ready; the user triggers a command much later still).
+    app.update_lsp();
+    app.drain_workers();
+    app.editor.active_document_mut().unwrap().set_caret(16);
+    app.exec_id("lsp.gotoDefinition");
+
+    // Let the definition response round-trip → jump to the definition (line 0, offset <= 9).
+    let mut jumped = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        let head = app
+            .editor
+            .active_document()
+            .unwrap()
+            .selections
+            .primary()
+            .head;
+        if head <= 9 {
+            jumped = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        jumped,
+        "gotoDefinition via the menu command jumped to the definition"
+    );
+
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&tpath).ok();
+}
