@@ -338,10 +338,15 @@ mod tests {
         // malformed `file://rel/…` that servers reject as "url is not a file".
         let abs = absolute_path(Path::new("crates/app/src/app.rs"));
         assert!(abs.is_absolute(), "relative paths are absolutized");
-        let uri = crate::lsp::uri_for(&abs);
-        assert!(uri.starts_with("file:///"), "well-formed file URI: {uri}");
+        // The exact `file://` form is platform-specific (Windows absolute paths are `C:\…`); the
+        // `file:///…` shape is the Unix one that servers on the user's platform expect.
+        #[cfg(unix)]
+        {
+            let uri = crate::lsp::uri_for(&abs);
+            assert!(uri.starts_with("file:///"), "well-formed file URI: {uri}");
+        }
         // An already-absolute path stays absolute.
-        assert!(absolute_path(Path::new("/tmp/x.rs")).is_absolute());
+        assert!(absolute_path(&std::env::temp_dir()).is_absolute());
     }
 
     #[test]
