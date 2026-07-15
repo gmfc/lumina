@@ -29,7 +29,7 @@ pub(crate) use settings::settings_entry_at;
 
 use chrome::{render_status, render_tabs};
 use editor::render_editor;
-use overlays::{render_overlay, render_prompt};
+use overlays::{render_context_menu, render_overlay, render_prompt};
 use panel::render_dock;
 use pickers::{render_bottom_panel, render_completion, render_picker};
 use settings::render_settings;
@@ -92,6 +92,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     render_bottom_panel(f, app, main_body);
     render_picker(f, app, main_body);
     render_overlay(f, app, main_body);
+    // The context menu draws last (on top) and hands back its per-item rects for click routing.
+    let context_menu = render_context_menu(f, app, main_body);
 
     // Record laid-out regions so the mouse router (which runs outside draw) can hit-test.
     app.regions = Regions {
@@ -103,6 +105,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         panel_content,
         lsp_content,
         lsp_status,
+        context_menu,
     };
 }
 
@@ -120,7 +123,7 @@ fn dock_rows(app: &App, body_height: u16) -> u16 {
 }
 
 /// Screen regions from the last frame, for mouse hit-testing.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Regions {
     pub tabs: Rect,
     /// The full sidebar region (block + title + border) — used to detect sidebar clicks.
@@ -137,6 +140,8 @@ pub struct Regions {
     pub lsp_content: Option<Rect>,
     /// The footer LSP indicator's clickable region (click → toggle the LSP panel).
     pub lsp_status: Option<Rect>,
+    /// The right-click context menu's per-item click rects (top to bottom), when it is open.
+    pub context_menu: Option<Vec<Rect>>,
 }
 
 /// Gutter width for a document (digits + one padding space). Shared with the mouse router.

@@ -10,7 +10,8 @@
 //! actions (`workspace/executeCommand`) and diagnostic-context quickfixes are later refinements.
 
 use editor_plugin::{
-    Contributions, Event, Host, LspCodeAction, LspRequestKind, PickerItem, PickerRequest, Plugin,
+    Contributions, Event, Host, LspCodeAction, LspRequestKind, MenuGroup, MenuWhen, PickerItem,
+    PickerRequest, Plugin,
 };
 
 #[derive(Default)]
@@ -33,6 +34,12 @@ impl Plugin for CodeActionPlugin {
         Contributions::builder()
             .command("lsp.codeAction", "Refactor: Code Action…")
             .keybinding("ctrl+.", "lsp.codeAction")
+            .menu_item(
+                "lsp.codeAction",
+                "Code Action / Quick Fix…",
+                MenuGroup::Refactor,
+                MenuWhen::LspEnabled,
+            )
             .build()
     }
 

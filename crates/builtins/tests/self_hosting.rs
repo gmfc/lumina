@@ -383,3 +383,27 @@ fn migrated_plugins_contribute_their_keybindings() {
         );
     }
 }
+
+/// A plugin owns its context-menu items too (invariant #3): each item travels with the plugin via
+/// `Contributions::menu_item`, so disabling the plugin removes it from `registry.menu_items()` —
+/// proof the right-click menu is contributed, not hardcoded.
+#[test]
+fn migrated_plugins_contribute_their_menu_items() {
+    let full = Registry::with_plugins(all_builtins());
+    let has = |reg: &Registry, command: &str| reg.menu_items().iter().any(|m| m.command == command);
+    assert!(
+        has(&full, "lsp.gotoDefinition"),
+        "the lsp plugin contributes its navigation menu items"
+    );
+    assert!(
+        has(&full, "edit.paste"),
+        "the clipboard plugin contributes its edit menu items"
+    );
+    for (id, command) in [(LSP_ID, "lsp.gotoDefinition"), (CLIPBOARD_ID, "edit.paste")] {
+        let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != id));
+        assert!(
+            !has(&reduced, command),
+            "disabling {id} must remove its menu item — otherwise it is hardcoded"
+        );
+    }
+}

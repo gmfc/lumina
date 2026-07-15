@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 
 use crate::contribution::{
-    CommandSpec, Contributions, KeybindingSpec, LanguageSpec, PanelSpec, StatusItemSpec,
+    CommandSpec, Contributions, KeybindingSpec, LanguageSpec, MenuItemSpec, PanelSpec,
+    StatusItemSpec,
 };
 use crate::event::Event;
 use crate::host::Host;
@@ -84,6 +85,7 @@ pub struct Registry {
     status_items: Vec<StatusItemSpec>,
     keybindings: Vec<KeybindingSpec>,
     languages: Vec<LanguageSpec>,
+    menu_items: Vec<MenuItemSpec>,
     /// command id -> owning plugin index.
     command_owner: HashMap<String, usize>,
     /// panel id -> owning plugin index.
@@ -103,6 +105,7 @@ impl Registry {
             status_items: Vec::new(),
             keybindings: Vec::new(),
             languages: Vec::new(),
+            menu_items: Vec::new(),
             command_owner: HashMap::new(),
             panel_owner: HashMap::new(),
         };
@@ -126,6 +129,7 @@ impl Registry {
         self.status_items.extend(contrib.status_items);
         self.keybindings.extend(contrib.keybindings);
         self.languages.extend(contrib.languages);
+        self.menu_items.extend(contrib.menu_items);
         self.plugins.push(plugin);
     }
 
@@ -172,6 +176,10 @@ impl Registry {
 
     pub fn languages(&self) -> &[LanguageSpec] {
         &self.languages
+    }
+
+    pub fn menu_items(&self) -> &[MenuItemSpec] {
+        &self.menu_items
     }
 
     /// Look up a command's title (for the palette).

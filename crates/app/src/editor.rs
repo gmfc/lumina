@@ -39,9 +39,18 @@ pub(crate) struct LspPanelUi {
     pub(crate) scroll: u16,
 }
 
+/// One entry in a right-click context menu: a labelled action that runs `command`. `first_in_group`
+/// marks the first item of a group so the renderer draws a divider above it.
+#[derive(Debug, Clone)]
+pub(crate) struct ContextMenuItem {
+    pub(crate) label: String,
+    pub(crate) command: String,
+    pub(crate) first_in_group: bool,
+}
+
 /// A modal overlay drawn on top of the body, capturing input while active. The generic prompt +
 /// picker ports (which the find/palette plugins drive) replaced most bespoke overlays; only
-/// confirm-close, the LSP hover info box, and save-as remain here.
+/// confirm-close, the LSP hover info box, save-as, and the right-click menu remain here.
 #[derive(Debug, Clone)]
 pub(crate) enum Overlay {
     /// Closing a dirty tab: save / discard / cancel.
@@ -50,6 +59,13 @@ pub(crate) enum Overlay {
     Info(String),
     /// Save As prompt: type a path for the active document (plan §1.5).
     SaveAsInput { buffer: String },
+    /// The right-click context menu, anchored at screen `(x, y)`; `selected` is the highlighted row.
+    ContextMenu {
+        x: u16,
+        y: u16,
+        items: Vec<ContextMenuItem>,
+        selected: usize,
+    },
 }
 
 /// Everything rendered + mutated by plugins.

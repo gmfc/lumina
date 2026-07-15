@@ -11,7 +11,7 @@
 
 use editor_core::edit::selection_edit_transaction;
 use editor_core::Motion;
-use editor_plugin::{Contributions, Host, Plugin};
+use editor_plugin::{Contributions, Host, MenuGroup, MenuWhen, Plugin};
 
 pub(crate) struct ClipboardPlugin;
 
@@ -108,7 +108,11 @@ impl Plugin for ClipboardPlugin {
         for (id, title, chord) in ROWS {
             b = b.command(id, title).keybinding(chord, id);
         }
-        b.build()
+        // Right-click menu: Cut/Copy need a selection; Paste is always available.
+        b.menu_item("edit.cut", "Cut", MenuGroup::Edit, MenuWhen::HasSelection)
+            .menu_item("edit.copy", "Copy", MenuGroup::Edit, MenuWhen::HasSelection)
+            .menu_item("edit.paste", "Paste", MenuGroup::Edit, MenuWhen::Always)
+            .build()
     }
 
     fn run_command(&mut self, command_id: &str, host: &mut dyn Host) -> bool {

@@ -9,7 +9,8 @@
 
 use editor_core::motion;
 use editor_plugin::{
-    Contributions, Host, Key, KeyCode, LspRequestKind, Plugin, Prompt, PromptField, PromptPlacement,
+    Contributions, Host, Key, KeyCode, LspRequestKind, MenuGroup, MenuWhen, Plugin, Prompt,
+    PromptField, PromptPlacement,
 };
 
 #[derive(Default)]
@@ -87,6 +88,55 @@ impl Plugin for LspPlugin {
             .keybinding("f2", "lsp.rename")
             .keybinding("ctrl+t", "lsp.workspaceSymbols")
             .keybinding("shift+alt+f", "lsp.format")
+            // Right-click menu: navigation + info need the caret on a symbol; format only a server.
+            .menu_item(
+                "lsp.gotoDefinition",
+                "Go to Definition",
+                MenuGroup::Navigation,
+                MenuWhen::LspOnWord,
+            )
+            .menu_item(
+                "lsp.gotoImplementation",
+                "Go to Implementation",
+                MenuGroup::Navigation,
+                MenuWhen::LspOnWord,
+            )
+            .menu_item(
+                "lsp.gotoTypeDefinition",
+                "Go to Type Definition",
+                MenuGroup::Navigation,
+                MenuWhen::LspOnWord,
+            )
+            .menu_item(
+                "lsp.references",
+                "Find All References",
+                MenuGroup::Navigation,
+                MenuWhen::LspOnWord,
+            )
+            .menu_item(
+                "lsp.rename",
+                "Rename Symbol",
+                MenuGroup::Refactor,
+                MenuWhen::LspOnWord,
+            )
+            .menu_item(
+                "lsp.format",
+                "Format Document",
+                MenuGroup::Refactor,
+                MenuWhen::LspEnabled,
+            )
+            .menu_item(
+                "lsp.hover",
+                "Show Hover",
+                MenuGroup::Info,
+                MenuWhen::LspOnWord,
+            )
+            .menu_item(
+                "lsp.documentSymbols",
+                "Symbols in File…",
+                MenuGroup::Info,
+                MenuWhen::LspEnabled,
+            )
             .build()
     }
 

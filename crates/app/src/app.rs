@@ -92,6 +92,7 @@ pub struct App {
     settings_doc: Option<editor_core::DocId>,
 }
 
+mod context_menu;
 mod cursors;
 mod dispatch;
 mod dock;
