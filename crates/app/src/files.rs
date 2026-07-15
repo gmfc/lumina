@@ -129,7 +129,27 @@ fn decode_utf16(bytes: &[u8], be: bool) -> String {
 /// (rust-analyzer) reject it as "url is not a file". Falls back to the input if the cwd is
 /// unavailable.
 pub fn absolute_path(path: &Path) -> PathBuf {
-    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+    use std::path::Component;
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    // `std::path::absolute` joins with the cwd but keeps `.`/`..` components, so `lmn .` would
+    // yield `file:///repo/.` and `a/../b` would yield `.../a/../b`. Fold them away *lexically* (no
+    // filesystem access, so symlinks aren't resolved and non-existent files still work) for a clean
+    // canonical `file://` URI every server accepts.
+    let mut out = PathBuf::new();
+    for comp in abs.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        abs
+    } else {
+        out
+    }
 }
 
 /// Load a file into a `Document`, recording its (absolute) path, language, encoding, and fingerprint.
@@ -336,6 +356,7 @@ mod tests {
     fn absolute_path_makes_file_uris_well_formed() {
         // A relative path becomes absolute, so `uri_for` yields `file:///…` rather than the
         // malformed `file://rel/…` that servers reject as "url is not a file".
+        use std::path::Component;
         let abs = absolute_path(Path::new("crates/app/src/app.rs"));
         assert!(abs.is_absolute(), "relative paths are absolutized");
         // The exact `file://` form is platform-specific (Windows absolute paths are `C:\…`); the
@@ -345,6 +366,14 @@ mod tests {
             let uri = crate::lsp::uri_for(&abs);
             assert!(uri.starts_with("file:///"), "well-formed file URI: {uri}");
         }
+        // `.`/`..` are folded away so every relative launch form yields a clean canonical path.
+        let normed = absolute_path(Path::new("crates/../app/./src/x.rs"));
+        assert!(
+            !normed
+                .components()
+                .any(|c| matches!(c, Component::CurDir | Component::ParentDir)),
+            "no . or .. components remain: {normed:?}"
+        );
         // An already-absolute path stays absolute.
         assert!(absolute_path(&std::env::temp_dir()).is_absolute());
     }
