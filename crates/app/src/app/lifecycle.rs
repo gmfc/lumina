@@ -293,7 +293,9 @@ fn resolve_arg(arg: Option<String>) -> (PathBuf, Option<PathBuf>) {
     match arg {
         None => (cwd, None),
         Some(a) => {
-            let p = PathBuf::from(&a);
+            // Absolutize up front so the workspace root (→ `rootUri`) and the opened file both yield
+            // well-formed `file://` URIs; a relative arg otherwise produces `file://rel/...`.
+            let p = crate::files::absolute_path(std::path::Path::new(&a));
             if p.is_dir() {
                 (p, None)
             } else if p.is_file() {
