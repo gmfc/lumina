@@ -4,6 +4,7 @@ use editor_core::Motion;
 use ratatui::layout::Rect;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+mod context_menu;
 mod dock;
 mod editing;
 mod explorer;

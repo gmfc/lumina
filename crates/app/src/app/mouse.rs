@@ -10,6 +10,7 @@ impl App {
         self.reconcile_settings();
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => self.mouse_left_down(col, row, m.modifiers),
+            MouseEventKind::Down(MouseButton::Right) => self.mouse_right_down(col, row),
             MouseEventKind::Down(MouseButton::Middle) => self.mouse_middle_down(col, row),
             MouseEventKind::Drag(MouseButton::Left) => self.mouse_left_drag(col, row),
             MouseEventKind::Up(MouseButton::Left) => {
@@ -30,6 +31,14 @@ impl App {
         row: u16,
         mods: crossterm::event::KeyModifiers,
     ) {
+        // A right-click menu is open: a click on an item runs it; a click anywhere else dismisses.
+        if matches!(
+            self.editor.overlay,
+            Some(crate::editor::Overlay::ContextMenu { .. })
+        ) {
+            self.context_menu_click(col, row);
+            return;
+        }
         if in_rect(self.regions.editor, col, row) {
             self.editor.focus = Focus::Editor;
             // The Settings tab routes editor-area clicks to its widgets.
@@ -88,6 +97,49 @@ impl App {
             if let Some((i, _)) = self.tab_at(col) {
                 self.request_close(i);
             }
+        }
+    }
+
+    /// Right-click in the editor: place the caret at the click (unless it lands inside an existing
+    /// selection, which is kept so Cut/Copy still act on it), then open the context menu.
+    pub(super) fn mouse_right_down(&mut self, col: u16, row: u16) {
+        if !in_rect(self.regions.editor, col, row) {
+            return;
+        }
+        self.editor.focus = Focus::Editor;
+        if let Some(off) = self.editor_offset_at(col, row) {
+            // Keep the selection if the click lands inside *any* of its ranges (multi-cursor too),
+            // so Cut/Copy still act on it; otherwise place a fresh caret at the click.
+            let inside_selection = self.editor.active_document().is_some_and(|d| {
+                d.selections
+                    .ranges()
+                    .iter()
+                    .any(|s| s.span().contains(&off))
+            });
+            if !inside_selection {
+                self.with_doc(|d| d.selections.set_single(Selection::caret(off)));
+            }
+        }
+        self.open_context_menu(col, row);
+    }
+
+    /// Resolve a left-click while the context menu is open: run the clicked item's command, or
+    /// dismiss the menu when the click lands outside it.
+    fn context_menu_click(&mut self, col: u16, row: u16) {
+        let hit = self
+            .regions
+            .context_menu
+            .as_ref()
+            .and_then(|rects| rects.iter().position(|r| in_rect(*r, col, row)));
+        let command = hit.and_then(|i| match &self.editor.overlay {
+            Some(crate::editor::Overlay::ContextMenu { items, .. }) => {
+                items.get(i).map(|it| it.command.clone())
+            }
+            _ => None,
+        });
+        self.editor.overlay = None;
+        if let Some(cmd) = command {
+            self.exec_id(&cmd);
         }
     }
 

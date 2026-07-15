@@ -24,8 +24,8 @@ pub(crate) mod wasm;
 
 pub use contribution::CommandSpec;
 pub use contribution::{
-    Contributions, KeybindingSpec, LanguageSpec, PanelLocation, PanelSpec, StatusItemSpec,
-    ThemeSpec,
+    Contributions, KeybindingSpec, LanguageSpec, MenuGroup, MenuItemSpec, MenuWhen, PanelLocation,
+    PanelSpec, StatusItemSpec, ThemeSpec,
 };
 pub use decoration::{Decoration, DecorationSet, GutterMark, VirtualText};
 pub use event::Event;

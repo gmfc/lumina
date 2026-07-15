@@ -93,7 +93,91 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                 .style(Style::default().bg(Color::Rgb(30, 33, 39)));
             f.render_widget(Paragraph::new(text).block(block), rect);
         }
+        // Positioned (not centered) + needs to return item rects, so it is drawn by
+        // `render_context_menu` from `draw` instead of here.
+        Overlay::ContextMenu { .. } => {}
     }
+}
+
+/// Render the right-click context menu at its click anchor, returning each item's screen `Rect`
+/// for click hit-testing (`None` when no menu is open). Positioned + clamped/flipped to fit the
+/// body, unlike the centered overlays; a divider precedes each new group.
+pub(super) fn render_context_menu(f: &mut Frame, app: &App, body: Rect) -> Option<Vec<Rect>> {
+    let Some(Overlay::ContextMenu {
+        x,
+        y,
+        items,
+        selected,
+    }) = &app.editor.overlay
+    else {
+        return None;
+    };
+    if items.is_empty() || body.width == 0 || body.height == 0 {
+        return None;
+    }
+    // Visual rows: a divider line precedes each group boundary.
+    let rows: Vec<Option<usize>> = items
+        .iter()
+        .enumerate()
+        .flat_map(|(i, it)| {
+            let divider = it.first_in_group.then_some(None);
+            divider.into_iter().chain(std::iter::once(Some(i)))
+        })
+        .collect();
+    let inner_w = items
+        .iter()
+        .map(|it| it.label.chars().count())
+        .max()
+        .unwrap_or(8);
+    let w = (inner_w as u16 + 4).min(body.width.max(1));
+    let h = (rows.len() as u16 + 2).min(body.height.max(1));
+    // Anchor below the click; flip above if it would overflow the body, then clamp into it.
+    let rx = (*x).clamp(body.x, body.right().saturating_sub(w));
+    let ry = if y.saturating_add(1) + h > body.bottom() {
+        y.saturating_sub(h)
+    } else {
+        y.saturating_add(1)
+    }
+    .clamp(body.y, body.bottom().saturating_sub(h));
+    let rect = Rect::new(rx, ry, w, h);
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CLR_ACCENT))
+        .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+
+    let mut lines = Vec::with_capacity(rows.len());
+    let mut rects = vec![Rect::default(); items.len()];
+    for (r, row) in rows.iter().enumerate() {
+        let row_y = rect.y + 1 + r as u16;
+        match row {
+            None => lines.push(Line::from(TSpan::styled(
+                "─".repeat(inner_w + 2),
+                Style::default().fg(Color::DarkGray),
+            ))),
+            Some(i) => {
+                let style = if i == selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(CLR_ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::from(TSpan::styled(
+                    format!(" {} ", items[*i].label),
+                    style,
+                )));
+                // Only rows actually inside the (clamped) box are clickable — a row past the bottom
+                // border is clipped by the Paragraph, so it must not leave a ghost hit target.
+                if row_y < rect.bottom().saturating_sub(1) {
+                    rects[*i] = Rect::new(rect.x + 1, row_y, rect.width.saturating_sub(2), 1);
+                }
+            }
+        }
+    }
+    f.render_widget(Paragraph::new(lines).block(block), rect);
+    Some(rects)
 }
 
 /// A generic modal input prompt (find/replace today) — a pure function of `app.editor.prompt`.

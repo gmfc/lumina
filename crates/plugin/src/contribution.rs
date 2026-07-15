@@ -92,6 +92,56 @@ pub struct ThemeSpec {
     pub name: String,
 }
 
+/// Where a context-menu item sits: groups render in this order, separated by a divider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MenuGroup {
+    Navigation,
+    Refactor,
+    Info,
+    Edit,
+}
+
+/// The context predicate deciding whether a context-menu item is shown. Evaluated by the app at
+/// menu-open time against the real editor state; an item whose predicate fails is hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuWhen {
+    /// Always shown (e.g. Paste).
+    Always,
+    /// A non-empty selection exists (Cut / Copy).
+    HasSelection,
+    /// A language server is running for the active document's language (Code Action / Format).
+    LspEnabled,
+    /// `LspEnabled` **and** the caret is on a symbol (Definition / References / Rename / Hover).
+    LspOnWord,
+}
+
+/// A context-menu item a plugin contributes: a labelled entry that runs `command` when chosen,
+/// placed in `group` and shown only when `when` holds. The command routes through the normal
+/// dispatch path, so any command can become a menu entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuItemSpec {
+    pub command: String,
+    pub label: String,
+    pub group: MenuGroup,
+    pub when: MenuWhen,
+}
+
+impl MenuItemSpec {
+    pub fn new(
+        command: impl Into<String>,
+        label: impl Into<String>,
+        group: MenuGroup,
+        when: MenuWhen,
+    ) -> Self {
+        MenuItemSpec {
+            command: command.into(),
+            label: label.into(),
+            group,
+            when,
+        }
+    }
+}
+
 /// The full declarative surface of a plugin.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Contributions {
@@ -101,6 +151,7 @@ pub struct Contributions {
     pub keybindings: Vec<KeybindingSpec>,
     pub languages: Vec<LanguageSpec>,
     pub themes: Vec<ThemeSpec>,
+    pub menu_items: Vec<MenuItemSpec>,
 }
 
 impl Contributions {
@@ -156,6 +207,20 @@ impl ContributionsBuilder {
             id: id.into(),
             extensions: extensions.iter().map(|s| s.to_string()).collect(),
         });
+        self
+    }
+
+    /// Contribute a context-menu item that runs `command` (in `group`, shown when `when` holds).
+    pub fn menu_item(
+        mut self,
+        command: impl Into<String>,
+        label: impl Into<String>,
+        group: MenuGroup,
+        when: MenuWhen,
+    ) -> Self {
+        self.inner
+            .menu_items
+            .push(MenuItemSpec::new(command, label, group, when));
         self
     }
 

@@ -108,6 +108,16 @@ impl LspManager {
         self.push_log(lang, line.to_string());
     }
 
+    /// Force a language into the `Running` state, so tests can exercise the server-ready paths
+    /// (e.g. context-menu gating) without a live handshake.
+    #[cfg(test)]
+    pub(crate) fn set_ready_for_test(&mut self, lang: &str) {
+        self.state.insert(
+            lang.to_string(),
+            ClientState::Running(ServerCaps::default()),
+        );
+    }
+
     /// Append a log line for `lang`, trimming the ring to the newest [`Self::LOG_CAP`] lines.
     pub(super) fn push_log(&mut self, lang: &str, line: String) {
         let ring = self.logs.entry(lang.to_string()).or_default();

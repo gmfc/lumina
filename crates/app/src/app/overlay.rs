@@ -79,6 +79,41 @@ impl App {
                 }
                 _ => {}
             },
+            crate::editor::Overlay::ContextMenu {
+                x,
+                y,
+                items,
+                mut selected,
+            } => match key.code {
+                KeyCode::Up => {
+                    selected = selected.checked_sub(1).unwrap_or(items.len() - 1);
+                    self.editor.overlay = Some(crate::editor::Overlay::ContextMenu {
+                        x,
+                        y,
+                        items,
+                        selected,
+                    });
+                }
+                KeyCode::Down => {
+                    selected = (selected + 1) % items.len();
+                    self.editor.overlay = Some(crate::editor::Overlay::ContextMenu {
+                        x,
+                        y,
+                        items,
+                        selected,
+                    });
+                }
+                KeyCode::Enter => {
+                    // Close the menu before running the command — the command may open its own
+                    // overlay (e.g. rename's prompt), which must not be clobbered.
+                    self.editor.overlay = None;
+                    if let Some(item) = items.get(selected) {
+                        self.exec_id(&item.command);
+                    }
+                }
+                KeyCode::Esc => self.editor.overlay = None,
+                _ => {}
+            },
         }
     }
 }
