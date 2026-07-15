@@ -203,6 +203,8 @@ fn handle_server_request_covers_window_methods_and_unknown() {
     std::fs::remove_file(&path).ok();
 }
 
+// Mock-subprocess round-trip with `file://` URIs — Unix-path oriented (Windows uses `C:\\…`).
+#[cfg(unix)]
 #[test]
 fn goto_definition_via_menu_command_jumps_through_exec_id() {
     // Proves the exact path the right-click menu uses: exec_id("lsp.gotoDefinition") → lsp plugin
