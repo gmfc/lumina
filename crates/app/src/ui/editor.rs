@@ -17,7 +17,7 @@ use crate::editor::Focus;
 use crate::theme::Theme;
 
 use super::gutter_width;
-use super::util::{cell_at, char_cells, put_str, resolve_line_styles, CLR_BG};
+use super::util::{cell_at, char_cells, put_str, resolve_line_styles_into, CLR_BG};
 
 /// Read-only state threaded through the per-line / per-cell editor renderers, so the
 /// helpers take one context argument instead of a dozen positional ones.
@@ -53,6 +53,21 @@ struct EditorCtx<'a> {
     vim_visual_char: bool,
     /// In Vim linewise Visual mode: the whole-line `[start, end)` char range to tint.
     vim_visual_lines: Option<(usize, usize)>,
+}
+
+/// Per-row scratch, reused across every viewport row so the render loop allocates **nothing per
+/// line**. Holds the syntax style buffer and its `best_len` companion (finding #4), plus the
+/// decorations narrowed to the current line (finding #1). `'a` ties the borrowed decorations to
+/// the [`EditorCtx`] they came from.
+#[derive(Default)]
+struct RowScratch<'a> {
+    /// Per-char resolved syntax style for the current line (index = char column).
+    styles: Vec<Option<Style>>,
+    /// Companion buffer for [`resolve_line_styles_into`]'s shortest-span-wins bookkeeping.
+    best_len: Vec<usize>,
+    /// `ctx.deco_spans` filtered to the spans overlapping the current line's char range, so
+    /// [`cell_style`] scans only a handful of decorations per char instead of the whole document's.
+    line_decos: Vec<&'a Decoration>,
 }
 
 /// Flatten the active document's published decoration layers into span + gutter-mark lists, in
@@ -137,8 +152,10 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
 
     let buf = f.buffer_mut();
     let mut primary_screen: Option<(u16, u16)> = None;
+    // One scratch, reused for every row: no per-line heap allocation in the render loop.
+    let mut scratch = RowScratch::default();
     for row in 0..area.height {
-        if let Some(pos) = render_editor_row(buf, &ctx, row) {
+        if let Some(pos) = render_editor_row(buf, &ctx, &mut scratch, row) {
             primary_screen = Some(pos);
         }
     }
@@ -161,9 +178,10 @@ fn place_cursor(f: &mut Frame, area: Rect, primary_screen: Option<(u16, u16)>) {
 
 /// Render one viewport row. Returns the primary caret's screen position when it falls on
 /// this row (so the caller can place the hardware cursor).
-fn render_editor_row(
+fn render_editor_row<'a>(
     buf: &mut ratatui::buffer::Buffer,
-    ctx: &EditorCtx,
+    ctx: &EditorCtx<'a>,
+    scratch: &mut RowScratch<'a>,
     row: u16,
 ) -> Option<(u16, u16)> {
     let line_idx = ctx.first + row as usize;
@@ -184,10 +202,12 @@ fn render_editor_row(
         ctx.area.x + ctx.gutter,
     );
 
-    // Line text with tab expansion + selection background + cursor.
+    // Line text with tab expansion + selection background + cursor. Borrowed from the rope
+    // (finding #3) — no per-line String allocation for the common single-chunk line.
     let line_start = ctx.doc.line_to_char(line_idx);
-    let line_text = ctx.doc.line_text(line_idx);
+    let line_text = ctx.doc.line_str(line_idx);
     let line_text = line_text.trim_end_matches(['\n', '\r']);
+    let line_len = line_text.chars().count();
 
     // Git change-bar in the gutter's separator column, just left of the text (plan §4.1).
     draw_git_bar(buf, ctx, line_idx, y);
@@ -195,18 +215,50 @@ fn render_editor_row(
     // Published gutter marks (diagnostics severity glyphs, …) in the leftmost gutter column.
     draw_deco_gutter(buf, ctx, line_idx, y);
 
-    // Resolve syntax colors per char (shortest span wins for overlaps).
-    let char_styles = ctx
-        .hl
-        .map(|h| resolve_line_styles(h.line_spans(line_idx), line_text.chars().count(), ctx.theme))
-        .unwrap_or_default();
+    // Resolve syntax colors per char (shortest span wins for overlaps) into the reused scratch
+    // buffers (finding #4). With no highlighter, fill an all-`None` buffer of the right length so
+    // `cell_style` still indexes safely and falls back to the default background.
+    match ctx.hl {
+        Some(h) => resolve_line_styles_into(
+            h.line_spans(line_idx),
+            line_len,
+            ctx.theme,
+            &mut scratch.styles,
+            &mut scratch.best_len,
+        ),
+        None => {
+            scratch.styles.clear();
+            scratch.styles.resize(line_len, None);
+        }
+    }
 
-    draw_line_body(buf, ctx, y, line_idx, line_start, line_text, &char_styles)
+    // Narrow the document's decorations to this line's char range once (finding #1), so
+    // `cell_style` scans O(spans-on-this-line) per char instead of every published decoration.
+    let line_end = line_start + line_len;
+    scratch.line_decos.clear();
+    scratch.line_decos.extend(
+        ctx.deco_spans
+            .iter()
+            .copied()
+            .filter(|d| d.range.0 < line_end && d.range.1 > line_start),
+    );
+
+    draw_line_body(
+        buf,
+        ctx,
+        y,
+        line_idx,
+        line_start,
+        line_text,
+        &scratch.styles,
+        &scratch.line_decos,
+    )
 }
 
 /// Draw one line's text with tab expansion, inline virtual text (inlay hints / code lens),
 /// hscroll clipping, and the caret. Returns the primary caret's screen position when it lands on
 /// this line. Split out of [`render_editor_row`] (which does the gutter) to keep each focused.
+#[allow(clippy::too_many_arguments)]
 fn draw_line_body(
     buf: &mut ratatui::buffer::Buffer,
     ctx: &EditorCtx,
@@ -215,6 +267,7 @@ fn draw_line_body(
     line_start: usize,
     line_text: &str,
     char_styles: &[Option<Style>],
+    line_decos: &[&Decoration],
 ) -> Option<(u16, u16)> {
     let mut primary_screen = None;
     let view_width = ctx.area.width.saturating_sub(ctx.gutter) as usize;
@@ -247,6 +300,7 @@ fn draw_line_body(
             cells,
             view_width,
             char_styles,
+            line_decos,
         );
         if let Some(pos) = screen {
             primary_screen = Some(pos);
@@ -308,6 +362,7 @@ fn draw_clipped_char(
     cells: usize,
     view_width: usize,
     char_styles: &[Option<Style>],
+    line_decos: &[&Decoration],
 ) -> (Option<(u16, u16)>, bool) {
     let end = col + cells;
     if end <= ctx.hscroll {
@@ -320,7 +375,7 @@ fn draw_clipped_char(
     }
     let sx = ctx.text_x + delta as u16;
     let screen = (ctx.doc.selections.primary().head == char_off).then_some((sx, y));
-    let style = cell_style(ctx, char_styles, ci, char_off);
+    let style = cell_style(ctx, char_styles, line_decos, ci, char_off);
     draw_char_cells(buf, sx, y, ch, style, cells, skip);
     (screen, false)
 }
@@ -395,7 +450,17 @@ fn is_selected(ctx: &EditorCtx, char_off: usize) -> bool {
 /// Compose the style for one character cell: syntax base, then published decoration layers
 /// (find-match, lsp.diag underline, …), bracket emphasis, selection background, and
 /// secondary-cursor inversion, in that order.
-fn cell_style(ctx: &EditorCtx, char_styles: &[Option<Style>], ci: usize, char_off: usize) -> Style {
+///
+/// `line_decos` is `ctx.deco_spans` already narrowed to this line's char range (finding #1), so
+/// the per-char scan is over the handful of decorations that can possibly match — not the whole
+/// document's. It preserves `deco_spans`' deterministic layer order, so precedence is unchanged.
+fn cell_style(
+    ctx: &EditorCtx,
+    char_styles: &[Option<Style>],
+    line_decos: &[&Decoration],
+    ci: usize,
+    char_off: usize,
+) -> Style {
     // Base = syntax color; then selection bg; then secondary-cursor inversion.
     let mut style = char_styles
         .get(ci)
@@ -404,7 +469,7 @@ fn cell_style(ctx: &EditorCtx, char_styles: &[Option<Style>], ci: usize, char_of
         .unwrap_or_else(|| Style::default().bg(CLR_BG));
     // Published decoration layers (find matches + diagnostics + …). Painted over syntax and under
     // the bespoke bracket/selection tints below. Deterministic layer order.
-    for d in &ctx.deco_spans {
+    for d in line_decos {
         if char_off >= d.range.0 && char_off < d.range.1 {
             style = style.patch(ctx.theme.decoration_style(&d.style));
         }
@@ -483,5 +548,132 @@ fn draw_char_cells(
             cell.set_char(if k == 0 { head } else { ' ' });
             cell.set_style(style);
         }
+    }
+}
+
+#[cfg(test)]
+mod deco_bench {
+    use super::*;
+
+    /// The predicate `render_editor_row` uses to narrow decorations to a line (finding #1).
+    fn overlaps_line(d: &Decoration, line_start: usize, line_end: usize) -> bool {
+        d.range.0 < line_end && d.range.1 > line_start
+    }
+
+    /// Build `n` pseudo-random decorations spread across a `span`-wide document (no `rand` dep —
+    /// a small deterministic LCG keeps the test reproducible).
+    fn synth_decos(n: usize, span: usize) -> Vec<Decoration> {
+        let mut s: u64 = 0x9E3779B97F4A7C15;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as usize
+        };
+        (0..n)
+            .map(|_| {
+                let a = next() % span;
+                let b = a + 1 + next() % 8; // 1..=8 chars wide
+                Decoration::new((a, b), "find.match")
+            })
+            .collect()
+    }
+
+    /// Correctness guard for finding #1: narrowing `deco_spans` to a line before the per-char scan
+    /// must not change which decorations match any char on that line. For every char offset in the
+    /// line, the set of matching decorations computed from the *filtered* subset must equal the set
+    /// computed from *all* decorations. (Extra line-overlapping spans that don't cover a given char
+    /// are harmless — the inner range check skips them.)
+    #[test]
+    fn line_filter_preserves_per_char_matches() {
+        let all = synth_decos(400, 2000);
+        // Check several disjoint 60-char "lines" across the document.
+        for line_start in (0..2000).step_by(137) {
+            let line_end = (line_start + 60).min(2000);
+            let filtered: Vec<&Decoration> = all
+                .iter()
+                .filter(|d| overlaps_line(d, line_start, line_end))
+                .collect();
+            for off in line_start..line_end {
+                let from_all: Vec<&(usize, usize)> = all
+                    .iter()
+                    .filter(|d| off >= d.range.0 && off < d.range.1)
+                    .map(|d| &d.range)
+                    .collect();
+                let from_filtered: Vec<&(usize, usize)> = filtered
+                    .iter()
+                    .filter(|d| off >= d.range.0 && off < d.range.1)
+                    .map(|d| &d.range)
+                    .collect();
+                assert_eq!(from_all, from_filtered, "off {off} line@{line_start}");
+            }
+        }
+    }
+
+    /// Release-timing A/B for finding #1 (decoration bucketing). Behind the `perfbench` feature
+    /// (coverage build skips it) and ignored by default; run with
+    /// `cargo test -p lumina --features perfbench --release -- --ignored --nocapture bench_decoration`.
+    /// Compares the old "scan every decoration for every char" against "filter to the line once".
+    #[cfg(feature = "perfbench")]
+    #[test]
+    #[ignore = "timing harness; run explicitly with --ignored --nocapture"]
+    fn bench_decoration_scan_all_vs_bucketed() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        const DOC: usize = 4000;
+        const LINE_LEN: usize = 60;
+        const LINES: usize = 60; // one viewport
+        const REPS: usize = 400; // frames
+        let all = synth_decos(600, DOC); // a doc with lots of find-matches / diagnostics
+
+        // Before: for each char on each line, scan the whole decoration list.
+        let t0 = Instant::now();
+        let mut sink = 0usize;
+        for _ in 0..REPS {
+            for row in 0..LINES {
+                let line_start = row * LINE_LEN;
+                for off in line_start..line_start + LINE_LEN {
+                    for d in &all {
+                        if off >= d.range.0 && off < d.range.1 {
+                            sink += black_box(d.range.1);
+                        }
+                    }
+                }
+            }
+        }
+        let scan_all = t0.elapsed();
+
+        // After: filter to the line's range once, then scan only that handful per char.
+        let mut line_decos: Vec<&Decoration> = Vec::new();
+        let t1 = Instant::now();
+        for _ in 0..REPS {
+            for row in 0..LINES {
+                let line_start = row * LINE_LEN;
+                let line_end = line_start + LINE_LEN;
+                line_decos.clear();
+                line_decos.extend(
+                    all.iter()
+                        .filter(|d| overlaps_line(d, line_start, line_end)),
+                );
+                for off in line_start..line_end {
+                    for d in &line_decos {
+                        if off >= d.range.0 && off < d.range.1 {
+                            sink += black_box(d.range.1);
+                        }
+                    }
+                }
+            }
+        }
+        let bucketed = t1.elapsed();
+
+        black_box(sink);
+        let chars = (REPS * LINES * LINE_LEN) as u128;
+        println!(
+            "cell_style scan-all:  {scan_all:?}  ({} ns/char)\n\
+             cell_style bucketed:  {bucketed:?}  ({} ns/char)",
+            scan_all.as_nanos() / chars,
+            bucketed.as_nanos() / chars,
+        );
     }
 }

@@ -13,6 +13,10 @@ workspace = true
 
 [features]
 proptests = []
+# Compiles the ignored release-timing harnesses (perf A/B measurements). Off by default so the
+# coverage build never sees this deliberately-unexecuted code. Run with:
+#   cargo test -p editor-core --features perfbench --release -- --ignored --nocapture
+perfbench = []
 
 [dependencies]
 ropey.workspace = true

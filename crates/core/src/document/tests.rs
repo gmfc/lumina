@@ -24,6 +24,78 @@ fn line_len_excludes_newline() {
     assert_eq!(d.line_len_chars(1), 2);
 }
 
+#[test]
+fn line_str_matches_line_text() {
+    // `line_str` is the borrowing twin of `line_text` used on the render hot path; it must
+    // return byte-for-byte the same content (including the trailing newline) for every line,
+    // and an empty string for an out-of-range index — same as `line_text`.
+    let d = Document::from_str("abc\nde\n");
+    for line in 0..=d.len_lines() {
+        assert_eq!(&*d.line_str(line), d.line_text(line), "line {line}");
+    }
+    assert_eq!(&*d.line_str(0), "abc\n");
+    assert_eq!(&*d.line_str(999), ""); // out of range → empty, no panic
+}
+
+#[test]
+fn line_str_owns_when_line_straddles_chunks() {
+    // A single line longer than ropey's chunk size spans multiple chunks, so `as_str()` yields
+    // `None` and `line_str` must fall back to an owned copy that still matches `line_text`.
+    let long = "x".repeat(8192);
+    let d = Document::from_str(&long);
+    assert_eq!(&*d.line_str(0), d.line_text(0));
+    assert_eq!(d.line_str(0).len(), 8192);
+}
+
+/// Release-timing A/B for finding #3 (borrow line text on the render hot path). Behind the
+/// `perfbench` feature (so the coverage build skips it) and ignored by default; run with
+/// `cargo test -p editor-core --features perfbench --release -- --ignored --nocapture bench_line`.
+/// Times the owned `line_text` against the borrowing `line_str` over the same corpus in one run,
+/// so the before/after is directly comparable on the same machine.
+#[cfg(feature = "perfbench")]
+#[test]
+#[ignore = "timing harness; run explicitly with --ignored --nocapture"]
+fn bench_line_text_vs_line_str() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    // A realistic buffer: 2000 lines of ~60 chars — the render loop touches one viewport of
+    // these per frame, so per-line allocation cost compounds.
+    let body: String = (0..2000)
+        .map(|i| format!("    let value_{i} = compute(x, y) + offset; // row {i}\n"))
+        .collect();
+    let d = Document::from_str(&body);
+    let lines = d.len_lines();
+    const REPS: usize = 200;
+
+    let t0 = Instant::now();
+    let mut sink = 0usize;
+    for _ in 0..REPS {
+        for line in 0..lines {
+            let s = d.line_text(line);
+            sink += black_box(s.len());
+        }
+    }
+    let owned = t0.elapsed();
+
+    let t1 = Instant::now();
+    for _ in 0..REPS {
+        for line in 0..lines {
+            let s = d.line_str(line);
+            sink += black_box(s.len());
+        }
+    }
+    let borrowed = t1.elapsed();
+
+    black_box(sink);
+    let calls = (REPS * lines) as u128;
+    println!(
+        "line_text (owned):  {owned:?}  ({} ns/call)\nline_str  (borrow): {borrowed:?}  ({} ns/call)",
+        owned.as_nanos() / calls,
+        borrowed.as_nanos() / calls,
+    );
+}
+
 /// Regression (invariant #1): an external reload replaces the whole buffer, so the undo
 /// history — whose transactions were recorded against the *old* offsets — must be discarded.
 /// Otherwise a later undo replays an edit at a now-out-of-range offset and restores wrong text.
