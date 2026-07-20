@@ -101,7 +101,7 @@ impl LspClient {
                 // Likewise: a body that fails to parse as JSON is unrecoverable framing garbage —
                 // skip it and read on until the stream ends.
                 if let Ok(value) = serde_json::from_str::<Value>(&body) {
-                    if let Some(msg) = classify(&value) {
+                    if let Some(msg) = classify(value) {
                         if tx.send(msg).is_err() {
                             break;
                         }
@@ -136,33 +136,36 @@ impl Drop for LspHandle {
 /// Classify an incoming server message into the shape the app acts on. A message with a
 /// `method` is a request (has `id`, must be answered) or a notification (no `id`);
 /// `publishDiagnostics` is special-cased. A message with `id` + `result`/`error` is a response.
-fn classify(value: &Value) -> Option<Incoming> {
-    if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
+fn classify(mut value: Value) -> Option<Incoming> {
+    // Take ownership so the (potentially large) `params`/`result` payloads are **moved** out of the
+    // parsed message with `Value::take` rather than deep-cloned — this runs on every server message.
+    // `method` is extracted to an owned `String` up front so no borrow of `value` outlives the moves.
+    let method = value
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(str::to_string);
+    if let Some(method) = method {
         if method == "textDocument/publishDiagnostics" {
-            return parse_diagnostics(value).map(Incoming::Diagnostics);
+            return parse_diagnostics(&value).map(Incoming::Diagnostics);
         }
-        let params = value.get("params").cloned().unwrap_or(Value::Null);
+        let params = value
+            .get_mut("params")
+            .map(Value::take)
+            .unwrap_or(Value::Null);
         // `method` + `id` is a server→client request (answer it, §1.3); `method` alone is a
         // notification. The id stays raw — it may be a string and must be echoed verbatim.
-        return Some(match value.get("id") {
-            Some(id) => Incoming::ServerRequest {
-                id: id.clone(),
-                method: method.to_string(),
-                params,
-            },
-            None => Incoming::Notification {
-                method: method.to_string(),
-                params,
-            },
+        return Some(match value.get_mut("id").map(Value::take) {
+            Some(id) => Incoming::ServerRequest { id, method, params },
+            None => Incoming::Notification { method, params },
         });
     }
     // A response carries a numeric id and a result (or error).
     if let Some(id) = value.get("id").and_then(|v| v.as_i64()) {
         if value.get("result").is_some() || value.get("error").is_some() {
-            let result = value.get("result").cloned().unwrap_or(Value::Null);
             // Preserve the server's error code + message so the app can apply the error matrix
             // (§9.5) instead of surfacing every failure — a `null` result and a real error look
-            // identical otherwise, silently turning e.g. a failed rename into a no-op.
+            // identical otherwise, silently turning e.g. a failed rename into a no-op. (Read before
+            // taking `result`, since both borrow `value`.)
             let error = value.get("error").map(|e| ResponseError {
                 code: e.get("code").and_then(|c| c.as_i64()).unwrap_or(0),
                 message: e
@@ -171,6 +174,10 @@ fn classify(value: &Value) -> Option<Incoming> {
                     .map(str::to_string)
                     .unwrap_or_else(|| e.to_string()),
             });
+            let result = value
+                .get_mut("result")
+                .map(Value::take)
+                .unwrap_or(Value::Null);
             return Some(Incoming::Response { id, result, error });
         }
     }

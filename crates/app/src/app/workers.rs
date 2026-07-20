@@ -83,17 +83,16 @@ impl App {
     /// changes can enqueue the same idempotent event many times, and each broadcast makes reactive
     /// plugins redo the same work. Keeps first occurrences, preserving order.
     fn broadcast_pending_events(&mut self) {
-        let mut events = std::mem::take(&mut self.editor.pending_events);
-        let mut seen = Vec::new();
-        events.retain(|ev| {
-            let dup = seen.contains(ev);
-            if !dup {
-                seen.push(ev.clone());
+        let events = std::mem::take(&mut self.editor.pending_events);
+        // Skip an index iff an equal event appeared earlier this tick (first occurrence wins, order
+        // preserved). Compared by value against the already-seen prefix — no `clone` of the event's
+        // payload (some events, e.g. `JobComplete`, carry a heap buffer). `n` is a handful per tick,
+        // so the O(n²) compare is cheaper than cloning every unique event into a scratch set.
+        for i in 0..events.len() {
+            if events[..i].contains(&events[i]) {
+                continue;
             }
-            !dup
-        });
-        for ev in events {
-            self.registry.broadcast(&ev, &mut self.editor);
+            self.registry.broadcast(&events[i], &mut self.editor);
         }
     }
 

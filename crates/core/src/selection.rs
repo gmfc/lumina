@@ -129,6 +129,14 @@ impl Selections {
             return;
         }
 
+        // Single selection — the overwhelmingly common case (one cursor). It is trivially sorted
+        // with nothing to merge, so skip the sort + merge allocation entirely; the primary can only
+        // be index 0.
+        if self.ranges.len() == 1 {
+            self.primary = 0;
+            return;
+        }
+
         // Remember which concrete selection is primary so we can find it again.
         let primary_marker = self.ranges[self.primary.min(self.ranges.len() - 1)];
 
@@ -235,5 +243,18 @@ mod tests {
         // Distinct carets are preserved.
         let s = Selections::from_iter([Selection::caret(1), Selection::caret(3)]);
         assert_eq!(s.ranges().len(), 2);
+    }
+
+    #[test]
+    fn single_cursor_normalize_matches_the_general_path() {
+        // The fast path must leave a lone selection exactly as the full sort+merge would: unchanged
+        // ranges, primary at 0. (A guard clause — its win is skipping the per-call sort + merge Vec
+        // allocation on the overwhelmingly common single-cursor path; too small to micro-benchmark
+        // cleanly without the surrounding allocation dominating.)
+        let mut fast = Selections::single(Selection::new(3, 7));
+        fast.normalize();
+        assert_eq!(fast.ranges().len(), 1);
+        assert_eq!(fast.ranges()[0], Selection::new(3, 7));
+        assert_eq!(fast.primary_index(), 0);
     }
 }
