@@ -282,10 +282,10 @@ fn classify_distinguishes_notification_and_response() {
         r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///a","diagnostics":[]}}"#,
     )
     .unwrap();
-    assert!(matches!(classify(&notif), Some(Incoming::Diagnostics(_))));
+    assert!(matches!(classify(notif), Some(Incoming::Diagnostics(_))));
 
     let resp = serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":7,"result":null}"#).unwrap();
-    match classify(&resp) {
+    match classify(resp) {
         Some(Incoming::Response { id, error, .. }) => {
             assert_eq!(id, 7);
             assert!(
@@ -305,7 +305,7 @@ fn classify_preserves_error_message() {
         r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"rename failed"}}"#,
     )
     .unwrap();
-    match classify(&err) {
+    match classify(err) {
         Some(Incoming::Response { id, error, .. }) => {
             assert_eq!(id, 4);
             let error = error.expect("error preserved");
@@ -318,7 +318,7 @@ fn classify_preserves_error_message() {
     // An error object without a `message` field falls back to its JSON form (still non-None).
     let err2 =
         serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":5,"error":{"code":-1}}"#).unwrap();
-    match classify(&err2) {
+    match classify(err2) {
         Some(Incoming::Response { error, .. }) => assert!(error.is_some()),
         other => panic!("expected error response, got {other:?}"),
     }
@@ -647,7 +647,7 @@ fn classify_server_request_and_notification() {
         r#"{"jsonrpc":"2.0","id":"tok-1","method":"window/workDoneProgress/create","params":{"token":"t"}}"#,
     )
     .unwrap();
-    match classify(&req) {
+    match classify(req) {
         Some(Incoming::ServerRequest { id, method, params }) => {
             assert_eq!(id, serde_json::json!("tok-1")); // raw id preserved (string)
             assert_eq!(method, "window/workDoneProgress/create");
@@ -661,7 +661,7 @@ fn classify_server_request_and_notification() {
         r#"{"jsonrpc":"2.0","method":"window/showMessage","params":{"type":3,"message":"hi"}}"#,
     )
     .unwrap();
-    match classify(&notif) {
+    match classify(notif) {
         Some(Incoming::Notification { method, params }) => {
             assert_eq!(method, "window/showMessage");
             assert_eq!(params["message"], "hi");
@@ -672,7 +672,7 @@ fn classify_server_request_and_notification() {
     // A plain response is still a Response (not misread as a request/notification).
     let resp = serde_json::from_str::<Value>(r#"{"jsonrpc":"2.0","id":7,"result":null}"#).unwrap();
     assert!(matches!(
-        classify(&resp),
+        classify(resp),
         Some(Incoming::Response { id: 7, .. })
     ));
 }
@@ -700,7 +700,7 @@ fn classify_preserves_error_code() {
         r#"{"jsonrpc":"2.0","id":9,"error":{"code":-32801,"message":"content modified"}}"#,
     )
     .unwrap();
-    match classify(&err) {
+    match classify(err) {
         Some(Incoming::Response { error, .. }) => {
             let e = error.unwrap();
             assert_eq!(e.code, -32801);

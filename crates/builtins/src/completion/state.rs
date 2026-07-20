@@ -27,6 +27,9 @@ pub(crate) fn kind_label(kind: Option<u8>) -> &'static str {
 /// trigger, and the current selection. Pure (only depends on the item type), so it unit-tests.
 pub(crate) struct CompletionState {
     pub(crate) items: Vec<LspCompletionItem>,
+    /// Lowercased `items[i].label`, precomputed once — filtering runs on every keystroke and the
+    /// item set is fixed for a session, so re-lowercasing each label per keystroke was pure waste.
+    labels_lower: Vec<String>,
     pub(crate) filtered: Vec<usize>,
     pub(crate) selected: usize,
     /// Char offset where the replaced identifier prefix starts — the popup anchor.
@@ -41,8 +44,10 @@ impl CompletionState {
         anchor: usize,
         prefix: String,
     ) -> CompletionState {
+        let labels_lower = items.iter().map(|it| it.label.to_lowercase()).collect();
         let mut s = CompletionState {
             items,
+            labels_lower,
             filtered: Vec::new(),
             selected: 0,
             anchor,
@@ -57,10 +62,10 @@ impl CompletionState {
     pub(crate) fn refilter(&mut self) {
         let prefix = self.prefix.to_lowercase();
         let mut scored: Vec<(i32, usize)> = self
-            .items
+            .labels_lower
             .iter()
             .enumerate()
-            .filter_map(|(i, it)| score(&it.label, &prefix).map(|s| (s, i)))
+            .filter_map(|(i, label)| score(label, &prefix).map(|s| (s, i)))
             .collect();
         scored.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
         self.filtered = scored.into_iter().map(|(_, i)| i).collect();
@@ -87,16 +92,15 @@ impl CompletionState {
     }
 }
 
-/// Match score for `label` against a lowercase `prefix`: exact prefix beats a subsequence hit;
-/// `None` means no match. An empty prefix matches everything (score 0).
+/// Match score for an **already-lowercased** `label` against a lowercase `prefix`: exact prefix
+/// beats a subsequence hit; `None` means no match. An empty prefix matches everything (score 0).
 fn score(label: &str, prefix: &str) -> Option<i32> {
     if prefix.is_empty() {
         return Some(0);
     }
-    let label = label.to_lowercase();
     if label.starts_with(prefix) {
         Some(100)
-    } else if is_subsequence(prefix, &label) {
+    } else if is_subsequence(prefix, label) {
         Some(50)
     } else {
         None
@@ -186,5 +190,63 @@ mod tests {
     fn no_match_is_empty() {
         let s = CompletionState::new(items(), 0, "zzz".to_string());
         assert!(s.is_empty());
+    }
+
+    /// Release-timing A/B for finding #18 (cache lowercased completion labels). Behind the
+    /// `perfbench` feature + ignored; run with
+    /// `cargo test -p editor-builtins --features perfbench --release -- --ignored --nocapture bench_refilter`.
+    /// Times filtering with the cached lowercased labels against re-lowercasing every label on every
+    /// keystroke (the pre-optimization behavior), over a realistic item set + typed prefix.
+    #[cfg(feature = "perfbench")]
+    #[test]
+    #[ignore = "timing harness; run explicitly with --ignored --nocapture"]
+    fn bench_refilter_cached_vs_relowercase() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let items: Vec<LspCompletionItem> = (0..300)
+            .map(|i| item(&format!("SomeIdentifier_{i}"), None))
+            .collect();
+        let typed = "someidentifier";
+        const REPS: usize = 3000; // completion sessions
+
+        // After: labels lowercased once at session start, reused across keystrokes.
+        let t0 = Instant::now();
+        let mut sink = 0usize;
+        for _ in 0..REPS {
+            let mut st = CompletionState::new(items.clone(), 0, String::new());
+            for k in 1..=typed.len() {
+                st.prefix = typed[..k].to_string();
+                st.refilter();
+                sink += black_box(st.filtered.len());
+            }
+        }
+        let cached = t0.elapsed();
+
+        // Before: re-lowercase every label on every keystroke.
+        let raw: Vec<String> = items.iter().map(|it| it.label.clone()).collect();
+        let t1 = Instant::now();
+        for _ in 0..REPS {
+            for k in 1..=typed.len() {
+                let prefix = typed[..k].to_lowercase();
+                let mut scored: Vec<(i32, usize)> = raw
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, l)| score(&l.to_lowercase(), &prefix).map(|s| (s, i)))
+                    .collect();
+                scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
+                sink += black_box(scored.len());
+            }
+        }
+        let relower = t1.elapsed();
+
+        black_box(sink);
+        let n = (REPS * typed.len()) as u128;
+        println!(
+            "refilter cached labels:  {cached:?}  ({} ns/keystroke)\n\
+             refilter re-lowercase:   {relower:?}  ({} ns/keystroke)",
+            cached.as_nanos() / n,
+            relower.as_nanos() / n,
+        );
     }
 }
