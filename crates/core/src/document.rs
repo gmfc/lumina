@@ -123,6 +123,23 @@ impl Document {
         self.text.line(line).to_string()
     }
 
+    /// The text of `line` **including its trailing newline**, borrowed from the rope when the
+    /// line lives in a single contiguous chunk (the common case) and only allocated when it
+    /// straddles a chunk boundary. The render hot path calls this per visible line per frame, so
+    /// borrowing here (instead of [`Self::line_text`]'s owned `String`) removes one heap
+    /// allocation per rendered line.
+    pub fn line_str(&self, line: usize) -> std::borrow::Cow<'_, str> {
+        use std::borrow::Cow;
+        if line >= self.text.len_lines() {
+            return Cow::Borrowed("");
+        }
+        let slice = self.text.line(line);
+        match slice.as_str() {
+            Some(s) => Cow::Borrowed(s),
+            None => Cow::Owned(slice.to_string()),
+        }
+    }
+
     /// Length of `line` in chars, excluding the trailing newline.
     pub fn line_len_chars(&self, line: usize) -> usize {
         if line >= self.text.len_lines() {

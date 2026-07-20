@@ -261,7 +261,7 @@ impl App {
             let (line, col_chars) = doc.char_to_line_col(head);
             doc.view.scroll_to_line(line, height);
             // Map the caret to a display column (tabs/wide chars expanded) and keep it in view.
-            let text = doc.line_text(line);
+            let text = doc.line_str(line);
             let body = text.trim_end_matches(['\n', '\r']);
             let display_col =
                 editor_core::view::char_to_display_col(body, col_chars, doc.tab_width);

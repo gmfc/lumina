@@ -12,6 +12,12 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+# Compiles the ignored release-timing harnesses (perf A/B measurements). Off by default so the
+# coverage build never sees this deliberately-unexecuted code. Run with:
+#   cargo test -p lumina --features perfbench --release -- --ignored --nocapture
+perfbench = []
+
 [dependencies]
 editor-core = { path = "../core" }
 editor-syntax = { path = "../syntax" }
