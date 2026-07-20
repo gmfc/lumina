@@ -27,6 +27,12 @@ struct ClickState {
     count: u8,
 }
 
+/// Cheap fingerprint of everything the *editor pane* renders that can change frame to frame:
+/// `(active doc, revision, primary caret, scroll line, scroll col)`. Used by the idle-frame gate to
+/// detect a changed editor pane directly (sidebar/status/terminal/popup changes are caught by
+/// `force_redraw` instead — they all flow through input or `drain_workers`).
+type FrameSig = (Option<editor_core::DocId>, u64, usize, usize, usize);
+
 pub struct App {
     pub editor: EditorState,
     pub registry: Registry,
@@ -83,6 +89,15 @@ pub struct App {
     /// past the caret without being snapped back every tick. `None` forces a re-clamp next tick
     /// (startup, resize).
     last_caret: Option<(editor_core::DocId, usize)>,
+    /// Idle-frame gating (v0.5.1): repaint + recompute only when something changed. Set true by any
+    /// input event and by [`Self::drain_workers`] when it processed async work; the run loop also
+    /// ORs in an animation check and an editor-pane signature. An idle editor stops rebuilding the
+    /// frame (and re-scanning brackets / cloning LSP inputs) ~60×/s. Starts `true` (paint frame 1).
+    force_redraw: bool,
+    /// The editor-pane signature (active doc, revision, caret, scroll) of the last painted frame; a
+    /// change repaints even if `force_redraw` was somehow missed (belt-and-suspenders against a
+    /// stale editor pane, the most visible failure mode of damage tracking).
+    last_frame_sig: Option<FrameSig>,
     /// Paths of recently closed tabs, newest last — the "reopen closed editor" stack.
     closed_tabs: Vec<PathBuf>,
     /// The Settings tab's model + UI state, when a settings tab is open.
@@ -105,6 +120,7 @@ mod mouse;
 mod overlay;
 mod palette;
 mod panel;
+mod run_loop;
 mod settings;
 mod workers;
 

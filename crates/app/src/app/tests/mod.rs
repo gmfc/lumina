@@ -10,6 +10,7 @@ mod editing;
 mod explorer;
 mod files;
 mod find_search;
+mod idle_frames;
 mod lsp;
 mod mouse;
 mod palette_theme;

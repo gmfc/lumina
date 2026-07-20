@@ -148,6 +148,11 @@ impl App {
             }
             LspEvent::CodeLensRefresh { lang } => self.resync_code_lens(&lang),
             LspEvent::ServerExited { lang } => self.forget_synced_docs(&lang),
+            // No state to fold in — the doc re-sync rides the next `update_lsp` (which now sees the
+            // connection ready). Its value is being a drain-visible event: the surrounding
+            // `drain_workers` flags the tick as "did work", so the idle-frame gate repaints the LSP
+            // panel's server row on the Initializing → Running transition.
+            LspEvent::ServerReady => {}
             LspEvent::DiagnosticsRefresh { lang } => self.rearm_pull(&lang),
             LspEvent::ServerRequest {
                 lang,

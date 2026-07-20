@@ -57,9 +57,22 @@ impl App {
             .and_then(|id| self.editor.workspace.documents.get(id))
             .and_then(|d| d.language.clone());
         let tag = self.lsp.health_tag_for(active_lang.as_deref());
-        self.editor
+        // A health transition (starting/ready/error/cleared) changes the footer LSP indicator.
+        // `update_lsp` can run on a tick the idle-frame gate did *not* schedule a draw for (e.g.
+        // while only a restart backoff or pull debounce is armed), so repaint when it actually
+        // changes — otherwise the footer could show stale health until unrelated input.
+        if self
+            .editor
             .status_items
-            .insert("lsp.health".into(), tag.to_string());
+            .get("lsp.health")
+            .map(String::as_str)
+            != Some(tag)
+        {
+            self.editor
+                .status_items
+                .insert("lsp.health".into(), tag.to_string());
+            self.force_redraw = true;
+        }
     }
 
     /// Send `didOpen`/`didChange` for a doc when its revision advanced (the rope is serialized only
