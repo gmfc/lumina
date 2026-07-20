@@ -1,6 +1,6 @@
 [package]
-name = "editor-app"
-version = "0.1.0"
+name = "lumina"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

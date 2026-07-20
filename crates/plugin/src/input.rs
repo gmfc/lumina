@@ -1,9 +1,9 @@
 //! A crossterm-free key representation handed to plugins that intercept raw input.
 //!
-//! The kernel must not depend on `crossterm` (that's an `editor-app` concern), so raw-key
+//! The kernel must not depend on `crossterm` (that's an `lumina` concern), so raw-key
 //! interception — [`crate::Plugin::capture_key`] — speaks in these primitive types. The app
 //! translates `crossterm::event::KeyEvent` into a [`Key`] at the boundary. This mirrors the
-//! subset of key codes the editor actually binds (see `editor-app`'s `keymap.rs`), which is
+//! subset of key codes the editor actually binds (see `lumina`'s `keymap.rs`), which is
 //! all a modal layer (vim) or a focused terminal needs to pre-empt chord resolution.
 
 /// A key code: the crossterm-free twin of the subset of `crossterm::event::KeyCode` the editor

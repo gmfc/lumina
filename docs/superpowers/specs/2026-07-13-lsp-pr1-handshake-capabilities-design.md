@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-13
 **Status:** Design approved (handshake mechanism A1; per-client routing bundled)
-**Feature crate(s):** `editor-lsp`, `editor-app` (LSP glue). No `editor-builtins` change.
+**Feature crate(s):** `editor-lsp`, `lumina` (LSP glue). No `editor-builtins` change.
 
 ---
 
@@ -151,7 +151,7 @@ pub fn parse_capabilities(init_result: &serde_json::Value) -> ServerCaps;
 `initialize` params grow toward the §3.5 baseline, **declaring only what is implemented**:
 
 - Add `clientInfo { name: "lumina", version }` (version threaded from the app —
-  `editor-app`'s `CARGO_PKG_VERSION`), `rootPath` (from `root_uri`), `workspaceFolders:
+  `lumina`'s `CARGO_PKG_VERSION`), `rootPath` (from `root_uri`), `workspaceFolders:
   [{ uri: root_uri, name: <last path segment> }]`, `trace: "off"`,
   `general.positionEncodings: ["utf-16"]`.
 - Keep honest: `completion.completionItem.snippetSupport: false` (no snippet engine),
@@ -224,7 +224,7 @@ enum ClientState { Initializing { init_id: i64 }, Running(ServerCaps) }
 - `crates/app/src/app/lsp.rs` — `update_lsp` readiness gate before serialization; record
   `lsp_sent_revision` only on real send.
 - `crates/app/src/app/tests/lsp.rs` — hermetic app-level assertions as needed.
-- Thread `env!("CARGO_PKG_VERSION")` (editor-app) into `LspManager::new`.
+- Thread `env!("CARGO_PKG_VERSION")` (lumina) into `LspManager::new`.
 
 ## 6. Testing plan (TDD — tests first per unit)
 

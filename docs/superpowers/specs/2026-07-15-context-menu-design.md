@@ -21,7 +21,7 @@ command becomes a menu entry through the contribution API — and **context-gate
 
 - **`editor-plugin`** — the declarative contribution type (`MenuItemSpec`, `MenuGroup`, `MenuWhen`),
   aggregated by the `Registry` (invariant #3: features contribute through the same API).
-- **`editor-app`** — owns the menu at right-click: builds it from `registry.menu_items()`, filters
+- **`lumina`** — owns the menu at right-click: builds it from `registry.menu_items()`, filters
   by `when`, sorts by group, opens an `Overlay::ContextMenu`, and renders/navigates/dismisses it.
   Activation is `exec_id(command)` — the one dispatch path (invariant #4). Render is a pure function
   of the overlay state (invariant #8).

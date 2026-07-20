@@ -58,7 +58,7 @@ all buffer mutation goes through the transaction API.*
 > `editor-builtins` plugin (16 registered in `crates/builtins/src/lib.rs`) reaching the editor only
 > through `Host`, and every command id resolves registry-first through `exec_id`
 > (`registry.dispatch_command`, then the app's editing-primitive `Command` table, then a handful of
-> app-level actions). `editor-app`'s `dispatch()` now holds only editing primitives + file/tab/UI
+> app-level actions). `lumina`'s `dispatch()` now holds only editing primitives + file/tab/UI
 > actions; features route through the registry.
 
 ---
@@ -71,7 +71,7 @@ lower crate literally cannot `use` a higher one because it isn't in its
 `Cargo.toml`.
 
 ```
-              editor-app          ← the lmn binary: event loop, ratatui, keymap, wiring
+              lumina          ← the lmn binary: event loop, ratatui, keymap, wiring
              /    |     \
    editor-builtins |   editor-lsp / editor-syntax   ← adapters
              \    |     /
@@ -87,7 +87,7 @@ lower crate literally cannot `use` a higher one because it isn't in its
 | `editor-lsp` | LSP client: JSON-RPC framing, UTF-16 position conversion, diagnostics. | serde, lsp-types |
 | `editor-plugin` | The contribution API (traits + registries + event bus), the `Host` surface, and the external plugin runtimes. **The kernel.** | core, rhai, wasmi |
 | `editor-builtins` | All core features implemented **as plugins** — explorer, multi-cursor, git-nav, find/replace, palette, project search, theme, LSP requests + nav/hover/rename responses, diagnostics, completion, clipboard, terminal dock, vim. | core, plugin |
-| `editor-app` | The `lmn` binary: event loop, ratatui rendering, keymap, wiring. | all of the above |
+| `lumina` | The `lmn` binary: event loop, ratatui rendering, keymap, wiring. | all of the above |
 
 **Why the split earns its keep here** (not just to have small crates):
 
@@ -158,7 +158,7 @@ The split follows the library-vs-binary rule, tuned to Lumina's reality:
   hand-rolled 40-variant error nobody matches on would be ceremony, not safety.
   Introduce a typed `thiserror` enum the moment a caller needs to branch on a
   specific, stable failure — that's the trigger, not "it's a library."
-- **The binary uses `anyhow`.** `editor-app` (`app.rs`, `files.rs`, `main.rs`)
+- **The binary uses `anyhow`.** `lumina` (`app.rs`, `files.rs`, `main.rs`)
   uses `anyhow::Result` with `.context()` so a failure to load config or save a
   file produces a diagnosable chain, and `main` prints it on exit.
 - **Convert at the boundary.** The app catches library `io::Result`s, adds
