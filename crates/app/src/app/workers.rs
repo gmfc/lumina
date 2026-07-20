@@ -5,21 +5,34 @@
 use super::*;
 
 impl App {
-    pub(super) fn drain_workers(&mut self) {
+    /// Returns whether anything was actually processed this tick — the idle-frame gate repaints
+    /// only when it did (a false return means no async work, so the frame can be skipped).
+    pub(super) fn drain_workers(&mut self) -> bool {
         // Emit `DidChangeActive` when the focused document changed since last tick, so reactive
         // plugins clear per-doc UI on a tab switch (completion popup, signature/highlight, the
         // diagnostics status). Nothing else emits this event.
         let active = self.editor.workspace.active_doc();
-        if active != self.last_active {
+        let active_changed = active != self.last_active;
+        if active_changed {
             self.last_active = active;
             self.editor
                 .pending_events
                 .push(editor_plugin::event::Event::DidChangeActive(active));
         }
         // Apply a queued appearance toggle (the theme is app-owned render state).
-        if std::mem::take(&mut self.editor.pending_theme_toggle) {
+        let theme_toggled = std::mem::take(&mut self.editor.pending_theme_toggle);
+        if theme_toggled {
             self.toggle_theme();
         }
+        // Any non-empty intent queue (captured before draining, since draining may repopulate them
+        // for the *next* tick) means a plugin queued visible work this tick.
+        let had_pending = active_changed
+            || !self.editor.pending_lsp_requests.is_empty()
+            || !self.editor.pending_opens.is_empty()
+            || !self.editor.pending_commands.is_empty()
+            || !self.editor.pending_events.is_empty()
+            || !self.editor.pending_locations.is_empty()
+            || !self.editor.pending_workspace_edits.is_empty();
         self.drain_pending_lsp_requests();
         self.drain_pending_opens();
         self.drain_pending_commands();
@@ -29,10 +42,13 @@ impl App {
         self.drain_pending_locations();
         self.drain_pending_workspace_edits();
         // LSP responses/notifications: diagnostics, hover, goto, completion, rename.
+        let mut any_lsp = false;
         for event in self.lsp.poll() {
+            any_lsp = true;
             self.handle_lsp_event(event);
         }
-        self.drain_worker_channel();
+        let any_msg = self.drain_worker_channel();
+        had_pending || theme_toggled || any_lsp || any_msg
     }
 
     /// Forward queued LSP requests to the (app-owned) manager, resolving the cursor position
@@ -106,15 +122,18 @@ impl App {
         }
     }
 
-    /// Drain background worker messages (FS watch, git, project search) into state.
-    pub(super) fn drain_worker_channel(&mut self) {
+    /// Drain background worker messages (FS watch, git, project search) into state. Returns whether
+    /// at least one message was processed (feeds the idle-frame gate).
+    pub(super) fn drain_worker_channel(&mut self) -> bool {
         use crate::worker::WorkerMsg;
         // Cap terminal bytes processed per tick so a flooding shell (e.g. `yes`) can't starve
         // the render/input loop — the UI stays responsive, so Ctrl+C (which stops the flood)
         // remains reachable. Anything past the budget stays queued for the next ticks.
         const TERM_BYTE_BUDGET: usize = 1 << 20; // 1 MiB
         let mut term_bytes = 0usize;
+        let mut processed = false;
         while let Ok(msg) = self.worker_rx.try_recv() {
+            processed = true;
             match msg {
                 WorkerMsg::DiskChanged { path } => self.on_disk_changed(&path),
                 WorkerMsg::GitStatus { path, statuses } => {
@@ -153,6 +172,7 @@ impl App {
                 }
             }
         }
+        processed
     }
 
     /// Reconcile an external on-disk change against the buffer (plan §6 decision matrix).

@@ -4,8 +4,9 @@ use super::*;
 
 #[test]
 fn init_response_stores_caps_and_becomes_ready() {
-    // The awaited InitializeResult transitions the connection to Running with parsed caps,
-    // and produces no user-facing event (the handshake is internal).
+    // The awaited InitializeResult transitions the connection to Running with parsed caps, and
+    // emits a single `ServerReady` so the transition is drain-visible (the idle-frame gate repaints
+    // the LSP panel's server row on Initializing → Running).
     let mut mgr = manager();
     mgr.state
         .insert("rust".into(), ClientState::Initializing { init_id: 1 });
@@ -19,7 +20,10 @@ fn init_response_stores_caps_and_becomes_ready() {
             error: None,
         },
     );
-    assert!(mgr.poll().is_empty());
+    assert!(
+        matches!(mgr.poll().as_slice(), [LspEvent::ServerReady]),
+        "handshake completion emits exactly one ServerReady"
+    );
     assert!(mgr.is_ready("rust"));
     assert!(mgr.request_allowed("rust", Cap::Hover));
     assert!(!mgr.request_allowed("rust", Cap::Completion));
@@ -75,6 +79,49 @@ fn server_exit_fails_pending_and_clears_diagnostics() {
     // First crash → scheduled for restart, breaker not tripped.
     assert!(mgr.restart_after.contains_key("rust"));
     assert!(!mgr.failed.contains_key("rust"));
+}
+
+#[test]
+fn restart_langs_lists_eligible_backoffs_for_the_idle_gate() {
+    // Regression for the idle-frame gate (v0.5.1): after a crash the server's respawn is a
+    // wall-clock deadline that only `ensure_started` acts on, and the run loop reaches that path
+    // only while a restart is pending. `restart_langs()` is the manager's half of that check (the
+    // app intersects it with its open-doc languages). A crash on an idle editor would otherwise
+    // never auto-restart until the user next generated input.
+    let fresh = manager();
+    assert_eq!(
+        fresh.restart_langs().count(),
+        0,
+        "no restart armed on a fresh manager"
+    );
+
+    // One crash arms the backoff (breaker not tripped) → the language is listed for respawn.
+    let mut mgr = manager();
+    mgr.state
+        .insert("rust".into(), ClientState::Running(ServerCaps::default()));
+    feed_exit(&mgr, "rust");
+    let _ = mgr.poll();
+    assert!(mgr.restart_after.contains_key("rust"));
+    assert!(
+        mgr.restart_langs().any(|l| l == "rust"),
+        "an armed backoff lists the language so the idle loop keeps calling ensure_started"
+    );
+
+    // Enough crashes to trip the breaker → the language is given up on (removed from restart_after,
+    // added to failed): it must drop off the list so the loop returns to true idle rather than
+    // busy-looping on a server that will never come back.
+    for _ in 0..CRASH_LIMIT {
+        feed_exit(&mgr, "rust");
+    }
+    let _ = mgr.poll();
+    assert!(
+        mgr.failed.contains_key("rust"),
+        "breaker should have tripped"
+    );
+    assert!(
+        !mgr.restart_langs().any(|l| l == "rust"),
+        "a permanently-failed server must not keep the idle loop awake"
+    );
 }
 
 #[test]

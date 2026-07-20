@@ -131,6 +131,8 @@ impl App {
             last_active: None,
             lsp_autoopened: std::collections::HashSet::new(),
             last_caret: None,
+            force_redraw: true,
+            last_frame_sig: None,
             closed_tabs: Vec::new(),
             settings: None,
             settings_doc: None,
@@ -159,38 +161,6 @@ impl App {
             Some(e) => config_parse_status(&e),
             None => "Configuration reloaded".into(),
         });
-    }
-
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        // Prime the git gutter for any files restored at startup (plan §4.1).
-        self.refresh_git_all();
-        while !self.quit {
-            self.editor.update_highlights(self.page_height);
-            self.editor.update_bracket_match();
-            self.update_lsp();
-            terminal.draw(|f| ui::draw(f, self))?;
-            // Reconcile each PTY's size to the panel region we just laid out.
-            self.sync_terminals();
-
-            if event::poll(Duration::from_millis(16))? {
-                match event::read()? {
-                    CtEvent::Key(k) if k.kind == KeyEventKind::Press => self.on_key(k),
-                    CtEvent::Mouse(m) => self.on_mouse(m),
-                    CtEvent::Paste(s) => self.on_paste(s),
-                    // A resize changes the viewport height, so force the caret back into view.
-                    CtEvent::Resize(..) => self.last_caret = None,
-                    _ => {}
-                }
-            }
-            // Drain background worker messages (FS/LSP/parse/terminal output).
-            self.drain_workers();
-            self.refresh_viewport();
-        }
-        // Graceful LSP teardown on quit: shutdown→exit→wait per server, bounded so a hung
-        // server can't delay exit beyond the deadline (§3.8).
-        self.lsp.stop_all(Duration::from_secs(3));
-        self.save_session();
-        Ok(())
     }
 
     /// Persist the open files + cursor/scroll for this project root (plan §6).
@@ -267,6 +237,53 @@ impl App {
                 editor_core::view::char_to_display_col(body, col_chars, doc.tab_width);
             doc.view.scroll_to_col(display_col, text_width);
         }
+    }
+
+    /// Cheap editor-pane fingerprint for the idle-frame gate: the active doc, its revision, the
+    /// primary caret, and the scroll offsets. A change in any of these means the editor pane would
+    /// render differently, so the frame must repaint (see [`Self::run`]).
+    pub(super) fn frame_sig(&self) -> FrameSig {
+        let active = self.editor.workspace.active_doc();
+        match active.and_then(|id| self.editor.workspace.documents.get(id)) {
+            Some(d) => (
+                active,
+                d.revision,
+                d.selections.primary().head,
+                d.view.scroll_line,
+                d.view.scroll_col,
+            ),
+            None => (active, 0, 0, 0, 0),
+        }
+    }
+
+    /// Whether the footer is showing an animated spinner this frame — the LSP "starting" indicator
+    /// or a work-done progress line. Both advance off the wall clock (see `ui::chrome::spinner_frame`),
+    /// so while either is present the frame must keep repainting or the spinner freezes. Read from
+    /// the same `status_items` the renderer uses, so this can never disagree with what's on screen.
+    pub(super) fn is_animating(&self) -> bool {
+        let si = &self.editor.status_items;
+        si.get("lsp.health").map(String::as_str) == Some("starting")
+            || si.get("lsp.progress").is_some_and(|s| !s.is_empty())
+    }
+
+    /// Whether a crashed server that an **open document** actually uses is waiting out its restart
+    /// backoff. The manager arms a restart on any crash, but only open-doc languages have anything
+    /// (`update_lsp`'s doc loop) to drive `ensure_started` and clear the backoff — so a server that
+    /// crashed after its last doc closed must be excluded, or its never-cleared `restart_after`
+    /// would pin the idle loop awake forever.
+    pub(super) fn lsp_restart_pending(&self) -> bool {
+        let mut armed = self.lsp.restart_langs().peekable();
+        if armed.peek().is_none() {
+            return false; // no crashed server waiting — the common case, no set to build
+        }
+        let open: std::collections::HashSet<&str> = self
+            .editor
+            .workspace
+            .documents
+            .values()
+            .filter_map(|d| d.language.as_deref())
+            .collect();
+        self.lsp.restart_langs().any(|lang| open.contains(lang))
     }
 }
 

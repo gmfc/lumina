@@ -68,6 +68,11 @@ impl LspManager {
                 }
                 self.state
                     .insert(lang.to_string(), ClientState::Running(caps));
+                // Surface the Initializing → Running transition as a drain-visible event so the
+                // idle-frame gate repaints — the LSP panel's server row would otherwise flip from
+                // "starting" to "running" with no signal. (The doc re-sync itself rides the next
+                // `update_lsp`, which now sees `is_ready` and sends didOpen.)
+                out.push(LspEvent::ServerReady);
             }
         }
     }
@@ -210,6 +215,22 @@ impl LspManager {
         matches!(self.state.get(language), Some(ClientState::Running(_)))
     }
 
+    /// Languages whose crashed server is waiting out its restart backoff and is still eligible to
+    /// respawn (breaker not tripped). The idle-frame gate uses this to keep calling
+    /// [`Self::ensure_started`] across the (wall-clock) cool-off even while the editor is otherwise
+    /// idle — without it a crash on an idle editor would never auto-restart until the next input.
+    ///
+    /// The caller must intersect this with its **open-document** languages: `ensure_started` is only
+    /// driven for open docs, so a lingering server that crashed after its last doc closed has an
+    /// armed `restart_after` that nothing will ever clear — counting it would pin the run loop awake
+    /// forever. (`failed` languages the breaker gave up on are already excluded here.)
+    pub(crate) fn restart_langs(&self) -> impl Iterator<Item = &str> + '_ {
+        self.restart_after
+            .keys()
+            .filter(|lang| !self.failed.contains_key(*lang))
+            .map(String::as_str)
+    }
+
     /// Gate: the connection is `Running` and advertised support for `cap`.
     pub(crate) fn request_allowed(&self, language: &str, cap: Cap) -> bool {
         matches!(self.state.get(language), Some(ClientState::Running(caps)) if caps.allows(cap))
@@ -272,6 +293,14 @@ impl LspManager {
     pub(crate) fn disable_discovery(&mut self) {
         self.discover = false;
         self.resolved.clear();
+    }
+
+    /// Arm a restart backoff for `lang` as if its server had just crashed once — lets an app-level
+    /// test exercise [`crate::app::App::lsp_restart_pending`] without a real crash round-trip.
+    #[cfg(test)]
+    pub(crate) fn arm_restart_for_test(&mut self, lang: &str) {
+        self.restart_after
+            .insert(lang.to_string(), Instant::now() + restart_backoff(1));
     }
 
     /// Resolve `language` to an installed server argv, memoizing the probe. An explicit `[lsp]`

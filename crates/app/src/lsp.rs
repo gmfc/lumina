@@ -142,6 +142,11 @@ pub enum LspEvent {
     ServerExited {
         lang: String,
     },
+    /// A connection finished its `initialize` handshake and is now serving requests (the
+    /// `Initializing → Running` transition). Payload-less: it exists only so the transition is a
+    /// drain-visible event, letting the idle-frame gate repaint the LSP panel's server row (which
+    /// otherwise flips from "starting" to "running" without any signal).
+    ServerReady,
     /// A server→client request the app must act on **and answer** (applyEdit,
     /// showMessageRequest, showDocument). `id` is the raw JSON-RPC id to echo in the reply,
     /// sent back through [`LspManager::respond`].

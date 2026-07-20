@@ -86,6 +86,9 @@ impl App {
         self.editor.lsp_open = true;
         self.editor.lsp_panel.minimized = false;
         self.editor.dock_active = DockTab::Lsp;
+        // Opening the dock is a visible layout change; `update_lsp` may reach here on a tick the
+        // idle-frame gate did not schedule a draw for, so force the repaint (idempotent per lang).
+        self.force_redraw = true;
     }
 
     /// Minimize / restore the visible dock tab (header chevron).
