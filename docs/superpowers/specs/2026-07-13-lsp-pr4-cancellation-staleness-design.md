@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-13
 **Status:** Approved (roadmap PR4; proceed-to-completion)
-**Crates:** `editor-lsp`, `editor-app`.
+**Crates:** `editor-lsp`, `lumina`.
 
 ## Problem (guide §1.4, §9.4, §9.5)
 

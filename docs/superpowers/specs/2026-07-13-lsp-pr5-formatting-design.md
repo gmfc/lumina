@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-13
 **Status:** Approved (first feature PR on the Phase-0 foundation; proceed-to-completion)
-**Crates:** `editor-lsp`, `editor-plugin`, `editor-builtins`, `editor-app`.
+**Crates:** `editor-lsp`, `editor-plugin`, `editor-builtins`, `lumina`.
 
 ## Why
 
@@ -21,7 +21,7 @@ code.
 - **`editor-builtins`**: `lsp.format` command ("Edit: Format Document", `shift+alt+f`) on the
   existing `LspPlugin` → `Host::lsp_request(Formatting)`. No new plugin, so the self-hosting
   test needs no change.
-- **`editor-app`**: `Pending::Formatting` (not cancelable — an explicit action — but
+- **`lumina`**: `Pending::Formatting` (not cancelable — an explicit action — but
   version-guarded like everything else); `request_formatting` gated on `Cap::Formatting`,
   `FormattingOptions` from `config.tab_width` (Lumina indents with spaces);
   `LspEvent::Formatting(Vec<TextEdit>)` → apply to the active doc via the shared

@@ -4,15 +4,15 @@
 //!
 //! These are the "hard" offset-and-range computations a Vim layer needs but the
 //! VS Code-style [`crate::motion`] module doesn't already provide. They live here
-//! — in the headless core — rather than in `editor-app`, so they are pure
+//! — in the headless core — rather than in `lumina`, so they are pure
 //! functions of a [`Document`] and unit-testable without a terminal (CLAUDE.md
 //! invariants #5, #7). The modal *state machine* (modes, operators, registers,
-//! key routing) lives in `editor-app`; this module only answers "given a cursor,
+//! key routing) lives in `lumina`; this module only answers "given a cursor,
 //! where does this motion land?" and "what range does this text object cover?".
 //!
 //! Offsets are **char offsets** into the rope, matching [`crate::selection`].
 //! Motions return the offset the block cursor lands on; the caller decides
-//! inclusive/exclusive operator ranges (see the `editor-app` `vim` module).
+//! inclusive/exclusive operator ranges (see the `lumina` `vim` module).
 
 use crate::document::Document;
 

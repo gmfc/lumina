@@ -13,7 +13,7 @@
 - Workspace stays green at **every commit**: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace`.
 - MSRV `1.88`; `unsafe` forbidden workspace-wide; lints centralized (`lints.workspace = true`).
 - `editor-lsp` returns `io::Result` / narrow results — no `thiserror`.
-- `editor-builtins` unchanged (no `editor-lsp`/`lsp-types` dep leak). PR1 touches only `editor-lsp` + `editor-app`.
+- `editor-builtins` unchanged (no `editor-lsp`/`lsp-types` dep leak). PR1 touches only `editor-lsp` + `lumina`.
 - App-level tests run hermetically (empty `$HOME`).
 - Commit messages end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`. Rebase-only repo; already on branch `lsp-pr1-handshake-capabilities`.
 - Honest capability declaration: declare only implemented features.

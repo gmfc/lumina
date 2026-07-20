@@ -6,7 +6,7 @@
 //! explorer, multi-cursor, git-change nav, find/replace, palette + quick-open + goto-line, project
 //! search, theme toggle, LSP request commands + nav/hover/rename responses, diagnostics,
 //! completion, clipboard, terminal dock, and vim — each reaching the editor only through `Host`.
-//! `editor-app` keeps only the substrate: editing primitives, file/tab IO, the PTY/vt100 + LSP
+//! `lumina` keeps only the substrate: editing primitives, file/tab IO, the PTY/vt100 + LSP
 //! transports, and the pure renderer.
 //!
 //! The self-hosting test (`tests/self_hosting.rs`) guards each migrated plugin: with all built-ins
@@ -54,7 +54,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
     // multi-cursor, git-change navigation, find/replace, the command palette + quick-open +
     // goto-line, project search, the theme toggle, the LSP request commands, diagnostics,
     // completion, clipboard copy/cut/paste, LSP navigation + hover + rename, the terminal dock, and
-    // the vim modal layer. `editor-app` keeps only the substrate: editing primitives, file/tab IO,
+    // the vim modal layer. `lumina` keeps only the substrate: editing primitives, file/tab IO,
     // the PTY/vt100 transport, the LSP client, and the pure renderer.
     vec![
         Box::new(explorer::ExplorerPlugin::new(icons)),

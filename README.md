@@ -22,7 +22,7 @@ Six crates (headless core, thin view — the Helix/VS Code split):
 | `editor-lsp` | LSP client: JSON-RPC transport, UTF-16 position conversion, diagnostics. |
 | `editor-plugin` | The contribution API (traits + registries + event bus), the `Host` surface, and the external plugin runtime — the kernel that hosts plugins. |
 | `editor-builtins` | The core features implemented **as plugins** (the explorer). |
-| `editor-app` | The `lumina` binary: event loop, ratatui rendering, keymap, and wiring. |
+| `lumina` | The `lumina` binary: event loop, ratatui rendering, keymap, and wiring. |
 
 Everything is a command; a document holds a *set* of selections; features are plugins;
 render is a pure function of state; all buffer mutation goes through the transaction API.
@@ -60,7 +60,7 @@ macOS, and `x86_64` Windows.
 **From source** (any platform with Rust ≥ 1.88):
 
 ```sh
-cargo install --git https://github.com/gmfc/lumina editor-app   # installs `lmn`
+cargo install --git https://github.com/gmfc/lumina lumina   # installs `lmn`
 ```
 
 **Updating** — pull the newest release in place (safe to run while the editor is open):
@@ -80,7 +80,7 @@ cargo build --workspace
 cargo test  --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
-cargo run -p editor-app -- <path>     # or: cargo run --bin lmn -- <path>
+cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 ```
 
 ## Keys (defaults, remappable in config)

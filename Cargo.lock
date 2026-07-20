@@ -327,38 +327,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "editor-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "crossterm",
- "directories",
- "editor-builtins",
- "editor-core",
- "editor-lsp",
- "editor-plugin",
- "editor-syntax",
- "globset",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "imara-diff",
- "notify",
- "notify-debouncer-full",
- "portable-pty",
- "ratatui",
- "regex",
- "serde",
- "serde_json",
- "toml",
- "unicode-width 0.2.0",
- "vt100",
-]
-
-[[package]]
 name = "editor-builtins"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "editor-core",
  "editor-plugin",
@@ -370,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "editor-core"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "proptest",
  "ropey",
@@ -381,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "editor-lsp"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "lsp-types",
  "serde",
@@ -390,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "editor-plugin"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "editor-core",
  "rhai",
@@ -403,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "editor-syntax"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "editor-core",
  "ropey",
@@ -888,6 +858,36 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
+]
+
+[[package]]
+name = "lumina"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "crossterm",
+ "directories",
+ "editor-builtins",
+ "editor-core",
+ "editor-lsp",
+ "editor-plugin",
+ "editor-syntax",
+ "globset",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "imara-diff",
+ "notify",
+ "notify-debouncer-full",
+ "portable-pty",
+ "ratatui",
+ "regex",
+ "serde",
+ "serde_json",
+ "toml",
+ "unicode-width 0.2.0",
+ "vt100",
 ]
 
 [[package]]

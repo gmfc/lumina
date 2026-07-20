@@ -32,7 +32,7 @@ Three layers, matching the existing LSP + dock split:
 
 - **`editor-lsp` / `crates/lsp`** — protocol adapter. The only change here: stop discarding server
   `stderr` and surface `window/logMessage`, so a log tail has a source.
-- **`crates/app` (`editor-app`)** — owns `LspManager` (process lifecycle, discovery, state) and the
+- **`crates/app` (`lumina`)** — owns `LspManager` (process lifecycle, discovery, state) and the
   dock render/IO. The registry, PATH probing, log ring, status accessor, footer segment, and the
   dock host all live here.
 - **`editor-builtins`** — the `terminal` plugin (already present) plus a thin `lsp.panel` plugin
