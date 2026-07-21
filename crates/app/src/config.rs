@@ -23,6 +23,8 @@ pub struct Config {
     pub insert_final_newline: bool,
     /// Show a per-line git change bar in the gutter (plan §4.1).
     pub git_gutter: bool,
+    /// Start with soft word-wrap on (toggle at runtime with Alt+Z / `view.toggleWrap`).
+    pub line_wrap: bool,
     /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
     pub icons: bool,
     /// Start in Vim modal-editing mode (Normal/Insert/Visual). Off by default —
@@ -53,6 +55,7 @@ impl Default for Config {
             trim_trailing_whitespace: false,
             insert_final_newline: false,
             git_gutter: true,
+            line_wrap: false,
             icons: false,
             vim: false,
             terminal_shell: None,
@@ -126,7 +129,7 @@ impl Config {
             .unwrap_or_default();
 
         let mut settings = toml::Table::new();
-        let entries: [(&str, toml::Value); 12] = [
+        let entries: [(&str, toml::Value); 13] = [
             ("tab_width", (self.tab_width as i64).into()),
             ("sidebar_width", (self.sidebar_width as i64).into()),
             ("follow_mode", self.follow_mode.into()),
@@ -139,6 +142,7 @@ impl Config {
             ),
             ("insert_final_newline", self.insert_final_newline.into()),
             ("git_gutter", self.git_gutter.into()),
+            ("line_wrap", self.line_wrap.into()),
             ("icons", self.icons.into()),
             ("vim", self.vim.into()),
             ("terminal_height", (self.terminal_height as i64).into()),
@@ -202,6 +206,9 @@ impl Config {
         }
         if let Some(b) = settings.get("git_gutter").and_then(|v| v.as_bool()) {
             self.git_gutter = b;
+        }
+        if let Some(b) = settings.get("line_wrap").and_then(|v| v.as_bool()) {
+            self.line_wrap = b;
         }
         if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
             self.icons = b;

@@ -15,6 +15,7 @@ pub mod transaction;
 pub mod view;
 pub mod vim;
 pub mod workspace;
+pub mod wrap;
 
 pub use document::{Document, Encoding, LineEnding, SyntaxEdit};
 pub use history::{GroupBreak, History};

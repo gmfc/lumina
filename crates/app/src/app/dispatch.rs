@@ -101,6 +101,7 @@ impl App {
 
             // --- ui ---
             Command::ToggleSidebar => self.editor.sidebar_visible = !self.editor.sidebar_visible,
+            Command::ToggleWrap => self.toggle_wrap(),
             Command::FocusSidebar => self.editor.focus = Focus::Sidebar,
             Command::FocusEditor => self.editor.focus = Focus::Editor,
             // terminal-dock commands are the `terminal` builtin plugin, dispatched through the

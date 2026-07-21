@@ -186,6 +186,9 @@ impl App {
             scroll_col: doc.view.scroll_col,
             tab_width: doc.tab_width,
             height: r.height,
+            wrap: doc.view.wrap,
+            wrap_width: doc.view.wrap_width,
+            scroll_sub: doc.view.scroll_sub,
         }
     }
 
@@ -290,6 +293,12 @@ impl App {
         if let Some(doc) = self.editor.active_document_mut() {
             let max = doc.len_lines().saturating_sub(1);
             let next = (doc.view.scroll_line as isize + delta).clamp(0, max as isize);
+            if next as usize != doc.view.scroll_line {
+                // The wheel scrolls by whole logical lines; the new top line starts at its first
+                // visual row (keeps `scroll_sub`'s invariant, and avoids getting stuck on a stale
+                // sub-row of a tall wrapped line).
+                doc.view.scroll_sub = 0;
+            }
             doc.view.scroll_line = next as usize;
         }
     }

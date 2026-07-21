@@ -87,6 +87,7 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         // git.nextHunk / git.prevHunk are contributed by the `git-nav` builtin plugin
         // ui
         "view.toggleSidebar" => Command::ToggleSidebar,
+        "view.toggleWrap" => Command::ToggleWrap,
         "view.focusSidebar" => Command::FocusSidebar,
         "view.focusEditor" => Command::FocusEditor,
         // view.commandPalette / view.quickOpen / view.gotoLine are the `palette` plugin now.

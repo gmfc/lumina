@@ -18,6 +18,76 @@ fn line_motions() {
 }
 
 #[test]
+fn wrapped_up_down_move_by_visual_row() {
+    // One logical line of 14 chars wraps at width 5 into rows "aaaa ", "bbbb ", "cccc"
+    // (segment starts 0, 5, 10). Up/Down should step one visual row, preserving the column.
+    let mut doc = Document::from_str("aaaa bbbb cccc");
+    doc.view.wrap = true;
+    doc.view.wrap_width = 5;
+
+    // Column 0: Down walks row 0 → 1 → 2.
+    assert_eq!(resolve(&doc, 0, Motion::Down, 10), 5);
+    assert_eq!(resolve(&doc, 5, Motion::Down, 10), 10);
+    assert_eq!(
+        resolve(&doc, 10, Motion::Down, 10),
+        10,
+        "last visual row is a floor"
+    );
+
+    // Column 2 is preserved across the wrapped rows.
+    assert_eq!(resolve(&doc, 2, Motion::Down, 10), 7); // row1 col2 = char 5+2
+    assert_eq!(resolve(&doc, 7, Motion::Up, 10), 2); // back to row0 col2
+    assert_eq!(
+        resolve(&doc, 0, Motion::Up, 10),
+        0,
+        "first visual row is a ceiling"
+    );
+}
+
+#[test]
+fn wrapped_down_onto_full_row_does_not_skip() {
+    // Regression: Down from the end of a full-width line onto a full-width non-final visual row
+    // must land ON that row (its last char), not skip to the row after it.
+    let mut doc = Document::from_str("aaaaa\nbbbbbbbbbb");
+    doc.view.wrap = true;
+    doc.view.wrap_width = 5;
+    // Line 1 wraps into "bbbbb" (chars 6..11) and "bbbbb" (11..16). Down from char 5 (end of the
+    // full line 0) must reach line 1's FIRST visual row, not skip into the second.
+    let after_down = resolve(&doc, 5, Motion::Down, 10);
+    let (line, _) = doc.char_to_line_col(after_down);
+    assert_eq!(line, 1, "Down should reach line 1");
+    assert!(
+        after_down < 11,
+        "must land on line 1's first visual row (chars 6..11), got {after_down}"
+    );
+}
+
+#[test]
+fn wrapped_home_end_snap_to_visual_row() {
+    let mut doc = Document::from_str("aaaa bbbb cccc");
+    doc.view.wrap = true;
+    doc.view.wrap_width = 5;
+    // Caret at char 7 is on visual row 1 ("bbbb ", chars 5..10).
+    assert_eq!(resolve(&doc, 7, Motion::LineStart, 10), 5);
+    assert_eq!(resolve(&doc, 7, Motion::LineEnd, 10), 10);
+    // With wrap off, Home/End cover the whole logical line again.
+    doc.view.wrap = false;
+    assert_eq!(resolve(&doc, 7, Motion::LineStart, 10), 0);
+    assert_eq!(resolve(&doc, 7, Motion::LineEnd, 10), 14);
+}
+
+#[test]
+fn wrapped_down_crosses_into_the_next_logical_line() {
+    // Row 0 = "aaaa " (chars 0..5) wraps; the logical line's last visual row is "bb" (5..7),
+    // then Down crosses into the next logical line "next".
+    let mut doc = Document::from_str("aaaa bb\nnext");
+    doc.view.wrap = true;
+    doc.view.wrap_width = 5;
+    assert_eq!(resolve(&doc, 5, Motion::Down, 10), 8); // char 8 = start of "next"
+    assert_eq!(resolve(&doc, 8, Motion::Up, 10), 5); // back up into row "bb"
+}
+
+#[test]
 fn word_motions() {
     let doc = Document::from_str("foo bar_baz  qux");
     assert_eq!(resolve(&doc, 0, Motion::WordRight, 10), 4);

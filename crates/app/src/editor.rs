@@ -73,6 +73,9 @@ pub(crate) struct EditorState {
     pub(crate) workspace: Workspace,
     pub(crate) sidebar_width: u16,
     pub(crate) sidebar_visible: bool,
+    /// App-wide soft word-wrap toggle (seeded from config `line_wrap`). Mirrored onto each doc's
+    /// `view.wrap` so `editor-core` motions/mapping can read it per document.
+    pub(crate) wrap_enabled: bool,
     pub(crate) focus: Focus,
     pub(crate) status_message: Option<String>,
     /// Rendered panel content, keyed by panel id (set by plugins).
@@ -169,6 +172,7 @@ impl EditorState {
             workspace: Workspace::new(root),
             sidebar_width: 30,
             sidebar_visible: true,
+            wrap_enabled: false,
             focus: Focus::Editor,
             status_message: None,
             panels: HashMap::new(),
