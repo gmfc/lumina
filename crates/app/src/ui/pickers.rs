@@ -38,6 +38,9 @@ pub(super) fn render_completion(f: &mut Frame, app: &App, editor_area: Rect) {
         scroll_col: doc.view.scroll_col,
         tab_width: doc.tab_width,
         height: editor_area.height,
+        wrap: doc.view.wrap,
+        wrap_width: doc.view.wrap_width,
+        scroll_sub: doc.view.scroll_sub,
     };
     let Some((ax, ay)) = editor_core::view::char_to_screen(doc, &geo, popup.anchor) else {
         return;

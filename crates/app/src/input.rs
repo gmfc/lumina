@@ -58,6 +58,7 @@ pub enum Command {
     // `diagnostics` plugin. git change navigation (NextHunk/PrevHunk) is the `git-nav` plugin.
     // ui
     ToggleSidebar,
+    ToggleWrap,
     FocusSidebar,
     FocusEditor,
     // Command palette, quick-open, and goto-line are the `palette` plugin now.

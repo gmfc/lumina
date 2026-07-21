@@ -107,6 +107,138 @@ fn renders_editor_with_all_decorations() {
 }
 
 #[test]
+fn soft_wrap_splits_a_long_line_across_rows() {
+    // A long line wrapped at the live pane width (~13 cells here) lands its tail on later rows.
+    let path = temp_file("hello world foo bar baz qux");
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    app.editor.active_document_mut().unwrap().view.wrap = true;
+    // Narrow pane forces the wrap (the renderer uses the live pane text width).
+    let rows = screen_rows(&render_to_string(&mut app, 16, 8), 16);
+    // Find the editor content (below the tab bar / chrome).
+    let i = rows
+        .iter()
+        .position(|r| r.contains("hello"))
+        .expect("first wrapped segment renders");
+    // The line wrapped: its tail ("qux") is NOT on the first row, but on a later one.
+    assert!(
+        !rows[i].contains("qux"),
+        "tail should wrap off row 0: {:?}",
+        rows[i]
+    );
+    assert!(
+        rows[i + 1..].iter().any(|r| r.contains("qux")),
+        "tail 'qux' renders on a continuation row: {:?}",
+        &rows[i..]
+    );
+    // Only the first visual row carries the line number "1"; continuations blank the gutter.
+    assert!(
+        rows[i].trim_start().starts_with('1'),
+        "gutter: {:?}",
+        rows[i]
+    );
+    assert!(
+        !rows[i + 1].trim_start().starts_with('1'),
+        "continuation gutter should be blank: {:?}",
+        rows[i + 1]
+    );
+    // A row past the wrapped line shows the EOF tilde.
+    assert!(
+        rows.iter().any(|r| r.contains('~')),
+        "past-EOF tilde: {:?}",
+        rows
+    );
+}
+
+#[test]
+fn wrap_scrolls_the_viewport_to_follow_the_caret() {
+    // Many wrapping lines + a short pane → moving the caret to the end must scroll the visual-row
+    // anchor down so the caret stays visible (exercises the wrap branch of ensure_cursor_visible).
+    let path = temp_file(&"a fairly long line that wraps a couple of times\n".repeat(30));
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    app.editor.wrap_enabled = true;
+    app.page_height = 6;
+    // A first render populates the laid-out regions; refresh_viewport then mirrors wrap + width.
+    let _ = render_to_string(&mut app, 24, 8);
+    app.refresh_viewport();
+    assert!(
+        app.editor.active_document().unwrap().view.wrap,
+        "wrap is active on the doc"
+    );
+
+    // Caret to end-of-document → the anchor scrolls down to keep it visible.
+    let end = app.editor.active_document().unwrap().len_chars();
+    app.editor.active_document_mut().unwrap().set_caret(end);
+    app.ensure_cursor_visible();
+    assert!(
+        app.editor.active_document().unwrap().view.scroll_line > 0,
+        "the viewport scrolled down to follow the caret under wrap"
+    );
+
+    // Back to the top → the anchor returns to (0, 0).
+    app.editor.active_document_mut().unwrap().set_caret(0);
+    app.ensure_cursor_visible();
+    let v = &app.editor.active_document().unwrap().view;
+    assert_eq!((v.scroll_line, v.scroll_sub), (0, 0), "returns to the top");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn toggle_wrap_flips_global_state_and_mirrors_every_doc() {
+    let path = temp_file("hello");
+    let mut app = app_with(&path);
+    let id = app.editor.workspace.active_doc().unwrap();
+    assert!(!app.editor.wrap_enabled, "off by default");
+
+    app.dispatch(Command::ToggleWrap);
+    assert!(app.editor.wrap_enabled, "toggle turns wrap on");
+    assert!(
+        app.editor.workspace.documents.get(id).unwrap().view.wrap,
+        "the global flag is mirrored onto the doc"
+    );
+
+    app.dispatch(Command::ToggleWrap);
+    assert!(!app.editor.wrap_enabled, "toggle turns it back off");
+    assert!(!app.editor.workspace.documents.get(id).unwrap().view.wrap);
+    std::fs::remove_file(&path).ok();
+}
+
+/// Split the flat cell-symbol string from `render_to_string` into `w`-wide screen rows.
+fn screen_rows(flat: &str, w: usize) -> Vec<String> {
+    flat.chars()
+        .collect::<Vec<_>>()
+        .chunks(w)
+        .map(|c| c.iter().collect())
+        .collect()
+}
+
+#[test]
+fn soft_wrap_off_keeps_one_row_per_line() {
+    // With wrap off, the same long line occupies a single row (the tail is hscroll-clipped).
+    let path = temp_file("hello world foo bar baz qux");
+    let mut app = app_with(&path);
+    app.editor.sidebar_visible = false;
+    let rows = screen_rows(&render_to_string(&mut app, 30, 8), 30);
+    let i = rows
+        .iter()
+        .position(|r| r.contains("hello world"))
+        .expect("the line renders");
+    // The tail is hscroll-clipped onto the same row — "qux" does NOT get its own row.
+    assert!(
+        !rows[i].contains("qux"),
+        "tail should be clipped, not wrapped: {:?}",
+        rows[i]
+    );
+    // The next row is already past EOF (the doc has one line), so a tilde.
+    assert!(
+        rows[i + 1].contains('~'),
+        "row+1 should be EOF: {:?}",
+        rows[i + 1]
+    );
+}
+
+#[test]
 fn diagnostics_publish_as_a_decoration_layer() {
     // Data-level guard for the `diagnostics` plugin's decoration build (the render path has no
     // color assertion): an Error on line 0 cols 3..6 and a Warning on line 1 produce two underline

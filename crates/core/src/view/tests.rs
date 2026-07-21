@@ -50,6 +50,25 @@ fn geo(gutter: u16, scroll: usize, tab: usize) -> PaneGeometry {
         scroll_col: 0,
         tab_width: tab,
         height: 100,
+        wrap: false,
+        wrap_width: 0,
+        scroll_sub: 0,
+    }
+}
+
+/// A wrapped-pane geometry for the visual-layout tests.
+fn wgeo(gutter: u16, scroll_line: usize, scroll_sub: usize, wrap_width: usize) -> PaneGeometry {
+    PaneGeometry {
+        origin_x: 0,
+        origin_y: 0,
+        gutter,
+        scroll_line,
+        scroll_col: 0,
+        tab_width: 4,
+        height: 100,
+        wrap: true,
+        wrap_width,
+        scroll_sub,
     }
 }
 
@@ -119,6 +138,74 @@ fn screen_click_with_wide_chars() {
     assert_eq!(screen_to_char(&doc, &g, 8, 0), Some(2));
 }
 
+// --- soft-wrap visual layout ----------------------------------------------
+
+#[test]
+fn wrapped_click_maps_to_the_visual_row() {
+    // "aaaa bbbb cccc" @ width 5 → rows "aaaa " (0..5), "bbbb " (5..10), "cccc" (10..14).
+    let doc = Document::from_str("aaaa bbbb cccc");
+    let g = wgeo(0, 0, 0, 5);
+    assert_eq!(screen_to_char(&doc, &g, 0, 0), Some(0)); // row 0, col 0
+    assert_eq!(screen_to_char(&doc, &g, 2, 1), Some(7)); // row 1, col 2 = char 5+2
+    assert_eq!(screen_to_char(&doc, &g, 3, 2), Some(13)); // row 2, col 3 = char 10+3
+                                                          // A click past a row's text clamps to that row's end.
+    assert_eq!(screen_to_char(&doc, &g, 40, 2), Some(14)); // past end of last row → line end
+}
+
+#[test]
+fn char_to_screen_round_trips_under_wrap() {
+    // For every char offset, char_to_screen then screen_to_char returns the same offset, across a
+    // multi-line doc with a wrapped long line and a wide char.
+    let doc = Document::from_str("aaaa bbbb cccc\nshort\n世界 wide line here");
+    let g = wgeo(4, 0, 0, 6);
+    for off in 0..=doc.len_chars() {
+        if let Some((x, y)) = char_to_screen(&doc, &g, off) {
+            let back = screen_to_char(&doc, &g, x, y);
+            // A caret at a segment boundary renders at the next row's start, which maps back to the
+            // same offset; end-of-line offsets map back to the line end. Accept the identity.
+            assert_eq!(
+                back,
+                Some(off),
+                "round trip failed at offset {off} -> ({x},{y})"
+            );
+        }
+    }
+}
+
+#[test]
+fn visual_rows_honors_scroll_sub() {
+    // Start one visual row down into the first (wrapped) logical line.
+    let doc = Document::from_str("aaaa bbbb cccc\nnext");
+    let rows = visual_rows(&doc, 5, 4, 0, 1, 10);
+    assert_eq!(rows[0].line, 0);
+    assert_eq!((rows[0].start, rows[0].end), (5, 10)); // second visual row of line 0
+    assert!(
+        !rows[0].first,
+        "a continuation row does not carry the line number"
+    );
+    // Last logical line follows after line 0's remaining segments.
+    assert!(rows.iter().any(|r| r.line == 1 && r.first));
+}
+
+#[test]
+fn wrapped_scroll_keeps_caret_visible() {
+    // 6 logical lines, each wrapping to ~2 visual rows at width 5.
+    let doc = Document::from_str(&"aaaa bbbb\n".repeat(6));
+    // Caret at document start → anchor stays at the top.
+    assert_eq!(wrapped_scroll_anchor(&doc, 0, 4, 5, 4, 0, 0), (0, 0));
+    // Caret on the last line, tiny viewport → anchor scrolls down so the caret is visible.
+    let last = doc.len_chars();
+    let (sl, ss) = wrapped_scroll_anchor(&doc, last, 4, 5, 4, 0, 0);
+    // The caret's visual row must fall within the [sl,ss)+height window.
+    let rows = visual_rows(&doc, 5, 4, sl, ss, 4);
+    let (cl, cc) = doc.char_to_line_col(last);
+    assert!(
+        rows.iter()
+            .any(|r| r.line == cl && cc >= r.start && cc <= r.end),
+        "caret line {cl} not visible in rows {rows:?}"
+    );
+}
+
 // --- horizontal scroll (long lines) ---------------------------------------
 
 fn hgeo(gutter: u16, scroll_col: usize) -> PaneGeometry {
@@ -130,6 +217,9 @@ fn hgeo(gutter: u16, scroll_col: usize) -> PaneGeometry {
         scroll_col,
         tab_width: 4,
         height: 100,
+        wrap: false,
+        wrap_width: 0,
+        scroll_sub: 0,
     }
 }
 
@@ -202,6 +292,9 @@ fn char_to_screen_inverts_click() {
         scroll_col: 0,
         tab_width: 4,
         height: 100,
+        wrap: false,
+        wrap_width: 0,
+        scroll_sub: 0,
     };
     // For every char that starts a cell, screen_to_char(char_to_screen(c)) == c.
     for line in 0..doc.len_lines() {

@@ -151,14 +151,24 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let buf = f.buffer_mut();
-    let mut primary_screen: Option<(u16, u16)> = None;
     // One scratch, reused for every row: no per-line heap allocation in the render loop.
     let mut scratch = RowScratch::default();
-    for row in 0..area.height {
-        if let Some(pos) = render_editor_row(buf, &ctx, &mut scratch, row) {
-            primary_screen = Some(pos);
+    // Wrap at the *live* pane text width, so a terminal resize renders correctly on the very next
+    // frame regardless of when `view.wrap_width` (used by motions/clicks) was last refreshed.
+    let wrap_cols = area.width.saturating_sub(gutter) as usize;
+    let primary_screen = if doc.view.wrap && wrap_cols > 0 {
+        // Soft word-wrap: iterate *visual* rows (a logical line may span several).
+        render_wrapped(buf, &ctx, &mut scratch, wrap_cols)
+    } else {
+        // 1 row = 1 logical line (unchanged path).
+        let mut primary = None;
+        for row in 0..area.height {
+            if let Some(pos) = render_editor_row(buf, &ctx, &mut scratch, row) {
+                primary = Some(pos);
+            }
         }
-    }
+        primary
+    };
 
     // Only the editor shows the hardware cursor when it holds focus; the terminal panel
     // places its own cursor when focused (and draws after the editor, so it would win anyway).
@@ -253,6 +263,139 @@ fn render_editor_row<'a>(
         &scratch.styles,
         &scratch.line_decos,
     )
+}
+
+/// Soft word-wrap render: iterate **visual rows** (from `editor_core::view::visual_rows`), each a
+/// segment of a logical line, drawn from display column 0. The line number shows on a line's first
+/// visual row and continuation rows blank the gutter. Syntax styles + decorations are resolved once
+/// per logical line and reused across its segments. Returns the primary caret's screen position.
+///
+/// Inline virtual text (inlay hints / code lens) and horizontal scrolling are intentionally not
+/// drawn here — wrap pins hscroll to 0, and inline virtual text under wrap is a follow-up (§out of
+/// scope in the design). Everything else — syntax, decorations, selection, bracket, cursors — works.
+fn render_wrapped<'a>(
+    buf: &mut ratatui::buffer::Buffer,
+    ctx: &EditorCtx<'a>,
+    scratch: &mut RowScratch<'a>,
+    width: usize,
+) -> Option<(u16, u16)> {
+    let rows = editor_core::view::visual_rows(
+        ctx.doc,
+        width,
+        ctx.doc.tab_width,
+        ctx.first,
+        ctx.doc.view.scroll_sub,
+        ctx.area.height as usize,
+    );
+    let mut primary_screen = None;
+    let mut cur_line: Option<usize> = None;
+    let mut line_start = 0;
+    for (i, vr) in rows.iter().enumerate() {
+        let y = ctx.area.y + i as u16;
+        // Resolve per-line state (syntax styles + decorations) once, reused across the line's rows.
+        if cur_line != Some(vr.line) {
+            cur_line = Some(vr.line);
+            line_start = ctx.doc.line_to_char(vr.line);
+            let body = ctx.doc.line_str(vr.line);
+            let body = body.trim_end_matches(['\n', '\r']);
+            let line_len = body.chars().count();
+            match ctx.hl {
+                Some(h) => resolve_line_styles_into(
+                    h.line_spans(vr.line),
+                    line_len,
+                    ctx.theme,
+                    &mut scratch.styles,
+                    &mut scratch.best_len,
+                ),
+                None => {
+                    scratch.styles.clear();
+                    scratch.styles.resize(line_len, None);
+                }
+            }
+            let line_end = line_start + line_len;
+            scratch.line_decos.clear();
+            scratch.line_decos.extend(
+                ctx.deco_spans
+                    .iter()
+                    .copied()
+                    .filter(|d| d.range.0 < line_end && d.range.1 > line_start),
+            );
+        }
+        // Gutter + gutter marks only on the line's first visual row; continuations stay blank.
+        if vr.first {
+            let num = format!("{:>width$} ", vr.line + 1, width = ctx.gutter as usize - 1);
+            put_str(
+                buf,
+                ctx.area.x,
+                y,
+                &num,
+                Style::default().fg(ctx.gutter_fg),
+                ctx.area.x + ctx.gutter,
+            );
+            draw_git_bar(buf, ctx, vr.line, y);
+            draw_deco_gutter(buf, ctx, vr.line, y);
+        }
+        if let Some(pos) = draw_segment(
+            buf,
+            ctx,
+            y,
+            vr,
+            line_start,
+            &scratch.styles,
+            &scratch.line_decos,
+        ) {
+            primary_screen = Some(pos);
+        }
+    }
+    // Past end-of-document rows get the EOF tilde, like the unwrapped path.
+    for i in rows.len()..ctx.area.height as usize {
+        draw_eof_tilde(buf, ctx.area.x, ctx.area.y + i as u16);
+    }
+    primary_screen
+}
+
+/// Draw one visual row's segment `[vr.start, vr.end)` of `vr.line` from display column 0 (no
+/// hscroll under wrap; each segment fits `wrap_width` by construction). Returns the primary caret's
+/// screen position when it falls on this segment (including the end-of-line caret on the last row).
+fn draw_segment(
+    buf: &mut ratatui::buffer::Buffer,
+    ctx: &EditorCtx,
+    y: u16,
+    vr: &editor_core::view::VisualRow,
+    line_start: usize,
+    char_styles: &[Option<Style>],
+    line_decos: &[&Decoration],
+) -> Option<(u16, u16)> {
+    let body = ctx.doc.line_str(vr.line);
+    let body = body.trim_end_matches(['\n', '\r']);
+    let mut primary = None;
+    let mut col = 0usize; // display column within this visual row (rows start at 0)
+    for (ci, ch) in body
+        .chars()
+        .enumerate()
+        .skip(vr.start)
+        .take(vr.end - vr.start)
+    {
+        let char_off = line_start + ci;
+        let cells = char_cells(ch, col, ctx.doc.tab_width);
+        let sx = ctx.text_x + col as u16;
+        let style = cell_style(ctx, char_styles, line_decos, ci, char_off);
+        if ctx.doc.selections.primary().head == char_off {
+            primary = Some((sx, y));
+        }
+        draw_char_cells(buf, sx, y, ch, style, cells, 0);
+        col += cells;
+    }
+    // End-of-line caret: only on the line's final visual row (its `end` is the line's char count),
+    // placed just past the last char. On a row that exactly fills the pane the caret would sit one
+    // past the right edge (hidden by `place_cursor`'s bound and unrescued by hscroll under wrap), so
+    // clamp it to the last cell instead of vanishing.
+    let line_len = body.chars().count();
+    if vr.end == line_len && ctx.doc.selections.primary().head == line_start + vr.end {
+        let right_edge = ctx.area.x + ctx.area.width.saturating_sub(1);
+        primary = Some(((ctx.text_x + col as u16).min(right_edge), y));
+    }
+    primary
 }
 
 /// Draw one line's text with tab expansion, inline virtual text (inlay hints / code lens),

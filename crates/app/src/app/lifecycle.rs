@@ -64,6 +64,14 @@ impl App {
         theme.load_user_overrides();
 
         editor.sidebar_width = config.sidebar_width;
+        // Soft word-wrap default (Alt+Z toggles at runtime). Mirrored onto docs on the first
+        // viewport clamp; if on at startup, seed any restored docs now so frame 1 wraps.
+        editor.wrap_enabled = config.line_wrap;
+        if config.line_wrap {
+            for doc in editor.workspace.documents.values_mut() {
+                doc.view.wrap = true;
+            }
+        }
         // The terminal dock lifecycle lives in the `terminal` plugin; the app keeps the PTY
         // sessions on `EditorState`. Seed the render height + default shell from config.
         editor.terminal_height = config.terminal_height.clamp(3, 60);
@@ -197,6 +205,24 @@ impl App {
     /// this gate, [`Self::ensure_cursor_visible`] would snap the view back to the caret every tick,
     /// so scrolling would stall the moment the caret reached the viewport edge.
     pub(super) fn refresh_viewport(&mut self) {
+        // Keep the active doc's wrap geometry current **every frame** — a terminal resize changes
+        // the pane width without moving the caret, and motions/clicks read `view.wrap_width`. (The
+        // renderer wraps at the live pane width directly, so it is already resize-correct.)
+        let text_width = self
+            .editor
+            .active_document()
+            .map(|doc| {
+                self.regions
+                    .editor
+                    .width
+                    .saturating_sub(ui::gutter_width(doc)) as usize
+            })
+            .unwrap_or(0);
+        let wrap_enabled = self.editor.wrap_enabled;
+        if let Some(doc) = self.editor.active_document_mut() {
+            doc.view.wrap = wrap_enabled;
+            doc.view.wrap_width = text_width;
+        }
         let cur = self.editor.workspace.active_doc().and_then(|id| {
             self.editor
                 .workspace
@@ -226,9 +252,32 @@ impl App {
                     .saturating_sub(ui::gutter_width(doc)) as usize
             })
             .unwrap_or(0);
+        let wrap_enabled = self.editor.wrap_enabled;
         if let Some(doc) = self.editor.active_document_mut() {
+            // Mirror the app-wide wrap flag onto the active doc (covers docs opened after a toggle),
+            // and keep the pane width current so wrap-aware motions/rendering see the geometry.
+            doc.view.wrap = wrap_enabled;
+            doc.view.wrap_width = text_width;
             let head = doc.selections.primary().head;
+            if doc.view.wrap && text_width > 0 {
+                // Soft-wrap: no horizontal scroll; clamp the *visual-row* anchor to the caret.
+                doc.view.scroll_col = 0;
+                let tab = doc.tab_width;
+                let (sl, ss) = editor_core::view::wrapped_scroll_anchor(
+                    doc,
+                    head,
+                    height,
+                    text_width,
+                    tab,
+                    doc.view.scroll_line,
+                    doc.view.scroll_sub,
+                );
+                doc.view.scroll_line = sl;
+                doc.view.scroll_sub = ss;
+                return;
+            }
             let (line, col_chars) = doc.char_to_line_col(head);
+            doc.view.scroll_sub = 0;
             doc.view.scroll_to_line(line, height);
             // Map the caret to a display column (tabs/wide chars expanded) and keep it in view.
             let text = doc.line_str(line);
@@ -237,6 +286,27 @@ impl App {
                 editor_core::view::char_to_display_col(body, col_chars, doc.tab_width);
             doc.view.scroll_to_col(display_col, text_width);
         }
+    }
+
+    /// Toggle app-wide soft word-wrap (`view.toggleWrap` / Alt+Z). Wrap is global, so the new state
+    /// is mirrored onto **every** open document; the caret itself didn't move, so a re-clamp is
+    /// forced next tick to re-anchor the viewport for the new mode.
+    pub(super) fn toggle_wrap(&mut self) {
+        let on = !self.editor.wrap_enabled;
+        self.editor.wrap_enabled = on;
+        for doc in self.editor.workspace.documents.values_mut() {
+            doc.view.wrap = on;
+            if !on {
+                doc.view.scroll_sub = 0;
+                doc.view.scroll_col = 0;
+            }
+        }
+        self.last_caret = None;
+        self.editor.status_message = Some(if on {
+            "Word wrap: on".into()
+        } else {
+            "Word wrap: off".into()
+        });
     }
 
     /// Cheap editor-pane fingerprint for the idle-frame gate: the active doc, its revision, the
