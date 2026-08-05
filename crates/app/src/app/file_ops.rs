@@ -10,6 +10,7 @@ impl App {
     pub(super) fn forget_doc(&mut self, id: editor_core::DocId) {
         self.editor.highlighters.remove(&id);
         self.editor.decorations.remove(&id);
+        self.editor.tab_views.remove(&id);
         // The `diagnostics` plugin prunes its own model on tab change (DidChangeActive).
         self.editor.git_hunks.remove(&id);
         self.lsp_sent_revision.remove(&id);
@@ -96,6 +97,16 @@ impl App {
         let mut saved = 0;
         for i in 0..count {
             self.editor.workspace.focus_tab(i);
+            // A notice/viewer tab has a path but no text — writing its empty placeholder would
+            // truncate the very file it is displaying.
+            if self
+                .editor
+                .workspace
+                .active_doc()
+                .is_some_and(|id| self.editor.is_tab_view(id))
+            {
+                continue;
+            }
             let (has_path, dirty) = self
                 .editor
                 .active_document()
@@ -141,6 +152,19 @@ impl App {
         self.editor.workspace.focus_tab(next);
     }
 
+    /// Open a path in a tab, choosing *what kind of tab* by policy:
+    ///
+    /// 1. a directory re-roots the workspace (unchanged);
+    /// 2. an already-open path just gets focused (unchanged);
+    /// 3. a plugin viewer claiming the extension takes it (a `.pdf` → the `pdf` viewer);
+    /// 4. otherwise [`files::open`] probes the header — binary or over the size ceiling opens a
+    ///    *notice* tab explaining why, instead of spending four full passes over the file to
+    ///    produce an uneditable wall of replacement characters;
+    /// 5. only then is it read into a real buffer.
+    ///
+    /// Every route into a tab funnels here or through [`App::open_file_at_startup`], which
+    /// applies the same policy — including session restore, so one accidental PDF can't poison
+    /// every subsequent launch.
     pub(super) fn open_path(&mut self, path: &std::path::Path) {
         if path.is_dir() {
             self.editor.workspace.root = path.to_path_buf();
@@ -150,12 +174,117 @@ impl App {
             self.editor.workspace.focus_doc(id);
             return;
         }
-        match files::load(path) {
-            Ok(mut doc) => {
-                doc.set_caret(0);
-                let id = self.editor.workspace.open_document(doc);
-                self.editor.emit(editor_plugin::event::Event::DidOpen(id));
-                self.request_git_status(id);
+        if let Some(viewer_id) = self.viewer_id_for(path) {
+            self.open_viewer_tab(path, &viewer_id);
+            return;
+        }
+        match files::open(path, &self.config.file_limits()) {
+            Ok(files::Opened::Text(doc)) => self.open_text_tab(path, *doc),
+            Ok(files::Opened::Refused(refusal)) => self.open_notice_tab(path, refusal),
+            Err(e) => {
+                self.editor.status_message = Some(format!("Open failed: {e}"));
+            }
+        }
+    }
+
+    /// The viewer id claiming `path`'s extension, if a loaded plugin contributes one. Disabling
+    /// that plugin removes the claim, and the file falls back to the binary notice.
+    pub(super) fn viewer_id_for(&self, path: &std::path::Path) -> Option<String> {
+        let ext = path.extension()?.to_str()?;
+        Some(self.registry.viewer_for_extension(ext)?.id.clone())
+    }
+
+    /// Put a loaded document in a tab and announce it.
+    fn open_text_tab(&mut self, path: &std::path::Path, mut doc: Document) {
+        doc.set_caret(0);
+        let large = doc.large;
+        let id = self.editor.workspace.open_document(doc);
+        self.editor.emit(editor_plugin::event::Event::DidOpen(id));
+        // Degraded mode is invisible otherwise — say so once, or the missing syntax colours read
+        // as a bug rather than a deliberate trade.
+        if large {
+            self.editor.status_message = Some(format!(
+                "{} opened in large-file mode — syntax highlighting, git gutter, and LSP are off",
+                display_name(path)
+            ));
+        }
+        self.request_git_status(id);
+    }
+
+    /// Open the "lumina can't show this as text" tab for a refused file.
+    fn open_notice_tab(&mut self, path: &std::path::Path, refusal: files::Refusal) {
+        self.editor.open_notice_tab(path, refusal);
+    }
+
+    /// Open (or re-open) `path` in the viewer `viewer_id`. An existing *view* tab for the same
+    /// path is replaced, so "view as hex" swaps the notice tab in place rather than stacking a
+    /// second tab on the same file.
+    pub(super) fn open_viewer_tab(&mut self, path: &std::path::Path, viewer_id: &str) {
+        let Some(title) = self.registry.viewer(viewer_id).map(|v| v.title.clone()) else {
+            self.editor.status_message = Some(format!("No such viewer: {viewer_id}"));
+            return;
+        };
+        let abs = files::absolute_path(path);
+        if let Some(existing) = self.editor.workspace.find_by_path(&abs) {
+            if self.editor.is_tab_view(existing) {
+                if let Some(idx) = self
+                    .editor
+                    .workspace
+                    .tabs
+                    .iter()
+                    .position(|&t| t == existing)
+                {
+                    self.close_and_forget(idx);
+                }
+            }
+        }
+        let id = self.editor.open_viewer_tab(&abs, viewer_id, &title);
+        self.render_viewer_tab(id);
+    }
+
+    /// Ask the owning plugin to (re)render the viewer tab `id`. A viewer whose plugin has since
+    /// been disabled leaves a stated reason rather than an empty pane.
+    pub(super) fn render_viewer_tab(&mut self, id: editor_core::DocId) {
+        let Some(crate::editor::TabView::Viewer(v)) = self.editor.tab_views.get(&id) else {
+            return;
+        };
+        let (viewer_id, path) = (v.viewer_id.clone(), v.path.clone());
+        if !self
+            .registry
+            .render_viewer(&viewer_id, id, &path, &mut self.editor)
+        {
+            if let Some(crate::editor::TabView::Viewer(v)) = self.editor.tab_views.get_mut(&id) {
+                v.content = editor_plugin::ViewerContent::status_only(format!(
+                    "The plugin providing the “{viewer_id}” viewer is not loaded."
+                ));
+            }
+        }
+        // Deliberately *not* draining effect queues here: this runs from inside the drain, and a
+        // viewer that queued another `open_viewer` would recurse. Anything it queued lands on the
+        // next tick, like every other plugin intent.
+    }
+
+    /// `file.openAnyway`: replace the active *notice* tab with a real text buffer, bypassing the
+    /// size ceiling. Only offered for a size refusal — forcing binary content through the UTF-8
+    /// rope would silently rewrite the file on the first save, so that refusal stands.
+    pub(super) fn open_anyway(&mut self) {
+        let Some(crate::editor::TabView::Notice { path, refusal }) = self.editor.active_tab_view()
+        else {
+            return;
+        };
+        let (path, refusal) = (path.clone(), *refusal);
+        if !refusal.is_overridable() {
+            self.editor.status_message = Some(format!(
+                "{} is not text — it can't be edited",
+                refusal.label()
+            ));
+            return;
+        }
+        match files::open_forced(&path, &self.config.file_limits()) {
+            Ok(doc) => {
+                let tab = self.editor.workspace.active_tab;
+                self.close_and_forget(tab);
+                self.open_text_tab(&path, doc);
             }
             Err(e) => {
                 self.editor.status_message = Some(format!("Open failed: {e}"));
@@ -179,7 +308,18 @@ impl App {
     }
 
     /// Open the Save As overlay, seeded with the current path (if any).
+    ///
+    /// Guarded here rather than in `save_or_save_as` because `file.saveAs` reaches this directly.
+    /// `save_as_to` would repoint the placeholder at the typed path before `save_active` refused
+    /// the write: no bytes lost, but the tab would then claim a file it isn't showing.
     pub(super) fn open_save_as(&mut self) {
+        if let Some(view) = self.editor.active_tab_view() {
+            self.editor.status_message = Some(format!(
+                "{} is not a text buffer — nothing to save",
+                display_name(view.path())
+            ));
+            return;
+        }
         if self.editor.active_document().is_none() {
             return;
         }
@@ -232,6 +372,15 @@ impl App {
         let Some(id) = self.editor.workspace.active_doc() else {
             return;
         };
+        // The load-bearing guard: a notice/viewer tab's buffer is empty but its path points at a
+        // real file, so saving it would replace that file with nothing.
+        if let Some(view) = self.editor.tab_views.get(&id) {
+            self.editor.status_message = Some(format!(
+                "{} is not a text buffer — nothing to save",
+                display_name(view.path())
+            ));
+            return;
+        }
         let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
             return;
         };
@@ -261,4 +410,11 @@ impl App {
         // Refresh the git gutter against the just-written file (plan §4.1).
         self.request_git_status(id);
     }
+}
+
+/// The file name of `path` for a user-facing message, falling back to the whole path.
+pub(super) fn display_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }

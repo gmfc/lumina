@@ -46,6 +46,10 @@ impl App {
                 self.handle_settings_click(col, row);
                 return;
             }
+            // A notice/viewer tab has no text to put a caret in; the click only takes focus.
+            if self.editor.active_tab_view().is_some() {
+                return;
+            }
             if mods.contains(crossterm::event::KeyModifiers::ALT) {
                 // Alt+Click adds a cursor (multi-cursor).
                 if let Some(off) = self.editor_offset_at(col, row) {
@@ -320,6 +324,8 @@ impl App {
             .is_some_and(|r| in_rect(r, col, row))
         {
             self.scroll_lsp_panel(delta);
+        } else if self.editor.active_tab_view().is_some() {
+            self.scroll_tab_view(delta);
         } else {
             self.scroll_editor(delta);
         }

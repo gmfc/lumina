@@ -43,6 +43,11 @@ pub struct Document {
     pub externally_reloaded: bool,
     /// Set when the file was deleted on disk while still open.
     pub deleted_on_disk: bool,
+    /// Set at load time when the file exceeded the host's "large file" threshold. Pure metadata
+    /// — the rope and every text API behave identically — but it lets the host skip the
+    /// per-document work that scales with file size (syntax parsing, git diffing, shipping the
+    /// whole buffer to a language server) rather than stalling on a 200 MB log.
+    pub large: bool,
     /// Edits accumulated since the syntax layer last reparsed (drained by the highlighter).
     pub syntax_edits: Vec<SyntaxEdit>,
     /// False when `syntax_edits` no longer faithfully describes the change stream (overflow or
@@ -75,6 +80,7 @@ impl Document {
             external_conflict: None,
             externally_reloaded: false,
             deleted_on_disk: false,
+            large: false,
             syntax_edits: Vec::new(),
             syntax_edits_valid: true,
         }

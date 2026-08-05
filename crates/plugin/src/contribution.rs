@@ -53,6 +53,40 @@ impl PanelSpec {
     }
 }
 
+/// A **file viewer**: a plugin-owned tab that renders a file the text editor can't
+/// (a PDF, a binary, an archive listing). The app opens one instead of a text buffer when
+/// `extensions` claims the file, then asks the owning plugin to render it
+/// ([`crate::Plugin::render_viewer`] → [`crate::Host::set_viewer_content`]).
+///
+/// This is the seam that keeps format knowledge *out* of `lumina`: the editor gains a
+/// contribution kind, not a PDF parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerSpec {
+    pub id: String,
+    /// Human name, shown on the viewer tab's header ("PDF Document").
+    pub title: String,
+    /// Lowercase file extensions claimed, **without** the dot. Empty means the viewer is never
+    /// picked automatically and is opened explicitly instead (via [`crate::Host::open_viewer`]),
+    /// which is how the hex viewer offers itself for files no format plugin understands.
+    pub extensions: Vec<String>,
+}
+
+impl ViewerSpec {
+    pub fn new(id: impl Into<String>, title: impl Into<String>, extensions: &[&str]) -> Self {
+        ViewerSpec {
+            id: id.into(),
+            title: title.into(),
+            extensions: extensions.iter().map(|e| e.to_lowercase()).collect(),
+        }
+    }
+
+    /// Whether this viewer claims `ext` (compared case-insensitively, dot-free).
+    pub fn claims(&self, ext: &str) -> bool {
+        let ext = ext.trim_start_matches('.').to_lowercase();
+        self.extensions.contains(&ext)
+    }
+}
+
 /// A status-bar item a plugin keeps updated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusItemSpec {
@@ -152,6 +186,7 @@ pub struct Contributions {
     pub languages: Vec<LanguageSpec>,
     pub themes: Vec<ThemeSpec>,
     pub menu_items: Vec<MenuItemSpec>,
+    pub viewers: Vec<ViewerSpec>,
 }
 
 impl Contributions {
@@ -221,6 +256,20 @@ impl ContributionsBuilder {
         self.inner
             .menu_items
             .push(MenuItemSpec::new(command, label, group, when));
+        self
+    }
+
+    /// Contribute a file viewer claiming `extensions` (dot-free, case-insensitive). Pass an
+    /// empty slice for a viewer only reachable through [`crate::Host::open_viewer`].
+    pub fn viewer(
+        mut self,
+        id: impl Into<String>,
+        title: impl Into<String>,
+        extensions: &[&str],
+    ) -> Self {
+        self.inner
+            .viewers
+            .push(ViewerSpec::new(id, title, extensions));
         self
     }
 

@@ -5,6 +5,7 @@
 //! - [`chrome`] — tab bar, status bar, welcome screen.
 //! - [`editor`] — the text pane, its per-line loop, and per-cell decorations.
 //! - [`sidebar`] — the explorer panel.
+//! - [`tabview`] — non-text tabs: the large/binary-file notice and plugin viewers.
 //! - [`panel`] — the terminal dock.
 //! - [`overlays`] / [`pickers`] — modal boxes and floating lists.
 //! - [`util`] — the shared chrome palette and cell/string helpers.
@@ -23,9 +24,11 @@ mod panel;
 mod pickers;
 mod settings;
 mod sidebar;
+mod tabview;
 mod util;
 
 pub(crate) use settings::settings_entry_at;
+pub(crate) use tabview::viewer_body_rows;
 
 use chrome::{render_status, render_tabs};
 use editor::render_editor;
@@ -34,6 +37,7 @@ use panel::render_dock;
 use pickers::{render_bottom_panel, render_completion, render_picker};
 use settings::render_settings;
 use sidebar::render_sidebar;
+use tabview::render_tab_view;
 
 /// Draw one full frame.
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -75,6 +79,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     render_tabs(f, app, tabs_area);
     if app.settings_active() {
         render_settings(f, app, editor_area);
+    } else if let Some(view) = app.editor.active_tab_view() {
+        // A notice / plugin-viewer tab replaces the text pane (it has no text to draw).
+        render_tab_view(f, app, editor_area, view);
     } else {
         render_editor(f, app, editor_area);
     }

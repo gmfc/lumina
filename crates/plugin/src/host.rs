@@ -164,6 +164,25 @@ pub trait Host {
     /// Set a panel's rendered content.
     fn set_panel(&mut self, panel_id: &str, content: PanelContent);
 
+    /// Publish the content of a viewer tab. Called from
+    /// [`crate::Plugin::render_viewer`], which the app invokes when the tab opens and again when
+    /// the file changes on disk; the app owns the tab, the scroll position, and the drawing.
+    /// Ignored for a `doc` that isn't a viewer tab. Default no-op.
+    fn set_viewer_content(&mut self, _doc: DocId, _content: crate::viewer::ViewerContent) {}
+
+    /// Open `path` in the viewer `viewer_id`, replacing any existing tab for that path. Queued
+    /// like [`Self::open_path`] — the app owns file IO policy. This is how a viewer offers itself
+    /// for a file no extension claim would have routed to it (the hex viewer, on any binary).
+    /// Default no-op.
+    fn open_viewer(&mut self, _path: &Path, _viewer_id: &str) {}
+
+    /// The file path behind the active tab — **including** notice and viewer tabs, which have no
+    /// text buffer for [`Self::workspace`] to answer from. `None` for an untitled buffer or an
+    /// empty workspace. Default: the active document's path.
+    fn active_path(&self) -> Option<PathBuf> {
+        self.workspace().active_document()?.path.clone()
+    }
+
     /// Update a status-bar item's text.
     fn set_status(&mut self, item_id: &str, text: String);
 

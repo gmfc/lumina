@@ -25,12 +25,14 @@ mod explorer;
 mod find;
 mod folding;
 mod git_nav;
+mod hexview;
 mod hover;
 mod inlay_hints;
 mod lsp;
 mod lsp_nav;
 mod multicursor;
 mod palette;
+mod pdf;
 mod project_search;
 mod rename;
 mod semantic_tokens;
@@ -64,6 +66,11 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(palette::PalettePlugin::default()),
         Box::new(project_search::ProjectSearchPlugin::default()),
         Box::new(theme::ThemePlugin),
+        // File viewers: they contribute `ViewerSpec`s, so a claimed extension opens a viewer
+        // tab instead of a text buffer (and disabling one hands the extension back to the
+        // binary-file notice).
+        Box::new(pdf::PdfPlugin),
+        Box::new(hexview::HexViewPlugin),
         Box::new(lsp::LspPlugin::default()),
         Box::new(lsp_nav::LspNavPlugin::default()),
         Box::new(hover::HoverPlugin),

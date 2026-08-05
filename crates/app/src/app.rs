@@ -122,6 +122,7 @@ mod palette;
 mod panel;
 mod run_loop;
 mod settings;
+pub(crate) mod tabview;
 mod workers;
 
 /// Convert an LSP `(line, utf16_char)` position to a char offset in `doc`.

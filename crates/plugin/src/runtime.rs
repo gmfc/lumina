@@ -35,8 +35,12 @@ mod dispatch;
 mod manifest;
 
 pub(crate) use actions::{insert_at_cursor, replace_line, replace_selection};
-use manifest::lines_to_panel;
 pub(crate) use manifest::Manifest;
+use manifest::{lines_to_panel, lines_to_viewer};
+
+/// Bytes of a viewed file handed to a script viewer. Well under Rhai's 2 MB string cap, and a
+/// hard bound on the work an external plugin can be made to do by opening a big file.
+const SCRIPT_VIEWER_BYTES: usize = 1024 * 1024;
 
 /// A loaded external plugin backed by a Rhai script.
 pub(crate) struct ScriptPlugin {
@@ -47,6 +51,7 @@ pub(crate) struct ScriptPlugin {
     ast: AST,
     command_ids: Vec<String>,
     panel_ids: Vec<String>,
+    viewer_ids: Vec<String>,
 }
 
 /// Load every plugin under `dir` (each a subfolder with `plugin.toml`). Missing/invalid
@@ -103,6 +108,12 @@ fn load_one(dir: &Path) -> Option<ScriptPlugin> {
 
     let mut engine = Engine::new();
     // Sandbox limits (plan §11: fuel/epoch-style runaway bounds).
+    //
+    // Expression depth is pinned rather than left to Rhai's default, which is *halved in debug
+    // builds* (16 inside a function vs 32 in release). Leaving it implicit means a plugin that
+    // compiles against a released `lmn` fails to load under `cargo run` — a difference no plugin
+    // author could diagnose. These are Rhai's release defaults, applied to every profile.
+    engine.set_max_expr_depths(64, 32);
     engine.set_max_operations(2_000_000);
     engine.set_max_call_levels(64);
     engine.set_max_string_size(2_000_000);
@@ -131,6 +142,12 @@ fn load_one(dir: &Path) -> Option<ScriptPlugin> {
         builder = builder.panel(p.id.clone(), p.title.clone(), loc);
         panel_ids.push(p.id.clone());
     }
+    let mut viewer_ids = Vec::new();
+    for v in &manifest.viewers {
+        let exts: Vec<&str> = v.extensions.iter().map(String::as_str).collect();
+        builder = builder.viewer(v.id.clone(), v.title.clone(), &exts);
+        viewer_ids.push(v.id.clone());
+    }
     for k in &manifest.keybindings {
         builder = builder.keybinding(k.chord.clone(), k.command.clone());
     }
@@ -144,6 +161,7 @@ fn load_one(dir: &Path) -> Option<ScriptPlugin> {
         ast,
         command_ids,
         panel_ids,
+        viewer_ids,
     })
 }
 
@@ -195,6 +213,54 @@ impl Plugin for ScriptPlugin {
                 let content = lines_to_panel(lines);
                 host.set_panel(panel_id, content);
             }
+        }
+    }
+
+    /// Render a manifest-declared viewer by calling the script's `render_viewer(id, ctx)`, whose
+    /// returned array of strings becomes the tab's rows.
+    ///
+    /// Two capability gates, matching the action dispatcher's: publishing needs `ui`, and the
+    /// file's bytes are handed over only with `fs:read` — a script with neither gets the path
+    /// string and nothing else. Rhai cannot reach the filesystem itself, so this really is the
+    /// only way for a guest viewer to see file content.
+    fn render_viewer(
+        &mut self,
+        viewer_id: &str,
+        doc: editor_core::DocId,
+        path: &std::path::Path,
+        host: &mut dyn Host,
+    ) {
+        if !self.viewer_ids.iter().any(|v| v == viewer_id) || !self.has_cap("ui") {
+            return;
+        }
+        let mut ctx = Self::build_ctx(host);
+        ctx.insert("path".into(), path.to_string_lossy().into_owned().into());
+        if self.has_cap("fs:read") {
+            let text = std::fs::read(path)
+                .map(|bytes| {
+                    let end = bytes.len().min(SCRIPT_VIEWER_BYTES);
+                    String::from_utf8_lossy(&bytes[..end]).into_owned()
+                })
+                .unwrap_or_default();
+            ctx.insert("text".into(), text.into());
+        }
+        let mut scope = Scope::new();
+        let result: Result<Dynamic, _> = self.engine.call_fn(
+            &mut scope,
+            &self.ast,
+            "render_viewer",
+            (viewer_id.to_string(), ctx),
+        );
+        match result {
+            Ok(value) => {
+                if let Some(lines) = value.try_cast::<Array>() {
+                    host.set_viewer_content(doc, lines_to_viewer(lines));
+                }
+            }
+            Err(_) => host.set_viewer_content(
+                doc,
+                crate::viewer::ViewerContent::status_only(format!("[{}] viewer error", self.id)),
+            ),
         }
     }
 

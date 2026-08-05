@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crate::contribution::{
     CommandSpec, Contributions, KeybindingSpec, LanguageSpec, MenuItemSpec, PanelSpec,
-    StatusItemSpec,
+    StatusItemSpec, ViewerSpec,
 };
 use crate::event::Event;
 use crate::host::Host;
@@ -38,6 +38,22 @@ pub trait Plugin {
 
     /// (Re)render one of this plugin's panels into the host.
     fn render_panel(&mut self, _panel_id: &str, _host: &mut dyn Host) {}
+
+    /// (Re)render one of this plugin's [`crate::ViewerSpec`] viewers for the tab `doc`, which is
+    /// showing `path`. Publish the result with [`Host::set_viewer_content`]. Called when the tab
+    /// opens and again whenever the file changes on disk.
+    ///
+    /// The plugin reads the file itself (it owns any format dependency); the app has already
+    /// decided *that* this file goes to this viewer. Implementations must bound their work — a
+    /// viewer is asked to render a file of arbitrary size on the UI thread.
+    fn render_viewer(
+        &mut self,
+        _viewer_id: &str,
+        _doc: editor_core::DocId,
+        _path: &std::path::Path,
+        _host: &mut dyn Host,
+    ) {
+    }
 
     /// A row in one of this plugin's panels was activated (clicked / Enter).
     fn on_panel_activate(&mut self, _panel_id: &str, _payload: &str, _host: &mut dyn Host) {}
@@ -86,10 +102,13 @@ pub struct Registry {
     keybindings: Vec<KeybindingSpec>,
     languages: Vec<LanguageSpec>,
     menu_items: Vec<MenuItemSpec>,
+    viewers: Vec<ViewerSpec>,
     /// command id -> owning plugin index.
     command_owner: HashMap<String, usize>,
     /// panel id -> owning plugin index.
     panel_owner: HashMap<String, usize>,
+    /// viewer id -> owning plugin index.
+    viewer_owner: HashMap<String, usize>,
 }
 
 impl Registry {
@@ -106,8 +125,10 @@ impl Registry {
             keybindings: Vec::new(),
             languages: Vec::new(),
             menu_items: Vec::new(),
+            viewers: Vec::new(),
             command_owner: HashMap::new(),
             panel_owner: HashMap::new(),
+            viewer_owner: HashMap::new(),
         };
         for plugin in plugins {
             reg.add(plugin);
@@ -125,6 +146,10 @@ impl Registry {
         for p in contrib.panels {
             self.panel_owner.insert(p.id.clone(), idx);
             self.panels.push(p);
+        }
+        for v in contrib.viewers {
+            self.viewer_owner.insert(v.id.clone(), idx);
+            self.viewers.push(v);
         }
         self.status_items.extend(contrib.status_items);
         self.keybindings.extend(contrib.keybindings);
@@ -180,6 +205,46 @@ impl Registry {
 
     pub fn menu_items(&self) -> &[MenuItemSpec] {
         &self.menu_items
+    }
+
+    pub fn viewers(&self) -> &[ViewerSpec] {
+        &self.viewers
+    }
+
+    /// All contributed viewer ids.
+    pub fn viewer_ids(&self) -> impl Iterator<Item = String> + '_ {
+        self.viewers.iter().map(|v| v.id.clone())
+    }
+
+    /// The viewer claiming file extension `ext` (dot-free, case-insensitive), if any. First
+    /// registration wins, so the claim is deterministic in plugin load order — and disabling
+    /// the owning plugin removes the claim with it, falling the file back to the binary notice.
+    pub fn viewer_for_extension(&self, ext: &str) -> Option<&ViewerSpec> {
+        self.viewers.iter().find(|v| v.claims(ext))
+    }
+
+    /// The viewer with this id, if one is registered.
+    pub fn viewer(&self, viewer_id: &str) -> Option<&ViewerSpec> {
+        self.viewers.iter().find(|v| v.id == viewer_id)
+    }
+
+    /// Ask the plugin owning `viewer_id` to render `path` into the tab `doc`. Returns `false`
+    /// when no plugin owns that id (e.g. it was disabled since the tab opened).
+    pub fn render_viewer(
+        &mut self,
+        viewer_id: &str,
+        doc: editor_core::DocId,
+        path: &std::path::Path,
+        host: &mut dyn Host,
+    ) -> bool {
+        let Some(&idx) = self.viewer_owner.get(viewer_id) else {
+            return false;
+        };
+        let Some(plugin) = self.plugins.get_mut(idx) else {
+            return false;
+        };
+        plugin.render_viewer(viewer_id, doc, path, host);
+        true
     }
 
     /// Look up a command's title (for the palette).
@@ -354,6 +419,94 @@ mod tests {
             self.saw = true;
             key.ctrl && key.code == crate::input::KeyCode::Char('d')
         }
+    }
+
+    /// Contributes two viewers: one claiming `.xyz`, one explicit-open-only.
+    struct Viewers;
+    impl Plugin for Viewers {
+        fn id(&self) -> &str {
+            "viewers"
+        }
+        fn contributions(&self) -> Contributions {
+            Contributions::builder()
+                .viewer("v.xyz", "XYZ Viewer", &["xyz", "XyZ2"])
+                .viewer("v.explicit", "Explicit", &[])
+                .build()
+        }
+        fn render_viewer(
+            &mut self,
+            viewer_id: &str,
+            doc: editor_core::DocId,
+            _path: &std::path::Path,
+            host: &mut dyn Host,
+        ) {
+            host.set_viewer_content(
+                doc,
+                crate::viewer::ViewerContent::status_only(format!("rendered {viewer_id}")),
+            );
+        }
+    }
+
+    #[test]
+    fn viewers_are_claimable_by_extension_case_insensitively() {
+        let reg = Registry::with_plugins([Box::new(Viewers) as Box<dyn Plugin>]);
+        assert_eq!(
+            reg.viewer_for_extension("xyz").map(|v| v.id.as_str()),
+            Some("v.xyz")
+        );
+        // Case and a leading dot are both normalized away.
+        assert_eq!(
+            reg.viewer_for_extension("XYZ").map(|v| v.id.as_str()),
+            Some("v.xyz")
+        );
+        assert_eq!(
+            reg.viewer_for_extension(".xyz2").map(|v| v.id.as_str()),
+            Some("v.xyz")
+        );
+        // An empty extension list means "never picked automatically".
+        assert_eq!(reg.viewer_for_extension(""), None);
+        assert_eq!(reg.viewer_for_extension("pdf"), None);
+        assert!(reg.viewer("v.explicit").is_some());
+    }
+
+    #[test]
+    fn dropping_the_plugin_drops_its_viewer_claim() {
+        // This is the whole "disable a viewer" story: the claim lives with the plugin.
+        let reg = Registry::with_plugins([Box::new(Dummy) as Box<dyn Plugin>]);
+        assert!(reg.viewer_for_extension("xyz").is_none());
+        assert_eq!(reg.viewer_ids().count(), 0);
+    }
+
+    #[test]
+    fn render_viewer_routes_to_the_owner_and_reports_an_unknown_id() {
+        let mut reg = Registry::with_plugins([Box::new(Viewers) as Box<dyn Plugin>]);
+        let mut host = NoopHost::new();
+        let doc = host.ws.open_document(editor_core::Document::from_str(""));
+        assert!(reg.render_viewer("v.xyz", doc, std::path::Path::new("a.xyz"), &mut host));
+        // An id no plugin owns returns false, so the caller can say so rather than showing a
+        // permanently empty pane.
+        assert!(!reg.render_viewer("nope", doc, std::path::Path::new("a.xyz"), &mut host));
+    }
+
+    #[test]
+    fn the_first_registered_viewer_wins_a_contested_extension() {
+        struct Other;
+        impl Plugin for Other {
+            fn id(&self) -> &str {
+                "other"
+            }
+            fn contributions(&self) -> Contributions {
+                Contributions::builder()
+                    .viewer("other.xyz", "Other", &["xyz"])
+                    .build()
+            }
+        }
+        let reg = Registry::with_plugins([Box::new(Viewers) as Box<dyn Plugin>, Box::new(Other)]);
+        assert_eq!(
+            reg.viewer_for_extension("xyz").map(|v| v.id.as_str()),
+            Some("v.xyz"),
+            "resolution is deterministic in load order"
+        );
     }
 
     #[test]

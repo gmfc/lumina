@@ -28,6 +28,9 @@ impl App {
             .workspace
             .documents
             .iter()
+            // Degraded mode is excluded here rather than at the send: `didOpen` ships the whole
+            // buffer over stdio, and every keystroke would then ship a fresh copy.
+            .filter(|(_, d)| !d.large)
             .filter_map(|(id, d)| Some((id, d.path.clone()?, d.language.clone()?, d.revision)))
             .collect();
         for (id, path, lang, rev) in docs {

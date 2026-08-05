@@ -32,25 +32,25 @@ impl App {
         // `Host::commands` (the registry is unreachable behind the split-borrow wall).
         editor.command_catalog = command_catalog(&registry);
 
+        // Startup opens go through the same size/binary/viewer policy as every later open, so
+        // `lmn big.pdf` explains itself instead of stalling — and so a PDF left in a saved
+        // session can't re-freeze the editor on every subsequent launch of that project.
+        let limits = config.file_limits();
         if let Some(file) = open_file {
-            match files::load(&file) {
-                Ok(mut doc) => {
-                    doc.set_caret(0);
-                    editor.workspace.open_document(doc);
-                }
-                Err(e) => {
-                    editor.status_message = Some(format!("Could not open {}: {e}", file.display()));
-                }
+            if let Err(e) = open_at_startup(&mut editor, &mut registry, &file, &limits, 0, 0) {
+                editor.status_message = Some(format!("Could not open {}: {e}", file.display()));
             }
         } else if let Some(session) = crate::session::load(&editor.workspace.root) {
             // Restore the previous session for this project root (plan §6).
             for entry in &session.files {
-                if let Ok(mut doc) = files::load(&entry.path) {
-                    let pos = doc.clamp(entry.cursor);
-                    doc.set_caret(pos);
-                    doc.view.scroll_line = entry.scroll;
-                    editor.workspace.open_document(doc);
-                }
+                let _ = open_at_startup(
+                    &mut editor,
+                    &mut registry,
+                    &entry.path,
+                    &limits,
+                    entry.cursor,
+                    entry.scroll,
+                );
             }
             editor.workspace.focus_tab(
                 session
@@ -355,6 +355,46 @@ impl App {
             .collect();
         self.lsp.restart_langs().any(|lang| open.contains(lang))
     }
+}
+
+/// Open one path during construction, applying the *same* policy `App::open_path` applies:
+/// a plugin viewer claim wins, else a header probe decides between a real buffer and a notice
+/// tab. Free-standing because `App` doesn't exist yet at this point in `App::new`.
+///
+/// `cursor`/`scroll` restore a session entry's position and are ignored for non-text tabs.
+/// Returns the IO error only when the file couldn't be probed at all; a *refusal* is a
+/// successful open of a notice tab, not an error.
+fn open_at_startup(
+    editor: &mut EditorState,
+    registry: &mut Registry,
+    path: &std::path::Path,
+    limits: &files::Limits,
+    cursor: usize,
+    scroll: usize,
+) -> Result<()> {
+    if let Some(spec) = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .and_then(|ext| registry.viewer_for_extension(ext))
+    {
+        let (id, title) = (spec.id.clone(), spec.title.clone());
+        let doc = editor.open_viewer_tab(path, &id, &title);
+        registry.render_viewer(&id, doc, path, editor);
+        return Ok(());
+    }
+    match files::open(path, limits)? {
+        files::Opened::Text(doc) => {
+            let mut doc = *doc;
+            let pos = doc.clamp(cursor);
+            doc.set_caret(pos);
+            doc.view.scroll_line = scroll;
+            editor.workspace.open_document(doc);
+        }
+        files::Opened::Refused(refusal) => {
+            editor.open_notice_tab(path, refusal);
+        }
+    }
+    Ok(())
 }
 
 /// Status line shown when the user config exists but fails to parse: the settings fall back

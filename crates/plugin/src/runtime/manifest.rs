@@ -20,6 +20,15 @@ pub(crate) struct RawPanel {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct RawViewer {
+    pub id: String,
+    pub title: String,
+    /// Dot-free file extensions this viewer claims. Empty ⇒ explicit-open only.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct RawKey {
     pub chord: String,
     pub command: String,
@@ -42,6 +51,8 @@ pub(crate) struct Manifest {
     #[serde(default)]
     pub panels: Vec<RawPanel>,
     #[serde(default)]
+    pub viewers: Vec<RawViewer>,
+    #[serde(default)]
     pub keybindings: Vec<RawKey>,
 }
 
@@ -58,10 +69,24 @@ pub(super) fn panel_from_map(map: &Map) -> PanelContent {
 }
 
 pub(super) fn lines_to_panel(lines: Array) -> PanelContent {
-    let lines = lines
+    PanelContent {
+        lines: to_lines(lines),
+        selected: 0,
+    }
+}
+
+pub(super) fn lines_to_viewer(lines: Array) -> crate::viewer::ViewerContent {
+    crate::viewer::ViewerContent {
+        status: None,
+        lines: to_lines(lines),
+    }
+}
+
+/// One unstyled [`PanelLine`] per string a script returned; non-strings are dropped.
+fn to_lines(lines: Array) -> Vec<PanelLine> {
+    lines
         .into_iter()
         .filter_map(|d| d.into_string().ok())
         .map(|s| PanelLine::new(vec![Span::plain(s)]))
-        .collect();
-    PanelContent { lines, selected: 0 }
+        .collect()
 }

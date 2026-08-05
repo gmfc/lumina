@@ -56,6 +56,113 @@ fn external_plugin_draws_a_panel() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Build a project dir holding an external plugin plus a file with a chosen name/contents.
+fn project_with_viewer(
+    id: &str,
+    manifest: &str,
+    script: &str,
+    file_name: &str,
+    contents: &str,
+) -> (PathBuf, PathBuf) {
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("lumina_viewer_{}_{}", std::process::id(), n));
+    let pdir = dir.join(".lumina").join("plugins").join(id);
+    std::fs::create_dir_all(&pdir).unwrap();
+    std::fs::write(pdir.join("plugin.toml"), manifest).unwrap();
+    std::fs::write(pdir.join("main.rhai"), script).unwrap();
+    let file = dir.join(file_name);
+    std::fs::write(&file, contents).unwrap();
+    (dir, file)
+}
+
+/// The rendered rows of the active viewer tab.
+fn viewer_rows(app: &App) -> Vec<String> {
+    match app.editor.active_tab_view() {
+        Some(crate::editor::TabView::Viewer(v)) => v
+            .content
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect())
+            .collect(),
+        other => panic!("expected a viewer tab, got {other:?}"),
+    }
+}
+
+#[test]
+fn external_plugin_contributes_a_file_viewer() {
+    // The external tier reaches the viewer seam through the same contribution a built-in uses.
+    let manifest = "id = \"upper\"\ncapabilities = [\"ui\", \"fs:read\"]\n\
+                    [[viewers]]\nid = \"upper.view\"\ntitle = \"Upper\"\nextensions = [\"widget\"]\n";
+    let script = "fn render_viewer(id, ctx) { [ ctx.text.to_upper(), ctx.path ] }";
+    let (dir, file) = project_with_viewer("upper", manifest, script, "a.widget", "hello");
+    let app = app_with(&file);
+
+    assert!(app.registry.viewer_ids().any(|v| v == "upper.view"));
+    let rows = viewer_rows(&app);
+    assert_eq!(rows[0], "HELLO", "the script saw the file's bytes");
+    assert!(rows[1].ends_with("a.widget"), "and its path: {}", rows[1]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_viewer_without_the_ui_capability_publishes_nothing() {
+    let manifest = "id = \"upper\"\ncapabilities = [\"fs:read\"]\n\
+                    [[viewers]]\nid = \"upper.view\"\ntitle = \"Upper\"\nextensions = [\"widget\"]\n";
+    let script = "fn render_viewer(id, ctx) { [ \"should not appear\" ] }";
+    let (dir, file) = project_with_viewer("upper", manifest, script, "a.widget", "hello");
+    let app = app_with(&file);
+    assert!(
+        viewer_rows(&app).is_empty(),
+        "publishing a tab's content requires `ui`, like every other UI action"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_viewer_without_fs_read_never_sees_the_file_contents() {
+    // Rhai has no filesystem of its own, so this really is the only channel — deny it and the
+    // guest can render only from the path.
+    let manifest = "id = \"peek\"\ncapabilities = [\"ui\"]\n\
+                    [[viewers]]\nid = \"peek.view\"\ntitle = \"Peek\"\nextensions = [\"widget\"]\n";
+    let script =
+        "fn render_viewer(id, ctx) { [ if \"text\" in ctx { \"LEAKED\" } else { \"no text\" } ] }";
+    let (dir, file) = project_with_viewer("peek", manifest, script, "a.widget", "secret");
+    let app = app_with(&file);
+    assert_eq!(viewer_rows(&app), vec!["no text".to_string()]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_bundled_csv_viewer_example_aligns_its_columns() {
+    // Guards the shipped `plugins/csvview` example against Rhai/API drift — a broken example is
+    // worse than no example, since it is what plugin authors copy.
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/csvview");
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("lumina_csv_{}_{}", std::process::id(), n));
+    let pdir = dir.join(".lumina").join("plugins").join("csvview");
+    std::fs::create_dir_all(&pdir).unwrap();
+    for name in ["plugin.toml", "main.rhai"] {
+        std::fs::copy(src.join(name), pdir.join(name)).unwrap();
+    }
+    let file = dir.join("data.csv");
+    std::fs::write(&file, "name,qty\nwidget,3\nx,10\n").unwrap();
+
+    let app = app_with(&file);
+    let rows = viewer_rows(&app);
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert_eq!(rows.len(), 3, "one row per record: {rows:?}");
+    assert!(rows[0].starts_with("name"), "{rows:?}");
+    // Every row's second column starts at the same screen column — that's the whole point.
+    let second = |r: &str| r.len() - r.trim_start_matches(|c: char| c != ' ').trim_start().len();
+    assert_eq!(
+        second(&rows[1]),
+        second(&rows[2]),
+        "columns aligned: {rows:?}"
+    );
+}
+
 #[test]
 fn modal_keys_route_to_active_modal() {
     let path = temp_file("hello world");

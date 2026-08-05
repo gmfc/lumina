@@ -235,6 +235,15 @@ pub trait Plugin { /* declares Contributions, handles events */ }
   against runaway loops (plan §11) on `wasmi`. There is no privileged path — the
   self-hosting test asserts that disabling any built-in plugin removes exactly its
   contributions and nothing else, guarding invariant #3 across the whole feature set.
+- **New capability ⇒ new contribution kind, not new app code.** When the editor
+  needed to show files it can't edit (a PDF, a binary), the app gained a
+  `ViewerSpec` contribution — an extension claim plus
+  `Plugin::render_viewer` → `Host::set_viewer_content` — and the format knowledge
+  went into `editor-builtins` (`pdf`, `hexview`) beside the explorer. `lumina`
+  itself learns nothing about PDF; disabling the plugin removes the `.pdf` claim
+  with it. Viewers publish through the *existing* `PanelLine`/`Span` channel rather
+  than a second rendering vocabulary, and there is no port for writing bytes back,
+  so a viewer cannot become an editing path around invariant #1.
 
 Static vs dynamic dispatch: the registry stores `Vec<Box<dyn Plugin>>` (a
 heterogeneous collection — dynamic dispatch is the correct tool there). Hot,

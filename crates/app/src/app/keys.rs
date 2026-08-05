@@ -67,6 +67,16 @@ impl App {
             self.pending.clear();
             return true;
         }
+        // Notice / viewer tab: scrolling and Enter are consumed; text entry is swallowed so a
+        // placeholder buffer can never be typed into (and so become "dirty" over a real file).
+        // Un-owned chords still fall through, keeping Ctrl+W, Ctrl+P, and the palette reachable.
+        if self.editor.active_tab_view().is_some()
+            && self.editor.focus == Focus::Editor
+            && self.tab_view_key(key)
+        {
+            self.pending.clear();
+            return true;
+        }
         // Registry-contributed raw-key capturers (the `vim` plugin) get the last refusal before
         // chord resolution.
         self.capture_registry_key(key)
@@ -78,7 +88,10 @@ impl App {
     /// a consumed key so vim's queued commands (undo/save/quit via `Host::execute`) and edit events
     /// apply this tick.
     fn capture_registry_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        if self.editor.focus != Focus::Editor || self.settings_active() {
+        if self.editor.focus != Focus::Editor
+            || self.settings_active()
+            || self.editor.active_tab_view().is_some()
+        {
             return false;
         }
         let Some(pk) = to_plugin_key(key) else {
@@ -231,7 +244,11 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
         let single = self.pending.len() == 1;
         self.pending.clear();
-        if !(single && self.editor.focus == Focus::Editor) || self.settings_active() {
+        // A view tab's placeholder buffer must never take text: it is aimed at a real file.
+        if !(single && self.editor.focus == Focus::Editor)
+            || self.settings_active()
+            || self.editor.active_tab_view().is_some()
+        {
             return;
         }
         if let KeyCode::Char(c) = key.code {

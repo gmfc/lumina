@@ -11,6 +11,7 @@ mod explorer;
 mod files;
 mod find_search;
 mod idle_frames;
+mod large_files;
 mod lsp;
 mod mouse;
 mod palette_theme;

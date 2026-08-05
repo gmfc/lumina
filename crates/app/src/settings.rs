@@ -118,6 +118,27 @@ impl SettingsView {
             "Use polling instead of inotify (devcontainers / NFS mounts).",
             config.poll_watch,
         );
+        entries.push(Entry::Item(SettingItem {
+            key: "max_file_size_mb".into(),
+            label: "Max file size (MB)".into(),
+            description: "Files larger than this open as a notice you can override, not a buffer."
+                .into(),
+            widget: Widget::Number {
+                value: config.max_file_size_mb as i64,
+                min: 1,
+                max: 4096,
+            },
+        }));
+        entries.push(Entry::Item(SettingItem {
+            key: "large_file_mb".into(),
+            label: "Large file mode (MB)".into(),
+            description: "At this size a file still opens, but without syntax, git, or LSP.".into(),
+            widget: Widget::Number {
+                value: config.large_file_mb as i64,
+                min: 1,
+                max: 4096,
+            },
+        }));
 
         section(&mut entries, "Interface");
         entries.push(Entry::Item(SettingItem {
