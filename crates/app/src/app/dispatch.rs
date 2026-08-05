@@ -87,6 +87,7 @@ impl App {
             Command::CloseTab => self.request_close(self.editor.workspace.active_tab),
             Command::CloseAllTabs => self.close_all_tabs(),
             Command::ReopenClosedTab => self.reopen_closed_tab(),
+            Command::OpenAnyway => self.open_anyway(),
             Command::NextTab => self.cycle_tab(1),
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),

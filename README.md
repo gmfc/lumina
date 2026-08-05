@@ -21,7 +21,7 @@ Six crates (headless core, thin view — the Helix/VS Code split):
 | `editor-syntax` | tree-sitter parsing + highlight-query → capture spans (cached, viewport-only). |
 | `editor-lsp` | LSP client: JSON-RPC transport, UTF-16 position conversion, diagnostics. |
 | `editor-plugin` | The contribution API (traits + registries + event bus), the `Host` surface, and the external plugin runtime — the kernel that hosts plugins. |
-| `editor-builtins` | The core features implemented **as plugins** (the explorer). |
+| `editor-builtins` | The core features implemented **as plugins** (the explorer, the PDF/hex file viewers, …). |
 | `lumina` | The `lumina` binary: event loop, ratatui rendering, keymap, and wiring. |
 
 Everything is a command; a document holds a *set* of selections; features are plugins;
@@ -97,7 +97,7 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+Space` completions · `F12` go to definition · `Ctrl+F12` go to implementation ·
 `Shift+F12` find references · `Ctrl+Shift+O` document symbols · `F2` rename ·
 `Alt+J`/`Alt+K` next/prev git change · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
-`Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+Q` quit.
+`Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+Q` quit.
 
 ## Integrated terminal
 
@@ -145,6 +145,32 @@ chords fall through in Normal mode too, so `Ctrl+S`, `Ctrl+P`, `Ctrl+Shift+P`, e
 their usual thing. Not (yet) implemented: macros (`q`/`@`), marks, jump/change lists, tag
 objects (`it`/`at`), the `=`/`gq` reformat operators, and regex in `:s` (it's literal).
 
+## Large files, binary files, and viewers
+
+Opening a file no longer means reading it. lumina probes the header first — the size from the
+filesystem plus the first 8 KiB — and decides what kind of tab to give you:
+
+- **Text, under the limits** → an ordinary buffer, as before.
+- **Text, at or over `large_file_mb` (8 MB)** → still a buffer, but in **large-file mode**:
+  syntax highlighting, the git gutter, and the language server stay off, and the status bar says
+  so. A 200 MB log opens and scrolls instead of stalling the frame.
+- **Text, over `max_file_size_mb` (64 MB)** → a tab explaining the limit, with **Open Anyway**
+  (`file.openAnyway`, or `Enter`) if you meant it.
+- **Binary** → a tab naming the format ("PDF document", "PNG image", "ELF executable", …) and
+  its size. Binary refusals aren't overridable — those bytes can't round-trip through a text
+  buffer, so "open anyway" would corrupt the file on the first save. **`Ctrl+K Ctrl+H` opens a
+  hex view** instead, which works for any file.
+- **A file some plugin claims** → that plugin's viewer. `.pdf` opens in the built-in PDF
+  viewer, which extracts the document's text page by page (`.csv`/`.tsv` too, if you install
+  the `csvview` example).
+
+A notice or viewer tab behaves like any other tab — switch, reorder, close, restore with the
+session — but holds no text buffer, so nothing can write it back over the file it is showing.
+
+Viewers are a **plugin contribution**, not editor code: a plugin declares which extensions it
+claims and publishes styled rows for its tab. Disabling the `pdf` plugin hands `.pdf` straight
+back to the binary notice; nothing in `lumina` knows what a PDF is.
+
 ## Settings
 
 Prefer a UI? Open the **Settings** tab with `Ctrl+,` (or the command palette →
@@ -172,6 +198,8 @@ auto_indent = true          # copy indent on newline (brace-aware); dedent on a 
 trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from every line
 insert_final_newline = false      # on save, ensure the file ends with a single newline
 git_gutter = true           # per-line add/modify/delete change bar in the gutter (vs HEAD)
+max_file_size_mb = 64       # above this a file opens as a notice tab (with "Open Anyway")
+large_file_mb = 8           # at this size a file still opens, but with no syntax/git/LSP
 icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
 vim = false                 # start in Vim modal editing (Normal/Insert/Visual) — see "Vim mode"
 terminal_height = 12        # rows the terminal panel occupies when expanded
@@ -200,4 +228,24 @@ Two substrates run through the *same* contribution API:
 
 Both are **deny-by-default**: a plugin declares `capabilities` (`edit`, `ui`, `fs:read`) and
 can only take the actions it was granted. See `plugins/` for worked examples — `shout`, `todo`,
-`inspector` (Rhai) and `wasm-hello` (WebAssembly).
+`inspector`, `csvview` (Rhai) and `wasm-hello` (WebAssembly).
+
+Alongside commands, panels, keybindings, and menu items, a plugin can contribute a **file
+viewer**: a tab that renders a file the text editor can't. It declares the extensions it claims
+and publishes styled rows; the editor owns the tab, the scrolling, and the file-IO policy.
+
+```toml
+[[viewers]]
+id = "csvview.table"
+title = "CSV Table"
+extensions = ["csv", "tsv"]
+```
+
+```rhai
+fn render_viewer(id, ctx) {          // ctx.path always; ctx.text only with `fs:read`
+    ctx.text.split("\n")
+}
+```
+
+The built-in `pdf` and `hexview` plugins use exactly this contribution — there is no privileged
+path for them.

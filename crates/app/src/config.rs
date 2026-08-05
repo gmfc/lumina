@@ -25,6 +25,12 @@ pub struct Config {
     pub git_gutter: bool,
     /// Start with soft word-wrap on (toggle at runtime with Alt+Z / `view.toggleWrap`).
     pub line_wrap: bool,
+    /// Refuse to open text files larger than this many megabytes, showing an explanatory tab
+    /// with an "Open Anyway" escape hatch instead of stalling the UI on a multi-gigabyte read.
+    pub max_file_size_mb: u64,
+    /// At or above this many megabytes a file still opens, but in degraded mode: no syntax
+    /// highlighting, no git gutter, and nothing sent to a language server.
+    pub large_file_mb: u64,
     /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
     pub icons: bool,
     /// Start in Vim modal-editing mode (Normal/Insert/Visual). Off by default —
@@ -56,6 +62,8 @@ impl Default for Config {
             insert_final_newline: false,
             git_gutter: true,
             line_wrap: false,
+            max_file_size_mb: 64,
+            large_file_mb: 8,
             icons: false,
             vim: false,
             terminal_shell: None,
@@ -117,6 +125,11 @@ impl Config {
         !self.disabled_plugins.iter().any(|d| d == id)
     }
 
+    /// The file-size policy applied when opening a file, in bytes.
+    pub fn file_limits(&self) -> crate::files::Limits {
+        crate::files::Limits::from_mb(self.max_file_size_mb, self.large_file_mb)
+    }
+
     /// Serialize the current settings back to `path`, preserving any `[keys]`,
     /// `[lsp]`, and `[theme]` sections already there (the `[settings]` and
     /// `[plugins]` tables are rewritten from this value). Comments are not
@@ -129,7 +142,7 @@ impl Config {
             .unwrap_or_default();
 
         let mut settings = toml::Table::new();
-        let entries: [(&str, toml::Value); 13] = [
+        let entries: [(&str, toml::Value); 15] = [
             ("tab_width", (self.tab_width as i64).into()),
             ("sidebar_width", (self.sidebar_width as i64).into()),
             ("follow_mode", self.follow_mode.into()),
@@ -143,6 +156,8 @@ impl Config {
             ("insert_final_newline", self.insert_final_newline.into()),
             ("git_gutter", self.git_gutter.into()),
             ("line_wrap", self.line_wrap.into()),
+            ("max_file_size_mb", (self.max_file_size_mb as i64).into()),
+            ("large_file_mb", (self.large_file_mb as i64).into()),
             ("icons", self.icons.into()),
             ("vim", self.vim.into()),
             ("terminal_height", (self.terminal_height as i64).into()),
@@ -209,6 +224,15 @@ impl Config {
         }
         if let Some(b) = settings.get("line_wrap").and_then(|v| v.as_bool()) {
             self.line_wrap = b;
+        }
+        if let Some(n) = settings
+            .get("max_file_size_mb")
+            .and_then(|v| v.as_integer())
+        {
+            self.max_file_size_mb = n.clamp(1, 4096) as u64;
+        }
+        if let Some(n) = settings.get("large_file_mb").and_then(|v| v.as_integer()) {
+            self.large_file_mb = n.clamp(1, 4096) as u64;
         }
         if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
             self.icons = b;
@@ -328,6 +352,26 @@ mod tests {
         assert!(cfg.vim);
         let cfg = Config::from_toml_str("[settings]\nvim = false").unwrap();
         assert!(!cfg.vim);
+    }
+
+    #[test]
+    fn parses_and_clamps_the_file_size_settings() {
+        let cfg = Config::default();
+        assert_eq!(cfg.max_file_size_mb, 64);
+        assert_eq!(cfg.large_file_mb, 8);
+        assert_eq!(cfg.file_limits().max_bytes, 64 * 1024 * 1024);
+        assert_eq!(cfg.file_limits().large_bytes, 8 * 1024 * 1024);
+
+        let cfg =
+            Config::from_toml_str("[settings]\nmax_file_size_mb = 128\nlarge_file_mb = 2").unwrap();
+        assert_eq!(cfg.max_file_size_mb, 128);
+        assert_eq!(cfg.large_file_mb, 2);
+
+        // Out-of-range values clamp rather than disabling the guard by accident.
+        let cfg = Config::from_toml_str("[settings]\nmax_file_size_mb = 0\nlarge_file_mb = 999999")
+            .unwrap();
+        assert_eq!(cfg.max_file_size_mb, 1);
+        assert_eq!(cfg.large_file_mb, 4096);
     }
 
     #[test]

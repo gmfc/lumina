@@ -13,6 +13,18 @@ impl App {
         if !self.config.git_gutter {
             return;
         }
+        // Degraded mode (and view tabs): diffing the file against HEAD is O(file size), and a
+        // view tab's placeholder buffer isn't the file's content at all.
+        if self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .is_some_and(|d| d.large)
+            || self.editor.is_tab_view(id)
+        {
+            return;
+        }
         let root = self.editor.workspace.root.clone();
         if let Some(path) = self
             .editor

@@ -64,6 +64,10 @@ tree-sitter-go = "0.25"
 tree-sitter-toml-ng = "0.7"
 tree-sitter-md = "0.5"
 streaming-iterator = "0.1"
+# viewers
+# Pure-Rust DEFLATE (`rust_backend`, no C toolchain): PDF content streams are almost always
+# FlateDecode, so the pdf viewer can't read a real document without it.
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 # util
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

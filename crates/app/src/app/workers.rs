@@ -29,12 +29,14 @@ impl App {
         let had_pending = active_changed
             || !self.editor.pending_lsp_requests.is_empty()
             || !self.editor.pending_opens.is_empty()
+            || !self.editor.pending_viewers.is_empty()
             || !self.editor.pending_commands.is_empty()
             || !self.editor.pending_events.is_empty()
             || !self.editor.pending_locations.is_empty()
             || !self.editor.pending_workspace_edits.is_empty();
         self.drain_pending_lsp_requests();
         self.drain_pending_opens();
+        self.drain_pending_viewers();
         self.drain_pending_commands();
         self.broadcast_pending_events();
         // The following are drained *after* the broadcast so intents a plugin queued while reacting
@@ -67,6 +69,15 @@ impl App {
             if let Some(line) = line {
                 self.goto_line(line);
             }
+        }
+    }
+
+    /// Apply viewer opens queued via `Host::open_viewer` (a plugin only expresses intent; the app
+    /// owns file IO policy and the tab).
+    fn drain_pending_viewers(&mut self) {
+        let viewers: Vec<(PathBuf, String)> = std::mem::take(&mut self.editor.pending_viewers);
+        for (path, viewer_id) in viewers {
+            self.open_viewer_tab(&path, &viewer_id);
         }
     }
 
@@ -184,6 +195,17 @@ impl App {
         if self.config_path.as_deref() == Some(path) {
             self.reload_config();
             return;
+        }
+
+        // A viewer tab showing this file re-renders from the new bytes; a notice tab re-probes,
+        // so shrinking a file below the ceiling turns its notice into a real buffer on reopen.
+        // Neither may take the text-reload path below — their buffer is an empty placeholder,
+        // and "reloading" it would replace the tab's contents with the file's raw bytes.
+        if let Some(id) = self.editor.workspace.find_by_path(path) {
+            if self.editor.is_tab_view(id) {
+                self.render_viewer_tab(id);
+                return;
+            }
         }
 
         // Not one of our open docs → refresh the tree and move on.

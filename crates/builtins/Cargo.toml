@@ -20,6 +20,7 @@ perfbench = []
 [dependencies]
 editor-core = { path = "../core" }
 editor-plugin = { path = "../plugin" }
+flate2.workspace = true
 ignore.workspace = true
 regex.workspace = true
 grep-searcher.workspace = true

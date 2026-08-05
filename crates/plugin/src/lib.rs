@@ -19,13 +19,14 @@ pub mod picker;
 pub mod registry;
 pub mod runtime;
 pub mod terminal;
+pub mod viewer;
 pub mod vim;
 pub(crate) mod wasm;
 
 pub use contribution::CommandSpec;
 pub use contribution::{
     Contributions, KeybindingSpec, LanguageSpec, MenuGroup, MenuItemSpec, MenuWhen, PanelLocation,
-    PanelSpec, StatusItemSpec, ThemeSpec,
+    PanelSpec, StatusItemSpec, ThemeSpec, ViewerSpec,
 };
 pub use decoration::{Decoration, DecorationSet, GutterMark, VirtualText};
 pub use event::Event;
@@ -40,4 +41,5 @@ pub use overlay::{Popup, PopupRow, Prompt, PromptField, PromptPlacement, PromptT
 pub use picker::{CommandInfo, PickerItem, PickerRequest};
 pub use registry::{Plugin, Registry};
 pub use terminal::{TerminalId, TerminalView};
+pub use viewer::ViewerContent;
 pub use vim::{VimMode, VimView};

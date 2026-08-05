@@ -11,6 +11,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("tab.close", "Tab: Close"),
         ("tab.closeAll", "Tab: Close All"),
         ("tab.reopenClosed", "Tab: Reopen Closed Editor"),
+        ("file.openAnyway", "File: Open Anyway (ignore size limit)"),
         ("tab.next", "Tab: Next"),
         ("tab.prev", "Tab: Previous"),
         ("edit.undo", "Edit: Undo"),

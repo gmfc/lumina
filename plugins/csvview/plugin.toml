@@ -1,0 +1,17 @@
+# Example external plugin contributing a **file viewer** (plan §6A): a `.csv`/`.tsv` file opens
+# as an aligned table instead of a text buffer.
+#
+# The same `[[viewers]]` contribution a built-in viewer (pdf, hexview) declares — external and
+# native plugins take the same road, with no privileged back door.
+#
+# Deny-by-default: `ui` lets it publish the tab's rows, and `fs:read` is what makes the host hand
+# it the file's bytes at all. Without `fs:read` the script sees only the path.
+id = "csvview"
+name = "CSV Table Viewer"
+entry = "main.rhai"
+capabilities = ["ui", "fs:read"]
+
+[[viewers]]
+id = "csvview.table"
+title = "CSV Table"
+extensions = ["csv", "tsv"]

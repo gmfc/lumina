@@ -39,6 +39,53 @@ pub(crate) struct LspPanelUi {
     pub(crate) scroll: u16,
 }
 
+/// A tab that renders something other than the (empty, placeholder) buffer backing it.
+///
+/// This generalizes the pattern the Settings tab already uses: keep the tab in the normal
+/// machinery — so switching, closing, reordering, the tab bar, and session restore all work
+/// unchanged — and hang the real content off a side table keyed by the placeholder's `DocId`.
+///
+/// The placeholder keeps the file's path (that's what makes `find_by_path` de-duplicate tabs and
+/// the tab bar name them), which makes these tabs *dangerous by default*: an empty buffer aimed
+/// at a 40 MB PDF would truncate it on the first Ctrl+S. Every write and reload path therefore
+/// checks [`EditorState::is_tab_view`] before touching a document — see `App::save_active`,
+/// `App::save_all`, `App::on_file_changed`, and `App::apply_workspace_edit`.
+#[derive(Debug, Clone)]
+pub(crate) enum TabView {
+    /// A file lumina declined to load as text, with the reason to show the user.
+    Notice {
+        path: PathBuf,
+        refusal: crate::files::Refusal,
+    },
+    /// A plugin-owned viewer rendering a file lumina itself can't display.
+    Viewer(ViewerTab),
+}
+
+impl TabView {
+    /// The file this tab is about.
+    pub(crate) fn path(&self) -> &std::path::Path {
+        match self {
+            TabView::Notice { path, .. } => path,
+            TabView::Viewer(v) => &v.path,
+        }
+    }
+}
+
+/// A viewer tab: which viewer owns it, what it is showing, and the content that viewer published.
+#[derive(Debug, Clone)]
+pub(crate) struct ViewerTab {
+    /// The [`editor_plugin::ViewerSpec`] id whose plugin renders this tab.
+    pub(crate) viewer_id: String,
+    /// Human title of the viewer, for the tab header.
+    pub(crate) title: String,
+    pub(crate) path: PathBuf,
+    /// Published by the owning plugin through `Host::set_viewer_content`. Empty until it has
+    /// rendered once — the renderer draws the header either way, never a blank pane.
+    pub(crate) content: editor_plugin::ViewerContent,
+    /// First visible body row (the app owns scrolling; viewers never see the viewport).
+    pub(crate) scroll: usize,
+}
+
 /// One entry in a right-click context menu: a labelled action that runs `command`. `first_in_group`
 /// marks the first item of a group so the renderer draws a divider above it.
 #[derive(Debug, Clone)]
@@ -164,6 +211,14 @@ pub(crate) struct EditorState {
     /// so the `clipboard` plugin can reach it through `Host::clipboard_read`/`clipboard_write`
     /// across the split-borrow wall (the plugin only sees `&mut EditorState`).
     pub(crate) clipboard: crate::clipboard::Clipboard,
+    /// Tabs rendering something other than their placeholder buffer (a refusal notice, or a
+    /// plugin viewer), keyed by that buffer's id. Absent ⇒ an ordinary text tab. Lives here
+    /// rather than on `App` because plugins publish viewer content through `Host`, which is
+    /// implemented on `EditorState`.
+    pub(crate) tab_views: HashMap<DocId, TabView>,
+    /// Viewer tabs requested via `Host::open_viewer`: `(path, viewer_id)`, opened by `App` (it
+    /// owns file IO policy) on the next drain — the same effect-queue idiom as `pending_opens`.
+    pub(crate) pending_viewers: Vec<(PathBuf, String)>,
 }
 
 impl EditorState {
@@ -206,7 +261,75 @@ impl EditorState {
             vim_view: None,
             page_height: 20,
             clipboard: crate::clipboard::Clipboard::new(),
+            tab_views: HashMap::new(),
+            pending_viewers: Vec::new(),
         }
+    }
+
+    /// True when `id` backs a non-text tab (a refusal notice or a plugin viewer). Every path
+    /// that writes to disk, reloads from disk, or edits a buffer by id consults this first: the
+    /// placeholder document is empty, so treating one as a text buffer destroys the file.
+    pub(crate) fn is_tab_view(&self, id: DocId) -> bool {
+        self.tab_views.contains_key(&id)
+    }
+
+    /// The active tab's view, when it isn't an ordinary text tab.
+    pub(crate) fn active_tab_view(&self) -> Option<&TabView> {
+        self.tab_views.get(&self.workspace.active_doc()?)
+    }
+
+    pub(crate) fn active_tab_view_mut(&mut self) -> Option<&mut TabView> {
+        let id = self.workspace.active_doc()?;
+        self.tab_views.get_mut(&id)
+    }
+
+    /// Open the "lumina can't show this as text" tab for a refused file.
+    pub(crate) fn open_notice_tab(
+        &mut self,
+        path: &std::path::Path,
+        refusal: crate::files::Refusal,
+    ) -> DocId {
+        let path = crate::files::absolute_path(path);
+        let id = self.open_placeholder_tab(&path);
+        self.tab_views.insert(id, TabView::Notice { path, refusal });
+        self.focus = Focus::Editor;
+        id
+    }
+
+    /// Open an (empty) viewer tab. The owning plugin fills it in on the next
+    /// [`editor_plugin::Registry::render_viewer`]; until then the header renders and the body is
+    /// blank, never a stuck frame.
+    pub(crate) fn open_viewer_tab(
+        &mut self,
+        path: &std::path::Path,
+        viewer_id: &str,
+        title: &str,
+    ) -> DocId {
+        let path = crate::files::absolute_path(path);
+        let id = self.open_placeholder_tab(&path);
+        self.tab_views.insert(
+            id,
+            TabView::Viewer(ViewerTab {
+                viewer_id: viewer_id.to_string(),
+                title: title.to_string(),
+                path,
+                content: editor_plugin::ViewerContent::default(),
+                scroll: 0,
+            }),
+        );
+        self.focus = Focus::Editor;
+        id
+    }
+
+    /// The empty buffer backing a non-text tab. It carries the file's path so `find_by_path`
+    /// de-duplicates tabs and the tab bar names it — which is exactly why every write path must
+    /// check [`Self::is_tab_view`] before touching a document. It deliberately has **no**
+    /// language, which keeps the syntax highlighter and the LSP layer off it for free.
+    fn open_placeholder_tab(&mut self, path: &std::path::Path) -> DocId {
+        let mut doc = Document::from_str("");
+        doc.path = Some(path.to_path_buf());
+        doc.language = None;
+        self.workspace.open_document(doc)
     }
 
     /// Recompute the bracket-match highlight for the primary caret of the active document.
@@ -232,7 +355,9 @@ impl EditorState {
         let Some((lang, rev, first, last, rope, edits, edits_valid)) =
             self.workspace.documents.get_mut(id).and_then(|doc| {
                 let lang = doc.language.clone()?;
-                if !editor_syntax::is_supported(&lang) {
+                // Degraded mode: a tree-sitter parse of a 200 MB buffer would stall the frame,
+                // and the first parse is unavoidable even though highlighting is viewport-only.
+                if doc.large || !editor_syntax::is_supported(&lang) {
                     return None;
                 }
                 let first = doc.view.scroll_line;

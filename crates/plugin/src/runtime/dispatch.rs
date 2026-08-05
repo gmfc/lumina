@@ -10,7 +10,7 @@ use super::ScriptPlugin;
 use crate::Host;
 
 impl ScriptPlugin {
-    fn has_cap(&self, cap: &str) -> bool {
+    pub(super) fn has_cap(&self, cap: &str) -> bool {
         self.capabilities.iter().any(|c| c == cap)
     }
 

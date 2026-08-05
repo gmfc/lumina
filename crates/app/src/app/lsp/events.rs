@@ -387,6 +387,11 @@ impl App {
             let Some(id) = self.editor.workspace.find_by_path(&path) else {
                 continue;
             };
+            // A notice/viewer tab's buffer is an empty placeholder aimed at a real file; applying
+            // a rename edit to it would make it dirty and then writable over that file.
+            if self.editor.is_tab_view(id) {
+                continue;
+            }
             let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
                 continue;
             };

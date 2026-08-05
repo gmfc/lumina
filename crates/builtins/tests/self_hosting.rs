@@ -72,6 +72,14 @@ const GIT_COMMAND: &str = "git.nextHunk";
 const THEME_ID: &str = "theme";
 const THEME_COMMAND: &str = "view.toggleTheme";
 
+// The file viewers (over the ViewerSpec contribution + set_viewer_content port). `pdf` claims
+// the `.pdf` extension; `hexview` claims none and is opened explicitly by its own command.
+const PDF_ID: &str = "pdf";
+const PDF_VIEWER: &str = "pdf.document";
+const HEXVIEW_ID: &str = "hexview";
+const HEXVIEW_COMMAND: &str = "view.openAsHex";
+const HEXVIEW_VIEWER: &str = "hexview.binary";
+
 #[test]
 fn builtin_contributes_through_the_public_api() {
     let reg = Registry::with_plugins(all_builtins());
@@ -406,4 +414,65 @@ fn migrated_plugins_contribute_their_menu_items() {
             "disabling {id} must remove its menu item — otherwise it is hardcoded"
         );
     }
+}
+
+#[test]
+fn viewers_contribute_through_the_public_api() {
+    let reg = Registry::with_plugins(all_builtins());
+    assert!(
+        reg.viewer_ids().any(|id| id == PDF_VIEWER),
+        "pdf viewer missing — is it wired as a ViewerSpec contribution?"
+    );
+    assert!(
+        reg.viewer_ids().any(|id| id == HEXVIEW_VIEWER),
+        "hex viewer missing — is it wired as a ViewerSpec contribution?"
+    );
+    assert!(
+        reg.command_ids().any(|id| id == HEXVIEW_COMMAND),
+        "the hex viewer's open command missing — is it wired as a plugin?"
+    );
+    // The extension claim is what routes a `.pdf` to a viewer tab instead of a text buffer.
+    assert_eq!(
+        reg.viewer_for_extension("pdf").map(|v| v.id.as_str()),
+        Some(PDF_VIEWER),
+        "the pdf plugin must claim `.pdf` through its contribution, not through app code"
+    );
+}
+
+#[test]
+fn disabling_the_pdf_viewer_removes_only_its_contributions() {
+    let full = Registry::with_plugins(all_builtins());
+    let before: Vec<String> = full.viewer_ids().collect();
+
+    let reduced = Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != PDF_ID));
+
+    assert!(
+        !reduced.viewer_ids().any(|id| id == PDF_VIEWER),
+        "pdf viewer still present after disabling the plugin — it is hardcoded, not a plugin"
+    );
+    assert!(
+        reduced.viewer_for_extension("pdf").is_none(),
+        "the `.pdf` claim must vanish with the plugin, handing the file back to the notice tab"
+    );
+    for id in before.iter().filter(|id| id.as_str() != PDF_VIEWER) {
+        assert!(
+            reduced.viewer_ids().any(|v| &v == id),
+            "disabling the pdf plugin wrongly removed unrelated viewer `{id}`"
+        );
+    }
+}
+
+#[test]
+fn disabling_hexview_removes_only_its_contributions() {
+    assert_disabling_isolates(HEXVIEW_ID, HEXVIEW_COMMAND, "view.openAsHex");
+    let reduced =
+        Registry::with_plugins(all_builtins().into_iter().filter(|p| p.id() != HEXVIEW_ID));
+    assert!(
+        !reduced.viewer_ids().any(|id| id == HEXVIEW_VIEWER),
+        "hex viewer still present after disabling the plugin"
+    );
+    assert!(
+        reduced.viewer_for_extension("pdf").is_some(),
+        "disabling hexview must not disturb the pdf viewer's claim"
+    );
 }

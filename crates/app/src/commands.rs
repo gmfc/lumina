@@ -70,6 +70,7 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "tab.close" => Command::CloseTab,
         "tab.closeAll" => Command::CloseAllTabs,
         "tab.reopenClosed" => Command::ReopenClosedTab,
+        "file.openAnyway" => Command::OpenAnyway,
         "tab.next" => Command::NextTab,
         "tab.prev" => Command::PrevTab,
         "tab.goto1" => Command::GotoTab(0),

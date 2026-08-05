@@ -164,6 +164,33 @@ impl Host for EditorState {
         self.panels.insert(panel_id.to_string(), content);
     }
 
+    /// Store what a viewer published, and reset the scroll — a re-render means the content
+    /// changed (the file was rewritten on disk), so the old offset describes different rows.
+    /// Silently ignored for a `doc` that isn't a viewer tab: a plugin may publish after the user
+    /// closed the tab, and that is not an error worth surfacing.
+    fn set_viewer_content(&mut self, doc: DocId, content: editor_plugin::ViewerContent) {
+        if let Some(super::TabView::Viewer(v)) = self.tab_views.get_mut(&doc) {
+            v.content = content;
+            v.scroll = 0;
+        }
+    }
+
+    fn open_viewer(&mut self, path: &Path, viewer_id: &str) {
+        self.pending_viewers
+            .push((path.to_path_buf(), viewer_id.to_string()));
+    }
+
+    /// The active tab's path, reaching into `tab_views` first so a viewer or notice tab — which
+    /// has no meaningful text buffer — still answers. This is what lets the hex viewer offer
+    /// itself for the binary the user is currently looking at.
+    fn active_path(&self) -> Option<std::path::PathBuf> {
+        let id = self.workspace.active_doc()?;
+        if let Some(view) = self.tab_views.get(&id) {
+            return Some(view.path().to_path_buf());
+        }
+        self.workspace.documents.get(id)?.path.clone()
+    }
+
     fn set_status(&mut self, item_id: &str, text: String) {
         self.status_items.insert(item_id.to_string(), text);
     }
