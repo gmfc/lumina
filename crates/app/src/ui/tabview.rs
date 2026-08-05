@@ -125,7 +125,7 @@ fn render_viewer(f: &mut Frame, area: Rect, v: &ViewerTab) {
         .unwrap_or_default();
     let rows = viewer_body_rows(area.height);
     let total = v.content.lines.len();
-    let scroll = v.scroll.min(total.saturating_sub(1).max(0));
+    let scroll = v.scroll.min(total.saturating_sub(1));
 
     let buf = f.buffer_mut();
     let max_x = area.x + area.width;

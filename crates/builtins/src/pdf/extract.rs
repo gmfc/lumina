@@ -379,7 +379,12 @@ impl CMap {
     /// Parse the `beginbfchar`/`beginbfrange` sections. The rest of the CMap grammar (codespace
     /// ranges, usecmap) only refines what we already infer from the entries themselves.
     fn parse(data: &[u8]) -> CMap {
-        let mut map = HashMap::new();
+        /// Entry cap. A real `/ToUnicode` CMap holds at most a few thousand mappings; a file
+        /// declaring range after 64 K-wide range would otherwise build an arbitrarily large map
+        /// on the UI thread.
+        const MAX_ENTRIES: usize = 65_536;
+
+        let mut map: HashMap<u32, String> = HashMap::new();
         let mut code_bytes = 1usize;
         let mut lex = Lexer::new(data);
         let mut pending: Vec<Obj> = Vec::new();
@@ -403,6 +408,9 @@ impl CMap {
                         let [Obj::Str(src), Obj::Str(dst)] = pair else {
                             continue;
                         };
+                        if map.len() >= MAX_ENTRIES {
+                            break;
+                        }
                         code_bytes = code_bytes.max(src.len().clamp(1, 4));
                         map.insert(be_code(src), decode_utf16be(dst));
                     }
@@ -412,6 +420,9 @@ impl CMap {
                         let [Obj::Str(lo), Obj::Str(hi), dst] = triple else {
                             continue;
                         };
+                        if map.len() >= MAX_ENTRIES {
+                            break;
+                        }
                         code_bytes = code_bytes.max(lo.len().clamp(1, 4));
                         let (lo, hi) = (be_code(lo), be_code(hi));
                         // A range of 2^32 would hang; real ranges are tiny.
@@ -435,8 +446,13 @@ impl CMap {
                             // `<lo> <hi> [<dst> <dst> …]`: one destination per code.
                             Obj::Array(items) => {
                                 for (i, item) in items.iter().enumerate() {
+                                    // `lo` comes from the file, so the destination code can run
+                                    // past u32 — a debug-build panic on a malformed CMap.
+                                    let Some(code) = lo.checked_add(i as u32) else {
+                                        break;
+                                    };
                                     if let Obj::Str(s) = item {
-                                        map.insert(lo + i as u32, decode_utf16be(s));
+                                        map.insert(code, decode_utf16be(s));
                                     }
                                 }
                             }
@@ -727,6 +743,28 @@ mod tests {
         assert_eq!(win_ansi(0x80), '€');
         assert_eq!(win_ansi(0x92), '’');
         assert_eq!(win_ansi(b'A'), 'A');
+    }
+
+    #[test]
+    fn a_cmap_cannot_be_made_to_grow_without_bound() {
+        // Range after 64 K-wide range: the entry cap is what keeps a hostile CMap from
+        // building an arbitrarily large map on the UI thread.
+        let mut src = String::new();
+        for _ in 0..8 {
+            src.push_str("1 beginbfrange\n<0000> <FFFF> <0041>\nendbfrange\n");
+        }
+        let start = std::time::Instant::now();
+        let cmap = CMap::parse(src.as_bytes());
+        assert!(cmap.map.len() <= 65_536, "entry cap held");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_bfrange_whose_codes_run_past_u32_stops_instead_of_overflowing() {
+        // `lo` comes straight from the file; without a checked add this panics in debug.
+        let src = b"1 beginbfrange\n<FFFFFFFF> <FFFFFFFF> [<0041> <0042> <0043>]\nendbfrange\n";
+        let cmap = CMap::parse(src);
+        assert_eq!(cmap.decode(&[0xFF, 0xFF, 0xFF, 0xFF]), "A");
     }
 
     #[test]

@@ -154,6 +154,18 @@ impl<'a> Lexer<'a> {
         self.object_at_depth(0)
     }
 
+    /// Step over input that isn't an object, guaranteeing forward progress.
+    ///
+    /// Consumes a **whole** keyword rather than one byte. That distinction is the difference
+    /// between linear and quadratic: a damaged file whose array holds a megabyte-long run of
+    /// letters would otherwise re-scan that run once per byte and hang the editor, since
+    /// [`Self::number_or_keyword`] rewinds after reading a keyword that isn't a number.
+    fn skip_unparseable(&mut self) {
+        if self.keyword().is_none() {
+            self.pos += 1; // a delimiter — a keyword scan makes no progress on one
+        }
+    }
+
     fn object_at_depth(&mut self, depth: usize) -> Option<Obj> {
         if depth > MAX_DEPTH {
             return None;
@@ -175,9 +187,7 @@ impl<'a> Lexer<'a> {
                         }
                         _ => match self.object_at_depth(depth + 1) {
                             Some(o) => items.push(o),
-                            // Unparseable content inside an array: skip a byte so we always
-                            // make progress, and keep what we have.
-                            None => self.pos += 1,
+                            None => self.skip_unparseable(),
                         },
                     }
                 }
@@ -222,7 +232,7 @@ impl<'a> Lexer<'a> {
                 // so one bad entry doesn't cost us the whole dictionary.
                 _ => {
                     if self.object_at_depth(depth + 1).is_none() {
-                        self.pos += 1;
+                        self.skip_unparseable();
                     }
                 }
             }
@@ -763,6 +773,22 @@ mod tests {
         ] {
             let _ = parse(src);
         }
+    }
+
+    #[test]
+    fn a_long_unparseable_run_inside_an_array_is_linear_not_quadratic() {
+        // `[` + a megabyte of letters + `]`: the array's error path must consume the whole
+        // keyword, not retry one byte at a time (which is O(n²) and hangs the editor).
+        let mut src = vec![b'['];
+        src.extend(std::iter::repeat_n(b'a', 1_000_000));
+        src.push(b']');
+        let start = std::time::Instant::now();
+        let _ = Lexer::new(&src).object();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "array error recovery went quadratic: {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
