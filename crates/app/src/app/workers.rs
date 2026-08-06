@@ -243,53 +243,98 @@ impl App {
         }
         let fp = crate::files::fingerprint(&bytes);
 
-        // Our own save echoing back → drop it.
+        match self.classify_change(id, path, &fp) {
+            Change::Ignore => {}
+            Change::Conflict => self.flag_conflict(id, path, fp),
+            Change::Reload => self.reload_clean(id, path, &bytes, fp),
+        }
+    }
+
+    /// Decide what an external change to an *open, readable* document means. Splitting the
+    /// decision from the acting on it is what keeps each side legible: this arm reads state and
+    /// commits nothing, and the three outcomes below each do one thing.
+    ///
+    /// `Ignore` covers the two no-ops that still update bookkeeping: our own save echoing back
+    /// through the watcher, and a change whose content matches what we last loaded.
+    fn classify_change(
+        &mut self,
+        id: editor_core::DocId,
+        path: &std::path::Path,
+        fp: &editor_core::document::DiskFingerprint,
+    ) -> Change {
+        // Our own save echoing back → drop it, but adopt the fingerprint.
         if self.pending_self_writes.get(path) == Some(&fp.hash) {
             self.pending_self_writes.remove(path);
             if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
-                doc.disk = fp;
+                doc.disk = fp.clone();
             }
-            return;
+            return Change::Ignore;
         }
-
         let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
-            return;
+            return Change::Ignore;
         };
         // No real change (hash matches last-loaded) → just refresh the fingerprint.
         if doc.disk.hash == fp.hash {
-            doc.disk = fp;
-            return;
+            doc.disk = fp.clone();
+            return Change::Ignore;
         }
-
         if doc.dirty {
-            // Never clobber unsaved work — flag a conflict for the user to resolve.
-            let first = doc.external_conflict.is_none();
-            doc.external_conflict = Some(fp);
-            // A `⚠` sharing the tab bar's marker slot is the whole announcement otherwise. Say
-            // what happened and name both exits, so the state has a way out rather than just a
-            // glyph. Only on the transition — a busy writer re-fires this every debounce tick.
-            if first {
-                let name = super::file_ops::display_name(path);
-                let palette = self.chord_for("view.commandPalette", "Ctrl+Shift+P");
-                self.editor.notify_warn(format!(
-                    "{name} changed on disk and your buffer has unsaved changes — \
-                     {palette}: “Revert File” takes the disk version, “Keep My Version” keeps yours"
-                ));
-            }
+            Change::Conflict
+        } else {
+            Change::Reload
+        }
+    }
+
+    /// Never clobber unsaved work: record the conflict and, on the transition into it, say what
+    /// happened and name both exits.
+    ///
+    /// A `⚠` sharing the tab bar's marker slot is the whole announcement otherwise. Only on the
+    /// transition — a busy writer re-fires this every debounce tick.
+    fn flag_conflict(
+        &mut self,
+        id: editor_core::DocId,
+        path: &std::path::Path,
+        fp: editor_core::document::DiskFingerprint,
+    ) {
+        let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
+            return;
+        };
+        let first = doc.external_conflict.is_none();
+        doc.external_conflict = Some(fp);
+        if !first {
             return;
         }
+        let name = super::file_ops::display_name(path);
+        let palette = self.chord_for("view.commandPalette", "Ctrl+Shift+P");
+        self.editor.notify_warn(format!(
+            "{name} changed on disk and your buffer has unsaved changes — \
+             {palette}: “Revert File” takes the disk version, “Keep My Version” keeps yours"
+        ));
+    }
 
-        // Clean buffer → reload, following the cursor/scroll through the diff. Decode with the
-        // same encoding-aware path as the initial load (strip/track a BOM, decode UTF-16), not a
-        // bare `from_utf8_lossy` — otherwise a UTF-16 or BOM file reloads as mojibake and the
-        // stale `doc.encoding` re-encodes that garbage on the next save (and a BOM file would
-        // accrue a second BOM each cycle).
-        let (new_text, encoding) = crate::files::decode(&bytes);
+    /// Clean buffer → reload, following the cursor/scroll through the diff.
+    ///
+    /// Decodes with the same encoding-aware path as the initial load (strip/track a BOM, decode
+    /// UTF-16), not a bare `from_utf8_lossy` — otherwise a UTF-16 or BOM file reloads as mojibake
+    /// and the stale `doc.encoding` re-encodes that garbage on the next save (and a BOM file would
+    /// accrue a second BOM each cycle).
+    fn reload_clean(
+        &mut self,
+        id: editor_core::DocId,
+        path: &std::path::Path,
+        bytes: &[u8],
+        fp: editor_core::document::DiskFingerprint,
+    ) {
+        let (new_text, encoding) = crate::files::decode(bytes);
+        let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
+            return;
+        };
         let old_text = doc.to_string();
-        let heads: Vec<usize> = doc.selections.ranges().iter().map(|s| s.head).collect();
-        let mapped: Vec<usize> = heads
+        let mapped: Vec<usize> = doc
+            .selections
+            .ranges()
             .iter()
-            .map(|&h| crate::sync::map_offset(&old_text, &new_text, h))
+            .map(|s| crate::sync::map_offset(&old_text, &new_text, s.head))
             .collect();
 
         // Whole-buffer reload: replaces the text and discards the now-stale undo history (its
@@ -307,7 +352,9 @@ impl App {
 
         if self.follow_mode {
             let line = crate::sync::first_changed_line(&old_text, &new_text);
-            doc.view.scroll_line = line.saturating_sub(2);
+            if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
+                doc.view.scroll_line = line.saturating_sub(2);
+            }
         }
         // `reload_from_str` drops undo history along with the text (its transactions reference
         // offsets that no longer exist). That is correct and invisible — the next Ctrl+Z simply
@@ -324,6 +371,16 @@ impl App {
         // The file changed under us (e.g. an agent wrote it) — refresh its git gutter.
         self.request_git_status(id);
     }
+}
+
+/// What an external change to an open, readable document turns out to mean.
+enum Change {
+    /// Nothing to do — an echo of our own save, or content identical to what we loaded.
+    Ignore,
+    /// The buffer has unsaved changes; the disk copy must not overwrite them.
+    Conflict,
+    /// The buffer is clean; take the disk copy.
+    Reload,
 }
 
 /// Why a changed file must *not* be reloaded into its open buffer, or `None` when it may be.
