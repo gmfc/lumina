@@ -257,37 +257,7 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         let start = self.pos;
-
-        // Prefer the declared `/Length`, but only when it actually lands on `endstream`: an
-        // indirect or stale Length is common in damaged files, and trusting it blindly yields
-        // truncated or over-long data. Otherwise fall back to searching for the keyword.
-        let declared = get(&dict, "Length")
-            .and_then(Obj::as_f64)
-            .filter(|n| *n >= 0.0)
-            .map(|n| n as usize)
-            .filter(|n| start + n <= self.buf.len())
-            .filter(|n| {
-                let mut probe = Lexer::at(self.buf, start + n);
-                probe.skip_ws();
-                self.buf[probe.pos..].starts_with(b"endstream")
-            });
-        let end = match declared {
-            Some(len) => start + len,
-            None => match find(&self.buf[start..], b"endstream") {
-                Some(rel) => {
-                    // Back off the EOL the writer inserted before `endstream`.
-                    let mut e = start + rel;
-                    if e > start && self.buf[e - 1] == b'\n' {
-                        e -= 1;
-                    }
-                    if e > start && self.buf[e - 1] == b'\r' {
-                        e -= 1;
-                    }
-                    e
-                }
-                None => self.buf.len(),
-            },
-        };
+        let end = self.stream_end(&dict, start);
         let data = self.buf[start..end.max(start)].to_vec();
         self.pos = end;
         // Step past `endstream` so the caller resumes after the body.
@@ -297,6 +267,39 @@ impl<'a> Lexer<'a> {
             self.pos = self.buf.len();
         }
         Obj::Stream { dict, data }
+    }
+
+    /// Where a stream body starting at `start` ends.
+    ///
+    /// Prefers the declared `/Length`, but only when it actually lands on `endstream`: an
+    /// indirect or stale Length is common in damaged files, and trusting it blindly yields
+    /// truncated or over-long data. Otherwise search for the keyword.
+    fn stream_end(&self, dict: &Dict, start: usize) -> usize {
+        let declared = get(dict, "Length")
+            .and_then(Obj::as_f64)
+            .filter(|n| *n >= 0.0)
+            .map(|n| n as usize)
+            .filter(|n| start + n <= self.buf.len())
+            .filter(|n| {
+                let mut probe = Lexer::at(self.buf, start + n);
+                probe.skip_ws();
+                self.buf[probe.pos..].starts_with(b"endstream")
+            });
+        if let Some(len) = declared {
+            return start + len;
+        }
+        let Some(rel) = find(&self.buf[start..], b"endstream") else {
+            return self.buf.len();
+        };
+        // Back off the EOL the writer inserted before `endstream`.
+        let mut e = start + rel;
+        if e > start && self.buf[e - 1] == b'\n' {
+            e -= 1;
+        }
+        if e > start && self.buf[e - 1] == b'\r' {
+            e -= 1;
+        }
+        e
     }
 
     /// `/Name`, with `#xx` hex escapes.
@@ -336,34 +339,7 @@ impl<'a> Lexer<'a> {
                 b'\\' => {
                     let Some(e) = self.peek() else { break };
                     self.pos += 1;
-                    match e {
-                        b'n' => out.push(b'\n'),
-                        b'r' => out.push(b'\r'),
-                        b't' => out.push(b'\t'),
-                        b'b' => out.push(0x08),
-                        b'f' => out.push(0x0c),
-                        b'\n' => {} // line continuation
-                        b'\r' => {
-                            if self.peek() == Some(b'\n') {
-                                self.pos += 1;
-                            }
-                        }
-                        b'0'..=b'7' => {
-                            // Up to three octal digits.
-                            let mut v = (e - b'0') as u16;
-                            for _ in 0..2 {
-                                match self.peek() {
-                                    Some(d @ b'0'..=b'7') => {
-                                        v = v * 8 + (d - b'0') as u16;
-                                        self.pos += 1;
-                                    }
-                                    _ => break,
-                                }
-                            }
-                            out.push(v as u8);
-                        }
-                        other => out.push(other),
-                    }
+                    self.push_escape(e, &mut out);
                 }
                 b'(' => {
                     depth += 1;
@@ -380,6 +356,40 @@ impl<'a> Lexer<'a> {
             }
         }
         out
+    }
+
+    /// One backslash escape inside a literal string, `e` being the character after the slash.
+    fn push_escape(&mut self, e: u8, out: &mut Vec<u8>) {
+        match e {
+            b'n' => out.push(b'\n'),
+            b'r' => out.push(b'\r'),
+            b't' => out.push(b'\t'),
+            b'b' => out.push(0x08),
+            b'f' => out.push(0x0c),
+            b'\n' => {} // line continuation
+            b'\r' => {
+                if self.peek() == Some(b'\n') {
+                    self.pos += 1;
+                }
+            }
+            b'0'..=b'7' => out.push(self.octal_escape(e)),
+            other => out.push(other),
+        }
+    }
+
+    /// `\\ddd`: up to three octal digits, the first already consumed as `first`.
+    fn octal_escape(&mut self, first: u8) -> u8 {
+        let mut v = (first - b'0') as u16;
+        for _ in 0..2 {
+            match self.peek() {
+                Some(d @ b'0'..=b'7') => {
+                    v = v * 8 + (d - b'0') as u16;
+                    self.pos += 1;
+                }
+                _ => break,
+            }
+        }
+        v as u8
     }
 
     /// `<48656c6c6f>`; an odd final digit is padded with 0, per the spec.
@@ -539,24 +549,19 @@ fn ascii85_decode(data: &[u8]) -> Vec<u8> {
     while i < data.len() {
         let b = data[i];
         i += 1;
-        if b == b'~' {
-            break;
-        }
-        if is_ws(b) {
-            continue;
-        }
-        if b == b'z' && n == 0 {
-            out.extend_from_slice(&[0, 0, 0, 0]);
-            continue;
-        }
-        if !(b'!'..=b'u').contains(&b) {
-            continue;
-        }
-        group[n] = b - b'!';
-        n += 1;
-        if n == 5 {
-            push_base85(&mut out, &group, 5);
-            n = 0;
+        match base85_digit(b, n == 0) {
+            Base85::End => break,
+            Base85::Skip => continue,
+            // `z` is the all-zero group's shorthand, legal only at a group boundary.
+            Base85::ZeroGroup => out.extend_from_slice(&[0, 0, 0, 0]),
+            Base85::Digit(d) => {
+                group[n] = d;
+                n += 1;
+                if n == 5 {
+                    push_base85(&mut out, &group, 5);
+                    n = 0;
+                }
+            }
         }
     }
     if n > 1 {
@@ -566,6 +571,34 @@ fn ascii85_decode(data: &[u8]) -> Vec<u8> {
         push_base85(&mut out, &group, n);
     }
     out
+}
+
+/// What one byte of an ASCII85 stream means, given whether a group is currently empty.
+enum Base85 {
+    /// `~`, the end-of-data marker.
+    End,
+    /// Whitespace or a character outside the alphabet — ignored.
+    Skip,
+    /// `z` at a group boundary: four zero bytes.
+    ZeroGroup,
+    /// A digit's value, `0..85`.
+    Digit(u8),
+}
+
+/// Classify one ASCII85 byte. `at_boundary` says whether the current group is empty, which is the
+/// only place `z` is meaningful.
+fn base85_digit(b: u8, at_boundary: bool) -> Base85 {
+    if b == b'~' {
+        Base85::End
+    } else if is_ws(b) {
+        Base85::Skip
+    } else if b == b'z' && at_boundary {
+        Base85::ZeroGroup
+    } else if (b'!'..=b'u').contains(&b) {
+        Base85::Digit(b - b'!')
+    } else {
+        Base85::Skip
+    }
 }
 
 /// Expand one base-85 group, keeping `n - 1` of the four decoded bytes (a short final group
@@ -615,28 +648,9 @@ fn apply_predictor(dict: &Dict, data: Vec<u8>) -> Vec<u8> {
     if predictor < 10 {
         return data; // 1 = none; 2 (TIFF) is not used by the streams we read
     }
-    let colors = get(parms, "Colors").and_then(Obj::as_f64).unwrap_or(1.0) as usize;
-    let bpc = get(parms, "BitsPerComponent")
-        .and_then(Obj::as_f64)
-        .unwrap_or(8.0) as usize;
-    let columns = get(parms, "Columns").and_then(Obj::as_f64).unwrap_or(1.0) as usize;
-    // `Colors`/`Columns`/`BitsPerComponent` are file-supplied floats: `1e19 as usize`
-    // saturates, and the product then overflows — a debug panic on a malformed stream. A
-    // geometry we can't compute is a geometry we don't apply.
-    let Some(row_len) = columns
-        .checked_mul(colors)
-        .and_then(|n| n.checked_mul(bpc))
-        .map(|bits| bits.div_ceil(8))
-    else {
+    let Some((row_len, bpp)) = predictor_geometry(parms, data.len()) else {
         return data;
     };
-    let Some(bpp) = colors.checked_mul(bpc).map(|bits| bits.div_ceil(8).max(1)) else {
-        return data;
-    };
-    // A row wider than the data itself can only produce padding; refuse rather than allocate it.
-    if row_len == 0 || row_len > data.len().max(1) * 8 {
-        return data;
-    }
 
     let mut out: Vec<u8> = Vec::with_capacity(data.len());
     let mut prev = vec![0u8; row_len];
@@ -650,19 +664,7 @@ fn apply_predictor(dict: &Dict, data: Vec<u8>) -> Vec<u8> {
         row[..n].copy_from_slice(&data[i..end]);
         row[n..].fill(0);
         i = end;
-        for x in 0..row_len {
-            let a = if x >= bpp { row[x - bpp] } else { 0 };
-            let b = prev[x];
-            let c = if x >= bpp { prev[x - bpp] } else { 0 };
-            row[x] = match tag {
-                0 => row[x],
-                1 => row[x].wrapping_add(a),
-                2 => row[x].wrapping_add(b),
-                3 => row[x].wrapping_add(((a as u16 + b as u16) / 2) as u8),
-                4 => row[x].wrapping_add(paeth(a, b, c)),
-                _ => row[x],
-            };
-        }
+        unfilter_row(tag, &mut row, &prev, bpp);
         out.extend_from_slice(&row);
         prev.copy_from_slice(&row);
         if n < row_len {
@@ -670,6 +672,49 @@ fn apply_predictor(dict: &Dict, data: Vec<u8>) -> Vec<u8> {
         }
     }
     out
+}
+
+/// `(row length, bytes per pixel)` for a PNG predictor, or `None` when the declared geometry is
+/// unusable.
+///
+/// `Colors`/`Columns`/`BitsPerComponent` are file-supplied floats: `1e19 as usize` saturates, and
+/// the product then overflows — a debug panic on a malformed stream. A geometry we can't compute
+/// is a geometry we don't apply.
+fn predictor_geometry(parms: &Dict, data_len: usize) -> Option<(usize, usize)> {
+    let colors = get(parms, "Colors").and_then(Obj::as_f64).unwrap_or(1.0) as usize;
+    let bpc = get(parms, "BitsPerComponent")
+        .and_then(Obj::as_f64)
+        .unwrap_or(8.0) as usize;
+    let columns = get(parms, "Columns").and_then(Obj::as_f64).unwrap_or(1.0) as usize;
+    let row_len = columns
+        .checked_mul(colors)
+        .and_then(|n| n.checked_mul(bpc))
+        .map(|bits| bits.div_ceil(8))?;
+    let bpp = colors
+        .checked_mul(bpc)
+        .map(|bits| bits.div_ceil(8).max(1))?;
+    // A row wider than the data itself can only produce padding; refuse rather than allocate it.
+    if row_len == 0 || row_len > data_len.max(1) * 8 {
+        return None;
+    }
+    Some((row_len, bpp))
+}
+
+/// Reverse one PNG row filter in place, against the already-unfiltered `prev` row.
+fn unfilter_row(tag: u8, row: &mut [u8], prev: &[u8], bpp: usize) {
+    for x in 0..row.len() {
+        let a = if x >= bpp { row[x - bpp] } else { 0 };
+        let b = prev[x];
+        let c = if x >= bpp { prev[x - bpp] } else { 0 };
+        row[x] = match tag {
+            1 => row[x].wrapping_add(a),
+            2 => row[x].wrapping_add(b),
+            3 => row[x].wrapping_add(((a as u16 + b as u16) / 2) as u8),
+            4 => row[x].wrapping_add(paeth(a, b, c)),
+            // 0 = None, and an unknown tag is left alone rather than guessed at.
+            _ => row[x],
+        };
+    }
 }
 
 fn paeth(a: u8, b: u8, c: u8) -> u8 {

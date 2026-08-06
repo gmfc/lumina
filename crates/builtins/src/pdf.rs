@@ -62,22 +62,10 @@ impl Plugin for PdfPlugin {
 
 /// Read and render `path`, degrading to a stated reason at every step that can fail.
 fn render(path: &Path) -> ViewerContent {
-    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    if len > MAX_BYTES {
-        return ViewerContent::status_only(format!(
-            "This PDF is {} MB — too large to parse here. Use “View as Hex” to inspect it.",
-            len / (1024 * 1024)
-        ));
-    }
-    let bytes = match std::fs::read(path) {
+    let bytes = match readable_bytes(path) {
         Ok(bytes) => bytes,
-        Err(e) => return ViewerContent::status_only(format!("Could not read the file: {e}")),
+        Err(reason) => return ViewerContent::status_only(reason),
     };
-    if !bytes.starts_with(b"%PDF-") {
-        return ViewerContent::status_only(
-            "This file does not start with a %PDF- header — it may not be a PDF.",
-        );
-    }
     let pdf = Pdf::parse(&bytes);
     if pdf.encrypted {
         return ViewerContent::status_only(
@@ -87,17 +75,7 @@ fn render(path: &Path) -> ViewerContent {
     }
 
     let pages = pdf.pages();
-    let mut lines: Vec<PanelLine> = Vec::new();
-    for (key, value) in &pdf.info {
-        lines.push(PanelLine::new(vec![
-            Span::new(format!("{key:<14}"), "dim"),
-            Span::plain(value.clone()),
-        ]));
-    }
-    if !lines.is_empty() {
-        lines.push(PanelLine::new(vec![Span::plain("")]));
-    }
-
+    let mut lines = info_lines(&pdf.info);
     let mut with_text = 0usize;
     for (i, page) in pages.iter().enumerate() {
         if lines.len() >= MAX_LINES {
@@ -107,60 +85,93 @@ fn render(path: &Path) -> ViewerContent {
             format!("── Page {} ──", i + 1),
             "dir",
         )]));
-        let text = pdf.page_text(page);
-        let trimmed: Vec<&str> = text.lines().map(str::trim_end).collect();
-        if trimmed.iter().any(|l| !l.trim().is_empty()) {
+        if push_page_text(&mut lines, &pdf.page_text(page)) {
             with_text += 1;
-        }
-        // Collapse runs of blank lines: the operator stream emits a break per `ET`, which in a
-        // heavily-structured page means dozens of empty rows between paragraphs.
-        let mut blank = false;
-        for line in trimmed {
-            let is_blank = line.trim().is_empty();
-            if is_blank && blank {
-                continue;
-            }
-            blank = is_blank;
-            if lines.len() >= MAX_LINES {
-                break;
-            }
-            lines.push(PanelLine::new(vec![Span::plain(line.to_string())]));
         }
         lines.push(PanelLine::new(vec![Span::plain("")]));
     }
 
-    if pages.is_empty() {
-        return ViewerContent {
-            status: Some(format!(
-                "No pages found in {} objects — the file may be damaged. Use “View as Hex” to \
-                 inspect it.",
-                pdf.object_count()
-            )),
-            lines,
-        };
+    ViewerContent {
+        status: Some(summary(&pdf, pages.len(), with_text, lines.len())),
+        lines,
+    }
+}
+
+/// The file's bytes, or the sentence explaining why they can't be rendered.
+fn readable_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if len > MAX_BYTES {
+        return Err(format!(
+            "This PDF is {} MB — too large to parse here. Use “View as Hex” to inspect it.",
+            len / (1024 * 1024)
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("Could not read the file: {e}"))?;
+    if !bytes.starts_with(b"%PDF-") {
+        return Err("This file does not start with a %PDF- header — it may not be a PDF.".into());
+    }
+    Ok(bytes)
+}
+
+/// The `/Info` header block, with a blank line under it when there is anything to show.
+fn info_lines(info: &[(String, String)]) -> Vec<PanelLine> {
+    let mut lines: Vec<PanelLine> = info
+        .iter()
+        .map(|(key, value)| {
+            PanelLine::new(vec![
+                Span::new(format!("{key:<14}"), "dim"),
+                Span::plain(value.clone()),
+            ])
+        })
+        .collect();
+    if !lines.is_empty() {
+        lines.push(PanelLine::new(vec![Span::plain("")]));
+    }
+    lines
+}
+
+/// Append one page's text, collapsing runs of blank lines — the operator stream emits a break per
+/// `ET`, which in a heavily-structured page means dozens of empty rows between paragraphs.
+/// Returns whether the page had any text at all.
+fn push_page_text(lines: &mut Vec<PanelLine>, text: &str) -> bool {
+    let trimmed: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let has_text = trimmed.iter().any(|l| !l.trim().is_empty());
+    let mut blank = false;
+    for line in trimmed {
+        let is_blank = line.trim().is_empty();
+        if is_blank && blank {
+            continue;
+        }
+        blank = is_blank;
+        if lines.len() >= MAX_LINES {
+            break;
+        }
+        lines.push(PanelLine::new(vec![Span::plain(line.to_string())]));
+    }
+    has_text
+}
+
+/// The status row: what was found, or why what was found is not what the user expected.
+fn summary(pdf: &Pdf, pages: usize, with_text: usize, line_count: usize) -> String {
+    if pages == 0 {
+        return format!(
+            "No pages found in {} objects — the file may be damaged. Use “View as Hex” to \
+             inspect it.",
+            pdf.object_count()
+        );
     }
     if with_text == 0 {
-        return ViewerContent {
-            status: Some(format!(
-                "{} page(s), none with extractable text — this is likely a scanned document. Use \
-                 “View as Hex” to inspect the raw bytes.",
-                pages.len()
-            )),
-            lines,
-        };
+        return format!(
+            "{pages} page(s), none with extractable text — this is likely a scanned document. \
+             Use “View as Hex” to inspect the raw bytes."
+        );
     }
-    let truncated = if lines.len() >= MAX_LINES {
+    let truncated = if line_count >= MAX_LINES {
         " (truncated)"
     } else {
         ""
     };
-    ViewerContent {
-        status: Some(format!(
-            "{} page(s), {with_text} with text{truncated}",
-            pages.len()
-        )),
-        lines,
-    }
+    format!("{pages} page(s), {with_text} with text{truncated}")
 }
 
 #[cfg(test)]
