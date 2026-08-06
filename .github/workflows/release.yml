@@ -128,9 +128,32 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The release body is the tag's own CHANGELOG.md section; `generate_release_notes`
+      # below appends the auto-generated PR list underneath it. Needs the repo on disk —
+      # the rest of this job only handles artifacts.
+      - uses: actions/checkout@v4
+
+      - name: Extract release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Exact-prefix match, not a regex: the version contains dots.
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::No CHANGELOG.md section for $version; publishing with generated notes only."
+          fi
+          echo "--- release body ---"
+          cat release-notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body_path: release-notes.md
           generate_release_notes: true
           fail_on_unmatched_files: true
