@@ -170,10 +170,17 @@ fn save_as_shows_where_a_relative_path_will_land() {
     app.dispatch(Command::SaveAs);
     type_into_overlay(&mut app, "out.txt");
     let root = app.editor.workspace.root.join("out.txt");
+    let full = root.display().to_string();
+    // The box shows the tail of a long path, so assert on the part that carries the information:
+    // the directory it lands in and the file name.
+    let tail: String = full
+        .chars()
+        .skip(full.chars().count().saturating_sub(24))
+        .collect();
     let screen = render_to_string(&mut app, 120, 20);
     assert!(
-        screen.contains(&root.display().to_string()),
-        "the resolved path should be visible before the save, not after"
+        screen.contains(&tail),
+        "the resolved path should be visible before the save, not after: wanted {tail:?}"
     );
     std::fs::remove_file(&path).ok();
 }
@@ -504,9 +511,13 @@ fn a_reference_tab_can_never_be_saved_over_a_file() {
 fn a_failed_save_names_the_reason_and_the_way_out() {
     let path = temp_file("hello\n");
     let mut app = app_with(&path);
-    // Point the buffer at a path whose parent is a *file*, so the write fails for a reason the
-    // user can recognise rather than an errno.
-    let bad = path.join("child.txt");
+    // Point the buffer at a path under a directory that does not exist, so the write fails the
+    // same way on every platform and for a reason the user can recognise rather than an errno.
+    let bad = path
+        .parent()
+        .unwrap()
+        .join("no_such_dir_here")
+        .join("child.txt");
     app.editor.active_document_mut().unwrap().path = Some(bad);
     app.dispatch(Command::Save);
 

@@ -130,7 +130,7 @@ impl App {
             .map(|(chord, id)| (chord, id.to_string(), self.command_title(id)))
             .collect();
         // Stable, readable order inside each section: by the command's shown title.
-        rows.sort_by(|a, b| a.2.to_lowercase().cmp(&b.2.to_lowercase()));
+        rows.sort_by_key(|r| r.2.to_lowercase());
         let width = rows
             .iter()
             .map(|(c, _, _)| c.chars().count())
