@@ -144,31 +144,7 @@ impl Selections {
         self.ranges
             .sort_by(|a, b| a.from().cmp(&b.from()).then(a.to().cmp(&b.to())));
 
-        // Merge overlapping (not merely touching) selections.
-        let mut merged: Vec<Selection> = Vec::with_capacity(self.ranges.len());
-        for &cur in &self.ranges {
-            if let Some(last) = merged.last_mut() {
-                // Merge when the current span overlaps the last (starts strictly before it
-                // ends), or when both are the *same* empty caret — two carets at one offset are
-                // a single cursor, and keeping both would double every per-cursor edit.
-                let coincident_carets =
-                    cur.is_empty() && last.is_empty() && cur.from() == last.from();
-                if cur.from() < last.to() || coincident_carets {
-                    let forward = last.head >= last.anchor;
-                    let lo = last.from().min(cur.from());
-                    let hi = last.to().max(cur.to());
-                    // Preserve the primary/last cursor's directionality when merging.
-                    *last = if forward {
-                        Selection::new(lo, hi)
-                    } else {
-                        Selection::new(hi, lo)
-                    };
-                    continue;
-                }
-            }
-            merged.push(cur);
-        }
-        self.ranges = merged;
+        self.ranges = merge_sorted(&self.ranges);
 
         // Re-find the primary: the merged selection whose span covers the old head.
         let target = primary_marker.head;
@@ -183,6 +159,35 @@ impl Selections {
     pub fn set_primary(&mut self, idx: usize) {
         self.primary = idx.min(self.ranges.len().saturating_sub(1));
     }
+}
+
+/// Merge overlapping (not merely touching) selections in an already-sorted list.
+///
+/// Two spans merge when the later one starts strictly before the earlier one ends, or when both
+/// are the *same* empty caret — two carets at one offset are a single cursor, and keeping both
+/// would double every per-cursor edit. The surviving span keeps the earlier one's directionality.
+fn merge_sorted(sorted: &[Selection]) -> Vec<Selection> {
+    let mut merged: Vec<Selection> = Vec::with_capacity(sorted.len());
+    for &cur in sorted {
+        let Some(last) = merged.last_mut() else {
+            merged.push(cur);
+            continue;
+        };
+        let coincident_carets = cur.is_empty() && last.is_empty() && cur.from() == last.from();
+        if cur.from() >= last.to() && !coincident_carets {
+            merged.push(cur);
+            continue;
+        }
+        let forward = last.head >= last.anchor;
+        let lo = last.from().min(cur.from());
+        let hi = last.to().max(cur.to());
+        *last = if forward {
+            Selection::new(lo, hi)
+        } else {
+            Selection::new(hi, lo)
+        };
+    }
+    merged
 }
 
 impl Default for Selections {

@@ -40,27 +40,7 @@ impl App {
             return;
         }
         if in_rect(self.regions.editor, col, row) {
-            self.editor.focus = Focus::Editor;
-            // The Settings tab routes editor-area clicks to its widgets.
-            if self.settings_active() {
-                self.handle_settings_click(col, row);
-                return;
-            }
-            // A notice/viewer tab has no text to put a caret in; the click only takes focus.
-            if self.editor.active_tab_view().is_some() {
-                return;
-            }
-            if mods.contains(crossterm::event::KeyModifiers::ALT) {
-                // Alt+Click adds a cursor (multi-cursor).
-                if let Some(off) = self.editor_offset_at(col, row) {
-                    self.with_doc(|d| {
-                        d.selections.push(Selection::caret(off));
-                        d.selections.normalize();
-                    });
-                }
-            } else {
-                self.editor_click(col, row);
-            }
+            self.editor_area_click(col, row, mods);
         } else if in_rect(self.regions.tabs, col, row) {
             self.tab_bar_click(col);
         } else if self.regions.sidebar.is_some_and(|r| in_rect(r, col, row)) {
@@ -92,6 +72,30 @@ impl App {
         {
             // Clicking the footer LSP indicator opens/closes the LSP panel.
             self.toggle_lsp_panel();
+        }
+    }
+
+    /// A left click inside the editor pane. What it means depends on what the pane is showing:
+    /// the Settings tab routes to its widgets, a notice/viewer tab has no text to put a caret in
+    /// and only takes focus, and Alt adds a cursor rather than moving the one there.
+    fn editor_area_click(&mut self, col: u16, row: u16, mods: crossterm::event::KeyModifiers) {
+        self.editor.focus = Focus::Editor;
+        if self.settings_active() {
+            self.handle_settings_click(col, row);
+            return;
+        }
+        if self.editor.active_tab_view().is_some() {
+            return;
+        }
+        if !mods.contains(crossterm::event::KeyModifiers::ALT) {
+            self.editor_click(col, row);
+            return;
+        }
+        if let Some(off) = self.editor_offset_at(col, row) {
+            self.with_doc(|d| {
+                d.selections.push(Selection::caret(off));
+                d.selections.normalize();
+            });
         }
     }
 

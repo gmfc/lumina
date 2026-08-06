@@ -21,21 +21,7 @@ impl App {
             // the one time-based LSP path that must keep `update_lsp` running while the buffer is
             // quiet. When none hold, the loop still polls input at ~60Hz but does no render work.
             let sig = self.frame_sig();
-            let sig_changed = self.last_frame_sig != Some(sig);
-            // Keep `update_lsp` running across the two wall-clock LSP timers even while the editor is
-            // idle: an armed diagnostics-pull debounce, and a crashed server (that an open doc uses)
-            // waiting out its restart backoff, whose respawn only fires from `ensure_started` reached
-            // via `update_lsp`.
-            let restart_pending = self.lsp_restart_pending();
-            let lsp_pending = !self.lsp_pull_deadline.is_empty() || restart_pending;
-            // While the LSP panel is open, a pending restart repaints its server row through the
-            // backoff and the respawn tick (Ok → "starting" / Err → "crashed"); the subsequent
-            // Initializing → Running flip repaints via the `ServerReady` drain event. Both states
-            // terminate, so this can't pin the loop.
-            let redraw = self.force_redraw
-                || sig_changed
-                || self.is_animating()
-                || (restart_pending && self.editor.lsp_open);
+            let (redraw, lsp_pending) = self.frame_work(sig);
             if redraw || lsp_pending {
                 self.editor.update_highlights(self.page_height);
                 self.editor.update_bracket_match();
@@ -49,15 +35,7 @@ impl App {
             // Reconcile each PTY's size to the panel region we just laid out.
             self.sync_terminals();
 
-            if event::poll(Duration::from_millis(16))? {
-                match event::read()? {
-                    CtEvent::Key(k) if k.kind == KeyEventKind::Press => self.on_key(k),
-                    CtEvent::Mouse(m) => self.on_mouse(m),
-                    CtEvent::Paste(s) => self.on_paste(s),
-                    // A resize changes the viewport height, so force the caret back into view.
-                    CtEvent::Resize(..) => self.last_caret = None,
-                    _ => {}
-                }
+            if self.poll_input()? {
                 // Any input event may have changed visible state → repaint next frame.
                 self.force_redraw = true;
             }
@@ -73,5 +51,42 @@ impl App {
         self.lsp.stop_all(Duration::from_secs(3));
         self.save_session();
         Ok(())
+    }
+
+    /// The idle-frame gate: `(repaint this frame, keep the LSP ticking)`.
+    ///
+    /// `force_redraw` is set by input and by async worker/LSP work; `is_animating` keeps the LSP
+    /// spinner ticking; the editor-pane `sig` catches direct edits/navigation. `lsp_pending`
+    /// covers the two wall-clock LSP timers that must keep running while the editor is idle: an
+    /// armed diagnostics-pull debounce, and a crashed server (that an open doc uses) waiting out
+    /// its restart backoff, whose respawn only fires from `ensure_started` reached via
+    /// `update_lsp`. While the LSP panel is open, a pending restart also repaints its server row
+    /// through the backoff and the respawn tick (Ok → "starting" / Err → "crashed"); the
+    /// subsequent Initializing → Running flip repaints via the `ServerReady` drain event. Both
+    /// states terminate, so this can't pin the loop.
+    fn frame_work(&self, sig: FrameSig) -> (bool, bool) {
+        let restart_pending = self.lsp_restart_pending();
+        let redraw = self.force_redraw
+            || self.last_frame_sig != Some(sig)
+            || self.is_animating()
+            || (restart_pending && self.editor.lsp_open);
+        let lsp_pending = !self.lsp_pull_deadline.is_empty() || restart_pending;
+        (redraw, lsp_pending)
+    }
+
+    /// Wait up to one frame for a terminal event and route it. Returns whether one arrived.
+    fn poll_input(&mut self) -> Result<bool> {
+        if !event::poll(Duration::from_millis(16))? {
+            return Ok(false);
+        }
+        match event::read()? {
+            CtEvent::Key(k) if k.kind == KeyEventKind::Press => self.on_key(k),
+            CtEvent::Mouse(m) => self.on_mouse(m),
+            CtEvent::Paste(s) => self.on_paste(s),
+            // A resize changes the viewport height, so force the caret back into view.
+            CtEvent::Resize(..) => self.last_caret = None,
+            _ => {}
+        }
+        Ok(true)
     }
 }
