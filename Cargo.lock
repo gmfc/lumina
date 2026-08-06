@@ -343,7 +343,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "editor-builtins"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "editor-core",
  "editor-plugin",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "editor-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "proptest",
  "ropey",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "editor-lsp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "lsp-types",
  "serde",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "editor-plugin"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "editor-core",
  "rhai",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "editor-syntax"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "editor-core",
  "ropey",
@@ -888,7 +888,7 @@ dependencies = [
 
 [[package]]
 name = "lumina"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "arboard",
