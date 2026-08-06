@@ -220,28 +220,10 @@ impl App {
             return;
         };
 
-        // Re-apply the open policy before reading: an external process can turn a 4 KB log into
-        // a 3 GB one (or a text file into binary) while it is open, and an unguarded reload
-        // would slurp all of it on the UI thread — the exact freeze `files::open` prevents at
-        // open time, reached through the back door. The buffer is kept as-is and the user told.
         let limits = self.config.file_limits();
-        // An unreadable file falls through to the deletion handling below.
-        if let Ok(probe) = crate::files::probe(path) {
-            if let crate::files::FileKind::Binary { label } = probe.kind {
-                self.editor.notify_warn(format!(
-                    "{} changed on disk and is no longer text ({label}) — not reloaded",
-                    super::file_ops::display_name(path)
-                ));
-                return;
-            }
-            if limits.max_bytes > 0 && probe.len > limits.max_bytes {
-                self.editor.notify_warn(format!(
-                    "{} grew past the {} open limit — not reloaded",
-                    super::file_ops::display_name(path),
-                    crate::files::human_bytes(limits.max_bytes)
-                ));
-                return;
-            }
+        if let Some(refusal) = reload_refusal(path, &limits) {
+            self.editor.notify_warn(refusal);
+            return;
         }
         let Ok(bytes) = std::fs::read(path) else {
             // Deleted mid-race, or unreadable → flag deletion, keep the buffer.
@@ -342,4 +324,29 @@ impl App {
         // The file changed under us (e.g. an agent wrote it) — refresh its git gutter.
         self.request_git_status(id);
     }
+}
+
+/// Why a changed file must *not* be reloaded into its open buffer, or `None` when it may be.
+///
+/// Re-applies the open policy before reading: an external process can turn a 4 KB log into a 3 GB
+/// one (or a text file into binary) while it is open, and an unguarded reload would slurp all of
+/// it on the UI thread — the exact freeze `files::open` prevents at open time, reached through the
+/// back door. An unreadable file returns `None` and falls through to the caller's deletion
+/// handling.
+fn reload_refusal(path: &std::path::Path, limits: &crate::files::Limits) -> Option<String> {
+    let probe = crate::files::probe(path).ok()?;
+    if let crate::files::FileKind::Binary { label } = probe.kind {
+        return Some(format!(
+            "{} changed on disk and is no longer text ({label}) — not reloaded",
+            super::file_ops::display_name(path)
+        ));
+    }
+    if limits.max_bytes > 0 && probe.len > limits.max_bytes {
+        return Some(format!(
+            "{} grew past the {} open limit — not reloaded",
+            super::file_ops::display_name(path),
+            crate::files::human_bytes(limits.max_bytes)
+        ));
+    }
+    None
 }

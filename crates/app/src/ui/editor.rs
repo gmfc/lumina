@@ -104,51 +104,7 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let gutter = gutter_width(doc);
-    // Syntax highlighting for the active document (cached, viewport-only).
-    let active_id = app.editor.workspace.active_doc();
-    let (deco_spans, deco_gutter, deco_virtual) = collect_decorations(app, active_id);
-    let ctx = EditorCtx {
-        doc,
-        area,
-        text_x: area.x + gutter,
-        gutter,
-        hscroll: doc.view.scroll_col,
-        first: doc.view.scroll_line,
-        hl: active_id.and_then(|id| app.editor.highlighters.get(&id)),
-        theme: &app.theme,
-        sel_bg: app.theme.selection_bg,
-        gutter_fg: app.theme.gutter_fg,
-        deco_spans,
-        deco_gutter,
-        deco_virtual,
-        // Selection spans, precomputed for quick membership tests.
-        sels: doc.selections.ranges(),
-        bracket_match: app.editor.bracket_match,
-        git: if app.config.git_gutter {
-            active_id.and_then(|id| app.editor.git_hunks.get(&id))
-        } else {
-            None
-        },
-        vim_visual_char: matches!(
-            app.editor.vim_view.as_ref().map(|v| v.mode),
-            Some(editor_plugin::VimMode::Visual)
-        ),
-        vim_visual_lines: match app.editor.vim_view.as_ref().map(|v| v.mode) {
-            Some(editor_plugin::VimMode::VisualLine) => {
-                let p = doc.selections.primary();
-                let fl = doc.char_to_line(p.from());
-                let ll = doc.char_to_line(p.to());
-                let start = doc.line_to_char(fl);
-                let end = if ll + 1 < doc.len_lines() {
-                    doc.line_to_char(ll + 1)
-                } else {
-                    doc.len_chars()
-                };
-                Some((start, end))
-            }
-            _ => None,
-        },
-    };
+    let ctx = editor_ctx(app, doc, area, gutter);
 
     let buf = f.buffer_mut();
     // One scratch, reused for every row: no per-line heap allocation in the render loop.
@@ -175,6 +131,57 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     if app.editor.focus == Focus::Editor {
         place_cursor(f, area, primary_screen);
     }
+}
+
+/// Gather everything the row renderers read into one context: the document, the viewport, the
+/// theme, and the per-document layers (syntax, decorations, git, vim selection shading).
+fn editor_ctx<'a>(app: &'a App, doc: &'a Document, area: Rect, gutter: u16) -> EditorCtx<'a> {
+    // Syntax highlighting for the active document (cached, viewport-only).
+    let active_id = app.editor.workspace.active_doc();
+    let (deco_spans, deco_gutter, deco_virtual) = collect_decorations(app, active_id);
+    let vim_mode = app.editor.vim_view.as_ref().map(|v| v.mode);
+    EditorCtx {
+        doc,
+        area,
+        text_x: area.x + gutter,
+        gutter,
+        hscroll: doc.view.scroll_col,
+        first: doc.view.scroll_line,
+        hl: active_id.and_then(|id| app.editor.highlighters.get(&id)),
+        theme: &app.theme,
+        sel_bg: app.theme.selection_bg,
+        gutter_fg: app.theme.gutter_fg,
+        deco_spans,
+        deco_gutter,
+        deco_virtual,
+        // Selection spans, precomputed for quick membership tests.
+        sels: doc.selections.ranges(),
+        bracket_match: app.editor.bracket_match,
+        git: if app.config.git_gutter {
+            active_id.and_then(|id| app.editor.git_hunks.get(&id))
+        } else {
+            None
+        },
+        vim_visual_char: matches!(vim_mode, Some(editor_plugin::VimMode::Visual)),
+        vim_visual_lines: matches!(vim_mode, Some(editor_plugin::VimMode::VisualLine))
+            .then(|| visual_line_span(doc))
+            .flatten(),
+    }
+}
+
+/// The char range Vim's Visual-Line mode shades: whole lines from the selection's first to its
+/// last, including the trailing newline of the last one.
+fn visual_line_span(doc: &Document) -> Option<(usize, usize)> {
+    let p = doc.selections.primary();
+    let fl = doc.char_to_line(p.from());
+    let ll = doc.char_to_line(p.to());
+    let start = doc.line_to_char(fl);
+    let end = if ll + 1 < doc.len_lines() {
+        doc.line_to_char(ll + 1)
+    } else {
+        doc.len_chars()
+    };
+    Some((start, end))
 }
 
 /// Show the hardware cursor at the primary caret, if it landed inside the pane.
@@ -764,36 +771,65 @@ mod deco_bench {
         use std::hint::black_box;
         use std::time::Instant;
 
-        const DOC: usize = 4000;
-        const LINE_LEN: usize = 60;
-        const LINES: usize = 60; // one viewport
-        const REPS: usize = 400; // frames
-        let all = synth_decos(600, DOC); // a doc with lots of find-matches / diagnostics
+        let all = synth_decos(600, BENCH_DOC); // a doc with lots of find-matches / diagnostics
 
-        // Before: for each char on each line, scan the whole decoration list.
         let t0 = Instant::now();
+        let sink_a = bench_scan_all(&all);
+        let scan_all = t0.elapsed();
+
+        let t1 = Instant::now();
+        let sink_b = bench_bucketed(&all);
+        let bucketed = t1.elapsed();
+
+        black_box(sink_a + sink_b);
+        let chars = (BENCH_REPS * BENCH_LINES * BENCH_LINE_LEN) as u128;
+        println!(
+            "cell_style scan-all:  {scan_all:?}  ({} ns/char)\n\
+             cell_style bucketed:  {bucketed:?}  ({} ns/char)",
+            scan_all.as_nanos() / chars,
+            bucketed.as_nanos() / chars,
+        );
+    }
+
+    #[cfg(feature = "perfbench")]
+    const BENCH_DOC: usize = 4000;
+    #[cfg(feature = "perfbench")]
+    const BENCH_LINE_LEN: usize = 60;
+    /// One viewport.
+    #[cfg(feature = "perfbench")]
+    const BENCH_LINES: usize = 60;
+    /// Frames.
+    #[cfg(feature = "perfbench")]
+    const BENCH_REPS: usize = 400;
+
+    /// Before: for each char on each line, scan the whole decoration list.
+    #[cfg(feature = "perfbench")]
+    fn bench_scan_all(all: &[Decoration]) -> usize {
         let mut sink = 0usize;
-        for _ in 0..REPS {
-            for row in 0..LINES {
-                let line_start = row * LINE_LEN;
-                for off in line_start..line_start + LINE_LEN {
-                    for d in &all {
+        for _ in 0..BENCH_REPS {
+            for row in 0..BENCH_LINES {
+                let line_start = row * BENCH_LINE_LEN;
+                for off in line_start..line_start + BENCH_LINE_LEN {
+                    for d in all {
                         if off >= d.range.0 && off < d.range.1 {
-                            sink += black_box(d.range.1);
+                            sink += std::hint::black_box(d.range.1);
                         }
                     }
                 }
             }
         }
-        let scan_all = t0.elapsed();
+        sink
+    }
 
-        // After: filter to the line's range once, then scan only that handful per char.
+    /// After: filter to the line's range once, then scan only that handful per char.
+    #[cfg(feature = "perfbench")]
+    fn bench_bucketed(all: &[Decoration]) -> usize {
+        let mut sink = 0usize;
         let mut line_decos: Vec<&Decoration> = Vec::new();
-        let t1 = Instant::now();
-        for _ in 0..REPS {
-            for row in 0..LINES {
-                let line_start = row * LINE_LEN;
-                let line_end = line_start + LINE_LEN;
+        for _ in 0..BENCH_REPS {
+            for row in 0..BENCH_LINES {
+                let line_start = row * BENCH_LINE_LEN;
+                let line_end = line_start + BENCH_LINE_LEN;
                 line_decos.clear();
                 line_decos.extend(
                     all.iter()
@@ -802,21 +838,12 @@ mod deco_bench {
                 for off in line_start..line_end {
                     for d in &line_decos {
                         if off >= d.range.0 && off < d.range.1 {
-                            sink += black_box(d.range.1);
+                            sink += std::hint::black_box(d.range.1);
                         }
                     }
                 }
             }
         }
-        let bucketed = t1.elapsed();
-
-        black_box(sink);
-        let chars = (REPS * LINES * LINE_LEN) as u128;
-        println!(
-            "cell_style scan-all:  {scan_all:?}  ({} ns/char)\n\
-             cell_style bucketed:  {bucketed:?}  ({} ns/char)",
-            scan_all.as_nanos() / chars,
-            bucketed.as_nanos() / chars,
-        );
+        sink
     }
 }

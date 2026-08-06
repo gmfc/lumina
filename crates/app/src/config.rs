@@ -259,65 +259,62 @@ impl Config {
     }
 
     /// Merge the `[settings]` table, clamping numeric fields to sane ranges.
+    ///
+    /// Split by value kind so each group is one lookup pattern repeated, rather than sixteen
+    /// interleaved shapes. A key the file doesn't set leaves the current value alone — that is
+    /// what makes the tiers in [`Self::apply_toml_str`] layer.
     fn apply_settings(&mut self, settings: &toml::Table) {
-        if let Some(n) = settings.get("tab_width").and_then(|v| v.as_integer()) {
-            self.tab_width = n.clamp(1, 16) as usize;
-        }
-        if let Some(n) = settings.get("sidebar_width").and_then(|v| v.as_integer()) {
-            self.sidebar_width = n.clamp(10, 120) as u16;
-        }
-        if let Some(b) = settings.get("follow_mode").and_then(|v| v.as_bool()) {
-            self.follow_mode = b;
-        }
-        if let Some(b) = settings.get("poll_watch").and_then(|v| v.as_bool()) {
-            self.poll_watch = b;
-        }
-        if let Some(b) = settings.get("auto_pairs").and_then(|v| v.as_bool()) {
-            self.auto_pairs = b;
-        }
-        if let Some(b) = settings.get("auto_indent").and_then(|v| v.as_bool()) {
-            self.auto_indent = b;
-        }
-        if let Some(b) = settings
-            .get("trim_trailing_whitespace")
-            .and_then(|v| v.as_bool())
-        {
-            self.trim_trailing_whitespace = b;
-        }
-        if let Some(b) = settings
-            .get("insert_final_newline")
-            .and_then(|v| v.as_bool())
-        {
-            self.insert_final_newline = b;
-        }
-        if let Some(b) = settings.get("git_gutter").and_then(|v| v.as_bool()) {
-            self.git_gutter = b;
-        }
-        if let Some(b) = settings.get("line_wrap").and_then(|v| v.as_bool()) {
-            self.line_wrap = b;
-        }
-        if let Some(n) = settings
-            .get("max_file_size_mb")
-            .and_then(|v| v.as_integer())
-        {
-            self.max_file_size_mb = n.clamp(1, 4096) as u64;
-        }
-        if let Some(n) = settings.get("large_file_mb").and_then(|v| v.as_integer()) {
-            self.large_file_mb = n.clamp(1, 4096) as u64;
-        }
-        if let Some(b) = settings.get("icons").and_then(|v| v.as_bool()) {
-            self.icons = b;
-        }
-        if let Some(b) = settings.get("vim").and_then(|v| v.as_bool()) {
-            self.vim = b;
-        }
+        self.apply_bool_settings(settings);
+        self.apply_number_settings(settings);
         if let Some(s) = settings.get("terminal_shell").and_then(|v| v.as_str()) {
             let s = s.trim();
             if !s.is_empty() {
                 self.terminal_shell = Some(s.to_string());
             }
         }
-        if let Some(n) = settings.get("terminal_height").and_then(|v| v.as_integer()) {
+    }
+
+    /// The plain on/off settings.
+    fn apply_bool_settings(&mut self, settings: &toml::Table) {
+        let flags: [(&str, &mut bool); 10] = [
+            ("follow_mode", &mut self.follow_mode),
+            ("poll_watch", &mut self.poll_watch),
+            ("auto_pairs", &mut self.auto_pairs),
+            ("auto_indent", &mut self.auto_indent),
+            (
+                "trim_trailing_whitespace",
+                &mut self.trim_trailing_whitespace,
+            ),
+            ("insert_final_newline", &mut self.insert_final_newline),
+            ("git_gutter", &mut self.git_gutter),
+            ("line_wrap", &mut self.line_wrap),
+            ("icons", &mut self.icons),
+            ("vim", &mut self.vim),
+        ];
+        for (key, slot) in flags {
+            if let Some(b) = settings.get(key).and_then(|v| v.as_bool()) {
+                *slot = b;
+            }
+        }
+    }
+
+    /// The numeric settings, each clamped to the range the rest of the app assumes. A
+    /// file-supplied number outside it is a typo, not an instruction.
+    fn apply_number_settings(&mut self, settings: &toml::Table) {
+        let int = |key: &str| settings.get(key).and_then(|v| v.as_integer());
+        if let Some(n) = int("tab_width") {
+            self.tab_width = n.clamp(1, 16) as usize;
+        }
+        if let Some(n) = int("sidebar_width") {
+            self.sidebar_width = n.clamp(10, 120) as u16;
+        }
+        if let Some(n) = int("max_file_size_mb") {
+            self.max_file_size_mb = n.clamp(1, 4096) as u64;
+        }
+        if let Some(n) = int("large_file_mb") {
+            self.large_file_mb = n.clamp(1, 4096) as u64;
+        }
+        if let Some(n) = int("terminal_height") {
             self.terminal_height = n.clamp(3, 60) as u16;
         }
     }
