@@ -144,32 +144,45 @@ impl Config {
     /// add to the disabled set — a project may switch a plugin off, never force one on.
     fn apply_toml_str(&mut self, src: &str, is_project: bool) -> Result<(), String> {
         let value: toml::Value = src.parse().map_err(|e| format!("{e}"))?;
+        let table = |name: &str| value.get(name).and_then(|v| v.as_table()).cloned();
 
-        if let Some(settings) = value.get("settings").and_then(|v| v.as_table()) {
+        if let Some(settings) = table("settings") {
             if is_project {
-                for key in settings.keys() {
-                    if !self.project_overrides.contains(key) {
-                        self.project_overrides.push(key.clone());
-                    }
-                }
+                self.note_project_overrides(&settings);
             }
-            self.apply_settings(settings);
+            self.apply_settings(&settings);
         }
-        if let Some(keys) = value.get("keys").and_then(|v| v.as_table()) {
-            self.apply_keys(keys);
+        if let Some(keys) = table("keys") {
+            self.apply_keys(&keys);
         }
-        if let Some(lsp) = value.get("lsp").and_then(|v| v.as_table()) {
-            self.apply_lsp(lsp);
+        if let Some(lsp) = table("lsp") {
+            self.apply_lsp(&lsp);
         }
-        if let Some(plugins) = value.get("plugins").and_then(|v| v.as_table()) {
-            for (id, enabled) in plugins {
-                if enabled.as_bool() == Some(false) && !self.disabled_plugins.contains(id) {
-                    self.disabled_plugins.push(id.clone());
-                }
-            }
+        if let Some(plugins) = table("plugins") {
+            self.apply_plugins(&plugins);
         }
 
         Ok(())
+    }
+
+    /// Remember which `[settings]` keys the project-local file sets, so the Settings tab can say
+    /// when a change it wrote to the global file is being overridden here.
+    fn note_project_overrides(&mut self, settings: &toml::Table) {
+        for key in settings.keys() {
+            if !self.project_overrides.contains(key) {
+                self.project_overrides.push(key.clone());
+            }
+        }
+    }
+
+    /// Merge the `[plugins]` table. Only `false` entries are read: a tier may switch a plugin off,
+    /// never force one that a tier under it disabled back on.
+    fn apply_plugins(&mut self, plugins: &toml::Table) {
+        for (id, enabled) in plugins {
+            if enabled.as_bool() == Some(false) && !self.disabled_plugins.contains(id) {
+                self.disabled_plugins.push(id.clone());
+            }
+        }
     }
 
     /// Whether the project-local file sets `key`, so a change written to the global file will not
