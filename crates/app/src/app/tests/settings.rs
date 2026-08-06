@@ -271,3 +271,32 @@ fn render_tolerates_tiny_pane() {
     std::fs::remove_file(&file).ok();
     std::fs::remove_file(&cfg).ok();
 }
+
+#[test]
+fn line_wrap_toggle_applies_live_and_persists() {
+    let (mut app, file, cfg) = settings_app();
+    focus(&mut app, "line_wrap");
+    assert!(!app.config.line_wrap, "word wrap defaults off");
+
+    press(&mut app, KeyCode::Char(' '));
+    assert!(app.config.line_wrap);
+    // Live-applied, not merely persisted: the app-wide flag and every open document mirror it.
+    assert!(app.editor.wrap_enabled);
+    assert!(app.editor.workspace.documents.values().all(|d| d.view.wrap));
+    let written = std::fs::read_to_string(&cfg).unwrap();
+    assert!(written.contains("line_wrap = true"));
+
+    // And back off again, clearing the wrap-only scroll offset.
+    press(&mut app, KeyCode::Char(' '));
+    assert!(!app.config.line_wrap);
+    assert!(!app.editor.wrap_enabled);
+    assert!(app
+        .editor
+        .workspace
+        .documents
+        .values()
+        .all(|d| !d.view.wrap && d.view.scroll_sub == 0));
+
+    std::fs::remove_file(&file).ok();
+    std::fs::remove_file(&cfg).ok();
+}

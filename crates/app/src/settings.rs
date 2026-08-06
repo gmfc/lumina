@@ -88,6 +88,13 @@ impl SettingsView {
             "Copy indentation on newline; dedent on a closing bracket.",
             config.auto_indent,
         );
+        toggle(
+            &mut entries,
+            "line_wrap",
+            "Word wrap",
+            "Wrap long lines at word boundaries instead of scrolling horizontally.",
+            config.line_wrap,
+        );
 
         section(&mut entries, "Files");
         toggle(
