@@ -17,7 +17,7 @@ impl App {
         } else {
             crate::theme::Theme::default_dark(truecolor)
         };
-        self.editor.status_message = Some(format!(
+        self.editor.notify_info(format!(
             "Theme: {}",
             if self.theme.is_dark() {
                 "dark"

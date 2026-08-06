@@ -23,6 +23,9 @@ pub(super) fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         let doc = &ws.documents[id];
         let name = if app.is_settings_doc(id) {
             "⚙ Settings".to_string()
+        } else if let Some(title) = app.editor.tab_views.get(&id).and_then(|v| v.tab_title()) {
+            // The app's own reference tabs have no file to be named after.
+            title.to_string()
         } else {
             doc.path
                 .as_ref()
@@ -212,6 +215,8 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
     let ws = &app.editor.workspace;
     let mut left;
     let mut right = String::new();
+    // The bar's own colour, unless a held warning/error recolours it (see below).
+    let mut bar = Style::default().bg(CLR_ACCENT).fg(Color::Black);
 
     if let Some(doc) = ws.active_document() {
         let head = doc.selections.primary().head;
@@ -234,13 +239,37 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
             editor_core::Encoding::Utf16Be => "UTF-16 BE",
         };
         let lang = doc.language.clone().unwrap_or_else(|| "text".into());
-        right = format!("Ln {}, Col {}   {enc}  {le}  {lang} ", line + 1, col + 1);
+        // Persistent document states get persistent segments, next to the encoding/line-ending
+        // ones: both change what the editor does for as long as they hold, and a one-shot message
+        // that scrolled away a hundred keystrokes ago is not a display of that.
+        let large = if doc.large { "LARGE  " } else { "" };
+        let conflict = if doc.external_conflict.is_some() {
+            "CONFLICT  "
+        } else {
+            ""
+        };
+        right = format!(
+            "Ln {}, Col {}   {conflict}{large}{enc}  {le}  {lang} ",
+            line + 1,
+            col + 1
+        );
     } else {
         left = " No file open".into();
     }
 
-    if let Some(msg) = &app.editor.status_message {
-        left = format!(" {msg}");
+    if let Some(text) = app.editor.status_text() {
+        left = format!(" {text}");
+        // Severity has to reach the eye, not just the log: a held warning or error repaints the
+        // whole bar so a failed save can't read like a successful one.
+        bar = match app.editor.status_level() {
+            Some(crate::editor::NoticeLevel::Warn) => Style::default()
+                .bg(Color::Rgb(196, 148, 32))
+                .fg(Color::Black),
+            Some(crate::editor::NoticeLevel::Error) => Style::default()
+                .bg(Color::Rgb(170, 52, 52))
+                .fg(Color::White),
+            _ => bar,
+        };
     } else if let Some(item) = app
         .editor
         .status_items
@@ -287,7 +316,15 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
         right = format!("{prefix}{right}");
     }
 
-    let bg = Style::default().bg(CLR_ACCENT).fg(Color::Black);
+    // The left slot is free-form text; the right cluster is fixed-width state the user navigates
+    // by. A long message must not push the position, encoding, or CONFLICT/LARGE segments off the
+    // end of the bar, so the message yields instead.
+    let avail = (area.width as usize).saturating_sub(display_len(&right));
+    if display_len(&left) > avail {
+        left = truncate_display(&left, avail);
+    }
+
+    let bg = bar;
     let pad = (area.width as usize).saturating_sub(display_len(&left) + display_len(&right));
     // The right cluster is right-justified: it starts where `left + pad` ends.
     let right_start = area.x + area.width.saturating_sub(display_len(&right) as u16);
@@ -304,6 +341,27 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
         let x = right_start.saturating_add(progress_prefix as u16);
         Rect::new(x, area.y, display_len(&lsp_seg) as u16, 1)
     })
+}
+
+/// Cut `s` down to at most `width` display columns, ending in an ellipsis when anything was
+/// dropped. Counts display width (not chars), so a CJK message truncates where it actually
+/// overflows rather than a column short or a column late.
+fn truncate_display(s: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = display_len(&ch.to_string());
+        if used + w > width.saturating_sub(1) {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
 }
 
 /// Build the footer LSP segment from the mirrored status items: `"lsp.health"`

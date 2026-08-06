@@ -97,7 +97,13 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+Space` completions · `F12` go to definition · `Ctrl+F12` go to implementation ·
 `Shift+F12` find references · `Ctrl+Shift+O` document symbols · `F2` rename ·
 `Alt+J`/`Alt+K` next/prev git change · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
-`Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+K Ctrl+T` open as text · `Ctrl+Q` quit.
+`Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+K Ctrl+T` open as text ·
+`Ctrl+K Ctrl+R` keyboard-shortcut reference · `Ctrl+K Ctrl+N` notifications · `Ctrl+Q` quit.
+
+You never have to keep this list: **`Ctrl+K Ctrl+R`** opens the same table generated from the
+keymap actually in use, so it includes plugin chords and your own `[keys]` overrides. The command
+palette shows each command's chord next to it, and an armed prefix like `Ctrl+K` lists what may
+follow it in the status bar.
 
 ## Integrated terminal
 
@@ -152,8 +158,9 @@ filesystem plus the first 8 KiB — and decides what kind of tab to give you:
 
 - **Text, under the limits** → an ordinary buffer, as before.
 - **Text, at or over `large_file_mb` (8 MB)** → still a buffer, but in **large-file mode**:
-  syntax highlighting, the git gutter, and the language server stay off, and the status bar says
-  so. A 200 MB log opens and scrolls instead of stalling the frame.
+  syntax highlighting, the git gutter, and the language server stay off. The status bar says so
+  when the file opens, and carries a `LARGE` segment for as long as the file is open, so the
+  missing colors never read as a bug. A 200 MB log opens and scrolls instead of stalling the frame.
 - **Text, over `max_file_size_mb` (64 MB)** → a tab explaining the limit, with **Open Anyway**
   (`file.openAnyway`, or `Enter`) if you meant it.
 - **Binary** → a tab naming the format ("PDF document", "PNG image", "ELF executable", …) and
@@ -171,6 +178,27 @@ session — but holds no text buffer, so nothing can write it back over the file
 Viewers are a **plugin contribution**, not editor code: a plugin declares which extensions it
 claims and publishes styled rows for its tab. Disabling the `pdf` plugin hands `.pdf` straight
 back to the binary notice; nothing in `lumina` knows what a PDF is.
+
+## Not losing your work
+
+Every path that can throw a buffer away asks first, and every path that fails says what to do
+about it.
+
+- **Quitting with unsaved changes** (`Ctrl+Q`, `:qa`, the palette's *Quit*) opens a confirmation
+  naming the files at risk: *save all & quit*, *discard & quit*, or cancel. Sessions restore
+  paths, cursors, and scroll — not buffer contents — so nothing else would have brought that work
+  back. `:qa!` still force-quits, because that is what the bang means.
+- **Save As over an existing file** asks before overwriting, shows the absolute path the name
+  resolves to as you type it, and reports a missing directory in the box instead of failing after
+  the fact.
+- **A file changed on disk under a modified buffer** is never clobbered. The tab shows `⚠`, the
+  status bar shows `CONFLICT` for as long as it holds, and you get two exits from the palette:
+  *File: Revert File* (take the disk version — confirmed, since it discards your edits and this
+  file's undo history) and *File: Keep My Version* (keep yours; the next save overwrites theirs).
+- **Messages have a severity.** A confirmation clears on the next keystroke; a warning or an error
+  stays on screen, tinted, until you replace it or press `Esc`. Every message is also kept in a
+  scrollback — `Ctrl+K Ctrl+N`, or *View: Show Notifications* — so nothing you blinked past is
+  gone. Errors name their recovery with the chord that is actually bound to it.
 
 ## Settings
 

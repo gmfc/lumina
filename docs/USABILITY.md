@@ -16,6 +16,45 @@ rated by what they cost the user, not by implementation effort.
 
 ---
 
+## Status — what has been fixed
+
+Every **critical** and **major** finding below has been addressed, along with most of the minor
+ones. The findings are kept verbatim as the record of *why* each change was made; the resolution
+notes say what was actually built and where it lives.
+
+| Finding | Severity | Status |
+|---|---|---|
+| U1 · one untyped, transient message slot | MAJOR | ✅ `Notice { text, level }` + a bounded log + `view.notifications` |
+| U2 · large-file mode announced once | MAJOR | ✅ persistent `LARGE` status segment |
+| U3 · external conflict never explained | MAJOR | ✅ `Warn` notice on the transition + persistent `CONFLICT` segment |
+| U4 · internal vocabulary in user text | MINOR | ✅ server named where known; stale-edit + unknown-command rephrased |
+| U5 / U10 · `Ctrl+Q` discards unsaved work | **CRITICAL** | ✅ `ConfirmQuit` overlay listing the dirty files |
+| U6 · a conflict has no resolution path | MAJOR | ✅ `file.reloadFromDisk` + `file.keepMine` |
+| U7 · external reload silently empties undo | MINOR | ✅ the reload says so |
+| U8 · three overlay dismissal idioms | MINOR | ✅ `Esc` dismisses everywhere; the hover no longer eats the key |
+| U9 · keymap deviations invisible | MINOR | ✅ a "Differs from VS Code" section heads the reference |
+| U11 · Save As overwrites silently | MAJOR | ✅ `[O] Overwrite / [Esc] Cancel`, plus a parent-directory check |
+| U12 · Save As is a bare text field | MINOR | ✅ the resolved absolute path is shown as you type |
+| U13 · palette shows no keybindings | MAJOR | ✅ `CommandInfo::keys` → `PickerItem::hint`, right-aligned in the row |
+| U14 · picker has no empty state | MINOR | ✅ `No matching commands` / `No matching files` |
+| U15 · chord prefixes hide continuations | MINOR | ✅ which-key list on an armed prefix |
+| U16 · no recency/frequency ordering | MINOR | ⬜ not done |
+| U17 · no project-local configuration | MINOR | ⬜ not done |
+| U18 · status bar's left slot has four meanings | MINOR | 🟡 partly — levels are now colour-coded, but diagnostics still share the slot |
+| U19 · errors offer no way out | MAJOR | ✅ every error names its recovery, by live chord |
+| U20 · raw `io::Error` text | MINOR | ✅ `ErrorKind` → plain sentences, always naming the file |
+| U21 · no in-app help | MAJOR | ✅ `help.keybindings` (generated from the live keymap) + `help.commands` |
+
+The work landed in: `editor.rs` (the notice type, the notice log, the `Text` tab view),
+`app/help.rs` (the reference tabs — new), `app/file_ops.rs` (the quit guard, the conflict exits,
+the Save As checks, the error humanizer), `app/overlay.rs` (the new confirmations),
+`ui/chrome.rs` (levelled colouring, the `LARGE`/`CONFLICT` segments, message truncation),
+`ui/pickers.rs` (hints + the empty state), and `app/tests/usability.rs` (new tests, one per
+finding). Regressions in behaviour the findings called out as *already strong* are covered by the
+existing suite, which still passes.
+
+---
+
 ## Executive summary
 
 Lumina's usability is much better than a terminal editor's median, and it is better in the
@@ -51,18 +90,18 @@ no `help.*` entry at all.
 
 ## Health by heuristic
 
-| # | Heuristic | Status | Note |
-|---|---|---|---|
-| **1** | Visibility of system status | 🟠 **MAJOR GAP** | Strong LSP/progress/find indicators, but one transient message slot carries everything; two persistent states (large-file mode, external conflict) are announced once or not at all. |
-| **2** | Match between system and real world | 🟡 MINOR DRIFT | Palette titles and refusal copy are excellent; raw LSP strings and internal words ("stale edit(s)", "Unknown command") leak into the same bar. |
-| **3** | User control and freedom | 🔴 **CRITICAL** | Undo/redo, reopen-closed-tab, and confirm-close are solid — but `Ctrl+Q` discards unsaved buffers with no prompt, and an external-edit conflict has no resolution path. |
-| **4** | Consistency and standards | 🟡 MINOR DRIFT | VS Code conventions followed closely and deviations are *documented in code*; but three overlays use three different dismissal idioms, and one dismisses on **any** key. |
-| **5** | Error prevention | 🔴 **CRITICAL** | Excellent guards where they exist (viewer-tab save guard, reload re-probe, non-overridable binary refusals). Two unguarded destructive paths: quit-with-unsaved, and Save As silently overwriting an existing file. |
-| **6** | Recognition rather than recall | 🟠 **MAJOR GAP** | Palette shows no keybindings despite the API existing and being used elsewhere; no empty state; multi-chord prefixes show `Ctrl+K …` without the continuations. |
-| **7** | Flexibility and efficiency of use | ✅ HEALTHY | Vim mode, full remapping, palette + quick-open, multi-cursor, session restore, two plugin substrates. Minor: no frecency ordering, no project-local config. |
-| **8** | Aesthetic and minimalist design | ✅ HEALTHY | Genuinely good: responsive welcome screen, width-aware truncation, status bar earns its density. One overload (see U18). |
-| **9** | Recognize, diagnose, recover from errors | 🟠 **MAJOR GAP** | The notice tab is a model of this heuristic. Everywhere else, errors state the problem and offer no way out — `"Save failed: {e}"` is the whole interaction. |
-| **10** | Help and documentation | 🟠 **MAJOR GAP** | No in-app help, no keybinding reference, no `help.*` command. The welcome screen's 13 hints are the only in-app documentation, and they disappear the moment a file is open. |
+| # | Heuristic | At review | Now | Note |
+|---|---|---|---|---|
+| **1** | Visibility of system status | 🟠 **MAJOR GAP** | ✅ | Strong LSP/progress/find indicators, but one transient message slot carries everything; two persistent states (large-file mode, external conflict) are announced once or not at all. *Fixed: notices carry a level and a scrollback; `LARGE` and `CONFLICT` are persistent segments.* |
+| **2** | Match between system and real world | 🟡 MINOR DRIFT | ✅ | Palette titles and refusal copy are excellent; raw LSP strings and internal words ("stale edit(s)", "Unknown command") leak into the same bar. *Fixed: the server is named where known, and the internal phrasings were rewritten.* |
+| **3** | User control and freedom | 🔴 **CRITICAL** | ✅ | Undo/redo, reopen-closed-tab, and confirm-close are solid — but `Ctrl+Q` discards unsaved buffers with no prompt, and an external-edit conflict has no resolution path. *Fixed: quit is guarded like every other discard path, and a conflict has two named exits.* |
+| **4** | Consistency and standards | 🟡 MINOR DRIFT | ✅ | VS Code conventions followed closely and deviations are *documented in code*; but three overlays use three different dismissal idioms, and one dismisses on **any** key. *Fixed: `Esc` dismisses everywhere and the hover no longer swallows the key; the deviations head the in-app reference.* |
+| **5** | Error prevention | 🔴 **CRITICAL** | ✅ | Excellent guards where they exist (viewer-tab save guard, reload re-probe, non-overridable binary refusals). Two unguarded destructive paths: quit-with-unsaved, and Save As silently overwriting an existing file. *Fixed: both are confirmed, and Save As vets the path before assigning it.* |
+| **6** | Recognition rather than recall | 🟠 **MAJOR GAP** | ✅ | Palette shows no keybindings despite the API existing and being used elsewhere; no empty state; multi-chord prefixes show `Ctrl+K …` without the continuations. *Fixed: all three.* |
+| **7** | Flexibility and efficiency of use | ✅ HEALTHY | ✅ | Vim mode, full remapping, palette + quick-open, multi-cursor, session restore, two plugin substrates. Minor: no frecency ordering, no project-local config — both still open (U16, U17). |
+| **8** | Aesthetic and minimalist design | ✅ HEALTHY | ✅ | Genuinely good: responsive welcome screen, width-aware truncation, status bar earns its density. One overload (see U18) — the message slot is now colour-coded by level, but diagnostics still share it. |
+| **9** | Recognize, diagnose, recover from errors | 🟠 **MAJOR GAP** | ✅ | The notice tab is a model of this heuristic. Everywhere else, errors state the problem and offer no way out — `"Save failed: {e}"` is the whole interaction. *Fixed: `io::Error` kinds became sentences, and each error names its recovery by live chord.* |
+| **10** | Help and documentation | 🟠 **MAJOR GAP** | ✅ | No in-app help, no keybinding reference, no `help.*` command. The welcome screen's 13 hints are the only in-app documentation, and they disappear the moment a file is open. *Fixed: `help.keybindings` generates the reference from the live keymap.* |
 
 ---
 
@@ -362,7 +401,7 @@ keymap.
 
 ## Prioritised roadmap
 
-**P0 — data loss and dead ends.** These change outcomes, not impressions.
+**P0 — data loss and dead ends.** These change outcomes, not impressions. **All delivered.**
 
 | | Finding | Change |
 |---|---|---|
@@ -370,7 +409,7 @@ keymap.
 | 2 | U11 | Confirm before Save As overwrites an existing file. |
 | 3 | U6 | Add `file.reloadFromDisk` / `file.keepMine` so a conflict has an exit. |
 
-**P1 — the message system.** One change unblocks four findings.
+**P1 — the message system.** One change unblocks four findings. **All delivered.**
 
 | | Finding | Change |
 |---|---|---|
@@ -378,7 +417,7 @@ keymap.
 | 5 | U2 / U3 | Persistent status-bar segments for large-file mode and conflict state. |
 | 6 | U19 / U20 | Pair every error with its recovery, named by live chord; humanise `io::Error`. |
 
-**P2 — discoverability.** Highest ratio of value to diff size in the document.
+**P2 — discoverability.** Highest ratio of value to diff size in the document. **All delivered.**
 
 | | Finding | Change |
 |---|---|---|
@@ -387,9 +426,11 @@ keymap.
 | 9 | U15 | Which-key completions for armed multi-chord prefixes. |
 | 10 | U14 / U8 | Picker empty state; standardise overlay dismissal on `Esc`. |
 
-**P3 — polish.** U4 (vocabulary), U7 (undo-reset notice), U12 (Save As path preview),
-U16 (MRU ordering), U17 (project-local config), U18 (status-bar segment split), U9 (document
-the keymap deviations).
+**P3 — polish.** Delivered: U4 (vocabulary), U7 (undo-reset notice), U12 (Save As path preview),
+U9 (the keymap deviations are documented in the in-app reference). Still open: U16 (MRU
+ordering), U17 (project-local config), and the second half of U18 — diagnostics still time-share
+the message slot rather than holding a segment of their own, though the slot is now colour-coded
+by level, so a save confirmation and a diagnostic no longer look alike.
 
 ---
 

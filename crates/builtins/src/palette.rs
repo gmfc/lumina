@@ -77,10 +77,12 @@ impl Plugin for PalettePlugin {
                 PickerItem::new(e.path.to_string_lossy().into_owned(), label)
             })
             .collect();
+        // Carry each command's live chord onto its row. The palette is where users learn
+        // shortcuts in every editor that has one, and the host already resolves them.
         let commands = host
             .commands()
             .into_iter()
-            .map(|c| PickerItem::new(c.id, c.title))
+            .map(|c| PickerItem::new(c.id, c.title).hint(c.keys))
             .collect();
         host.open_picker(PickerRequest {
             owner: Self::ID.to_string(),

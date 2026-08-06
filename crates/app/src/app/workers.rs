@@ -50,6 +50,8 @@ impl App {
             self.handle_lsp_event(event);
         }
         let any_msg = self.drain_worker_channel();
+        // An open notification tab tracks the log rather than snapshotting it at open time.
+        self.refresh_notification_log();
         had_pending || theme_toggled || any_lsp || any_msg
     }
 
@@ -225,14 +227,14 @@ impl App {
         // An unreadable file falls through to the deletion handling below.
         if let Ok(probe) = crate::files::probe(path) {
             if let crate::files::FileKind::Binary { label } = probe.kind {
-                self.editor.status_message = Some(format!(
+                self.editor.notify_warn(format!(
                     "{} changed on disk and is no longer text ({label}) — not reloaded",
                     super::file_ops::display_name(path)
                 ));
                 return;
             }
             if limits.max_bytes > 0 && probe.len > limits.max_bytes {
-                self.editor.status_message = Some(format!(
+                self.editor.notify_warn(format!(
                     "{} grew past the {} open limit — not reloaded",
                     super::file_ops::display_name(path),
                     crate::files::human_bytes(limits.max_bytes)
@@ -278,7 +280,19 @@ impl App {
 
         if doc.dirty {
             // Never clobber unsaved work — flag a conflict for the user to resolve.
+            let first = doc.external_conflict.is_none();
             doc.external_conflict = Some(fp);
+            // A `⚠` sharing the tab bar's marker slot is the whole announcement otherwise. Say
+            // what happened and name both exits, so the state has a way out rather than just a
+            // glyph. Only on the transition — a busy writer re-fires this every debounce tick.
+            if first {
+                let name = super::file_ops::display_name(path);
+                let palette = self.chord_for("view.commandPalette", "Ctrl+Shift+P");
+                self.editor.notify_warn(format!(
+                    "{name} changed on disk and your buffer has unsaved changes — \
+                     {palette}: “Revert File” takes the disk version, “Keep My Version” keeps yours"
+                ));
+            }
             return;
         }
 
@@ -312,6 +326,13 @@ impl App {
             let line = crate::sync::first_changed_line(&old_text, &new_text);
             doc.view.scroll_line = line.saturating_sub(2);
         }
+        // `reload_from_str` drops undo history along with the text (its transactions reference
+        // offsets that no longer exist). That is correct and invisible — the next Ctrl+Z simply
+        // does nothing — so it has to be said out loud.
+        self.editor.notify_info(format!(
+            "{} reloaded from disk — undo history for this file was reset",
+            super::file_ops::display_name(path)
+        ));
         self.editor
             .pending_events
             .push(editor_plugin::event::Event::ExternalReload(id));

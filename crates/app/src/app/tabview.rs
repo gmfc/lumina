@@ -66,25 +66,34 @@ impl App {
         match self.editor.active_tab_view() {
             Some(TabView::Notice { .. }) => self.open_anyway(),
             Some(TabView::Viewer(_)) => self.open_as_text(),
-            None => {}
+            // A reference tab has no file behind it, so there is nothing to open as text.
+            Some(TabView::Text(_)) | None => {}
         }
     }
 
-    /// Scroll the active viewer tab by `delta` rows, clamped to its content. Notice tabs are a
+    /// Scroll the active scrolling tab by `delta` rows, clamped to its content. Notice tabs are a
     /// fixed centered box and don't scroll.
     pub(super) fn scroll_tab_view(&mut self, delta: isize) {
         let max = self.tab_view_max_scroll();
-        if let Some(TabView::Viewer(v)) = self.editor.active_tab_view_mut() {
-            let next = (v.scroll as isize + delta).max(0) as usize;
-            v.scroll = next.min(max);
+        if let Some(scroll) = self
+            .editor
+            .active_tab_view_mut()
+            .and_then(|v| v.scroll_mut())
+        {
+            let next = (*scroll as isize + delta).max(0) as usize;
+            *scroll = next.min(max);
         }
     }
 
-    /// Jump the active viewer to an absolute row (`usize::MAX` = the end).
+    /// Jump the active scrolling tab to an absolute row (`usize::MAX` = the end).
     fn set_tab_view_scroll(&mut self, row: usize) {
         let max = self.tab_view_max_scroll();
-        if let Some(TabView::Viewer(v)) = self.editor.active_tab_view_mut() {
-            v.scroll = row.min(max);
+        if let Some(scroll) = self
+            .editor
+            .active_tab_view_mut()
+            .and_then(|v| v.scroll_mut())
+        {
+            *scroll = row.min(max);
         }
     }
 
@@ -102,9 +111,9 @@ impl App {
         if rows == 0 {
             return 0;
         }
-        let Some(TabView::Viewer(v)) = self.editor.active_tab_view() else {
+        let Some(body) = self.editor.active_tab_view().and_then(|v| v.body()) else {
             return 0;
         };
-        v.content.lines.len().saturating_sub(rows)
+        body.lines.len().saturating_sub(rows)
     }
 }

@@ -66,7 +66,9 @@ impl Chord {
 }
 
 /// A display label for one chord (`Ctrl+Shift+P`, `Ctrl+\`, `F12`, `Enter`, `Ctrl+``…).
-fn chord_label(c: &Chord) -> String {
+/// Shared with the pending-chord hint so an armed prefix is spelled the same way the reference
+/// and the palette spell it.
+pub fn chord_label(c: &Chord) -> String {
     let mut s = String::new();
     if c.ctrl {
         s.push_str("Ctrl+");
@@ -184,6 +186,28 @@ impl Keymap {
             .iter()
             .find(|(_, bound)| bound == id)
             .map(|(seq, _)| seq.iter().map(chord_label).collect::<Vec<_>>().join(" "))
+    }
+
+    /// Every binding as `(display label, command id)`, in bind order (defaults, then plugin
+    /// contributions, then user overrides). The source for the in-app keybinding reference, which
+    /// therefore can't drift from what the keys actually do.
+    pub fn entries(&self) -> impl Iterator<Item = (String, &str)> {
+        self.bindings.iter().map(|(seq, id)| {
+            (
+                seq.iter().map(chord_label).collect::<Vec<_>>().join(" "),
+                id.as_str(),
+            )
+        })
+    }
+
+    /// The continuations available after the armed prefix `seq`: `(next chord's label, command
+    /// id)` for every binding that starts with it. Empty when nothing extends `seq`.
+    pub fn continuations(&self, seq: &[Chord]) -> Vec<(String, &str)> {
+        self.bindings
+            .iter()
+            .filter(|(chords, _)| chords.len() > seq.len() && chords[..seq.len()] == *seq)
+            .map(|(chords, id)| (chord_label(&chords[seq.len()]), id.as_str()))
+            .collect()
     }
 
     /// Resolve a pending chord sequence.

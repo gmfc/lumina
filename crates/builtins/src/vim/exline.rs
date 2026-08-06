@@ -71,7 +71,16 @@ impl VimPlugin {
                 }
                 host.execute("tab.close");
             }
-            "qa" | "qall" | "qa!" | "quitall" | "quitall!" => host.execute("app.quit"),
+            // `app.quit` prompts when a buffer is unsaved, which is what `:qa` should do.
+            "qa" | "qall" | "quitall" => host.execute("app.quit"),
+            // The bang is vim's "I mean it": drop the dirty flags first so the guard has nothing
+            // to stop for, matching `:q!`'s existing single-buffer behaviour.
+            "qa!" | "quitall!" => {
+                for id in host.workspace().tabs.clone() {
+                    host.set_dirty(id, false);
+                }
+                host.execute("app.quit");
+            }
             "noh" | "nohl" | "nohlsearch" => {
                 host.dismiss_prompt();
                 if let Some(id) = host.active_doc() {

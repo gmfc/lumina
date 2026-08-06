@@ -11,7 +11,7 @@ use ratatui::Frame;
 
 use crate::app::tabview::{NOTICE_ACTIONS, VIEWER_ACTIONS};
 use crate::app::App;
-use crate::editor::{TabView, ViewerTab};
+use crate::editor::TabView;
 use crate::files;
 
 use super::sidebar::style_for;
@@ -33,8 +33,28 @@ pub(super) fn render_tab_view(f: &mut Frame, app: &App, area: Rect, view: &TabVi
     }
     match view {
         TabView::Notice { path, refusal } => render_notice(f, app, area, path, *refusal),
-        TabView::Viewer(v) => render_viewer(f, app, area, v),
+        TabView::Viewer(v) => render_body(
+            f,
+            area,
+            &v.title,
+            Some(&v.path),
+            &v.content,
+            v.scroll,
+            &hints(app, VIEWER_ACTIONS),
+        ),
+        // An app-generated reference tab: the same header + scrolling body as a viewer, with no
+        // file behind it and so no file-level escape hatches to offer.
+        TabView::Text(t) => render_body(f, area, &t.title, None, &t.content, t.scroll, &[]),
     }
+}
+
+/// The chords for a tab's escape-hatch actions, looked up live so a remap or a disabled plugin is
+/// reflected rather than advertised wrongly.
+fn hints(app: &App, actions: &[(&str, &str)]) -> Vec<String> {
+    actions
+        .iter()
+        .filter_map(|(id, label)| Some(format!("{}  {label}", app.keymap.binding_label(id)?)))
+        .collect()
 }
 
 /// The "lumina can't show this as text" screen: what the file is, how big, why it was refused,
@@ -117,7 +137,9 @@ fn reason(refusal: &files::Refusal) -> String {
     }
 }
 
-/// A viewer tab: a title row, an optional status row, then the published rows.
+/// A scrolling published-rows tab: a title row, an optional status row, then the rows themselves.
+/// Shared by plugin viewers and the app's own reference tabs — they differ only in whether there
+/// is a file behind the title and what escape hatches apply.
 ///
 /// Drawn with `Paragraph` rather than direct cell writes. That is not a style preference: the
 /// cell writer advances one buffer cell per `char` while any width-aware caller advances by
@@ -125,27 +147,34 @@ fn reason(refusal: &files::Refusal) -> String {
 /// CSV will contain. `Paragraph` owns the width accounting, which also removes the manual `u16`
 /// column arithmetic over plugin-supplied text (a span wide enough to overflow `u16` would
 /// otherwise panic the editor in a debug build).
-fn render_viewer(f: &mut Frame, app: &App, area: Rect, v: &ViewerTab) {
-    let name = v
-        .path
-        .file_name()
+fn render_body(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    path: Option<&std::path::Path>,
+    content: &editor_plugin::ViewerContent,
+    scroll: usize,
+    hints: &[String],
+) {
+    let name = path
+        .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let rows = viewer_body_rows(area.height);
-    let total = v.content.lines.len();
+    let total = content.lines.len();
     // Clamp against the *last page*, not the last row, and do it here as well as on the input
     // side: growing the pane (a resize, closing the dock) leaves a stale `scroll` that would
     // otherwise render a mostly blank tab until the next keystroke.
-    let scroll = v.scroll.min(total.saturating_sub(rows));
+    let scroll = scroll.min(total.saturating_sub(rows));
 
-    // Header: "<Viewer Title> — <file name>", the escape-hatch actions, and a right-aligned
-    // scroll position when the body overflows. Showing `file.openAsText` here is what keeps a
-    // viewer from taking a text extension hostage — the user can always get to the buffer.
-    let hints: Vec<String> = VIEWER_ACTIONS
-        .iter()
-        .filter_map(|(id, label)| Some(format!("{}  {label}", app.keymap.binding_label(id)?)))
-        .collect();
-    let mut left = format!("{} — {name}", v.title);
+    // Header: "<Title> — <file name>", the escape-hatch actions, and a right-aligned scroll
+    // position when the body overflows. Showing `file.openAsText` here is what keeps a viewer
+    // from taking a text extension hostage — the user can always get to the buffer.
+    let mut left = if name.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} — {name}")
+    };
     if !hints.is_empty() {
         left.push_str(&format!("   ·   {}", hints.join("   ·   ")));
     }
@@ -169,11 +198,11 @@ fn render_viewer(f: &mut Frame, app: &App, area: Rect, v: &ViewerTab) {
     // The status row only exists when the pane has a second row to put it in.
     if area.height > 1 {
         lines.push(Line::from(TSpan::styled(
-            v.content.status.clone().unwrap_or_default(),
+            content.status.clone().unwrap_or_default(),
             Style::default().fg(Color::DarkGray),
         )));
     }
-    for line in v.content.lines.iter().skip(scroll).take(rows) {
+    for line in content.lines.iter().skip(scroll).take(rows) {
         let mut spans = Vec::with_capacity(line.spans.len() + 1);
         // Indent depth comes from a plugin; cap it so a nonsense value costs a wide indent
         // rather than an overflowed column.

@@ -301,7 +301,7 @@ impl App {
                 if !enabled {
                     self.config.disabled_plugins.push(id.to_string());
                 }
-                self.editor.status_message = Some(format!(
+                self.editor.notify_info(format!(
                     "Plugin '{id}' {} — restart to apply",
                     if enabled { "enabled" } else { "disabled" }
                 ));
@@ -366,11 +366,13 @@ impl App {
     /// Persist the current config to the config file (the same one the watcher reloads).
     pub(super) fn save_config(&mut self) {
         let Some(path) = self.config_path.clone() else {
-            self.editor.status_message = Some("No config path — settings not saved".into());
+            self.editor
+                .notify_error("No config path — settings were not saved");
             return;
         };
         if let Err(e) = self.config.write_to(&path) {
-            self.editor.status_message = Some(format!("Could not save settings: {e}"));
+            self.editor
+                .notify_error(format!("Could not save settings: {e}"));
         }
     }
 

@@ -7,10 +7,10 @@ fn config_file_change_triggers_hot_reload() {
     // Point the watched config path at an arbitrary file and simulate a change event.
     let cfg = std::env::temp_dir().join(format!("lumina_cfg_{}.toml", std::process::id()));
     app.config_path = Some(cfg.clone());
-    app.editor.status_message = None;
+    app.editor.dismiss_status();
     app.on_disk_changed(&cfg);
     assert_eq!(
-        app.editor.status_message.as_deref(),
+        app.editor.status_text(),
         Some("Configuration reloaded"),
         "a change to the config file should hot-reload it"
     );

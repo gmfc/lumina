@@ -115,7 +115,12 @@ impl App {
             "window/showMessageRequest" => {
                 // Surface the message; PR2 chooses no action (later: action buttons).
                 if let Some(msg) = params.get("message").and_then(|m| m.as_str()) {
-                    self.editor.status_message = Some(format!("LSP: {msg}"));
+                    let who = self
+                        .lsp
+                        .server_name(&lang)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "Language server".to_string());
+                    self.editor.notify_info(format!("{who}: {msg}"));
                 }
                 self.lsp.respond(&lang, &id, serde_json::Value::Null);
             }

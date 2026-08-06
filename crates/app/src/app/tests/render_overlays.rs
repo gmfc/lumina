@@ -169,6 +169,8 @@ fn renders_each_overlay_variant() {
     let mut app = app_with(&path);
     app.editor.overlay = Some(Overlay::SaveAsInput {
         buffer: "out.rs".into(),
+        error: None,
+        overwrite: None,
     });
     assert!(render_to_string(&mut app, 100, 20).contains("Save As"));
 

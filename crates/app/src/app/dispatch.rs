@@ -7,11 +7,15 @@ use super::*;
 impl App {
     /// The single dispatcher — the only place editor state mutates (plan §5).
     pub fn dispatch(&mut self, cmd: Command) {
-        self.editor.status_message = None;
+        // A confirmation has been read by the time the next command runs; a warning or an error
+        // has not, so it survives (see `EditorState::clear_transient_status`).
+        self.editor.clear_transient_status();
         let page = self.page_height;
 
         match cmd {
-            Command::Quit => self.quit = true,
+            // Guarded, like every other path that can discard a buffer: session restore saves
+            // paths and cursors, not contents, so an unprompted quit loses the work for good.
+            Command::Quit => self.request_quit(),
 
             // --- motion / selection ---
             Command::Move(m) => self.with_doc(|d| edit::move_selections(d, m, page, false)),
@@ -89,6 +93,8 @@ impl App {
             Command::ReopenClosedTab => self.reopen_closed_tab(),
             Command::OpenAnyway => self.open_anyway(),
             Command::OpenAsText => self.open_as_text(),
+            Command::ReloadFromDisk => self.reload_from_disk(),
+            Command::KeepMine => self.keep_mine(),
             Command::NextTab => self.cycle_tab(1),
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),

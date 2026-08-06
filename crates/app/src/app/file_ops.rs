@@ -87,7 +87,203 @@ impl App {
                 return;
             }
         }
-        self.editor.status_message = Some("No closed editors to reopen".into());
+        self.editor.notify_info("No closed editors to reopen");
+    }
+
+    /// `app.quit`: the same guard `tab.close` and `tab.closeAll` already apply, on the one path
+    /// that used to skip it. Session restore persists paths, cursors, and scroll — not buffer
+    /// contents — so quitting past a dirty buffer loses the work outright.
+    pub(super) fn request_quit(&mut self) {
+        let dirty = self.dirty_tabs();
+        if dirty.is_empty() {
+            self.quit = true;
+        } else {
+            self.editor.overlay = Some(crate::editor::Overlay::ConfirmQuit { dirty });
+        }
+    }
+
+    /// Tab indices with unsaved changes. Notice/viewer tabs are excluded: their buffer is an empty
+    /// placeholder that holds no work to lose.
+    pub(super) fn dirty_tabs(&self) -> Vec<usize> {
+        self.editor
+            .workspace
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, &id)| !self.editor.is_tab_view(id))
+            .filter(|(_, &id)| {
+                self.editor
+                    .workspace
+                    .documents
+                    .get(id)
+                    .is_some_and(|d| d.dirty)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The file names behind `tabs`, for a confirm box that names what is at risk.
+    pub(crate) fn tab_names(&self, tabs: &[usize]) -> Vec<String> {
+        tabs.iter()
+            .filter_map(|&t| self.editor.workspace.tabs.get(t))
+            .filter_map(|&id| self.editor.workspace.documents.get(id))
+            .map(|d| {
+                d.path
+                    .as_deref()
+                    .map(display_name)
+                    .unwrap_or_else(|| "untitled".to_string())
+            })
+            .collect()
+    }
+
+    /// Save every dirty tab and quit — the `[S]` outcome of the quit confirmation. An untitled
+    /// buffer has nowhere to be written, so it *cancels* the quit and opens Save As instead of
+    /// being silently dropped by a command the user believed would save everything.
+    pub(super) fn save_all_and_quit(&mut self) {
+        if let Some(&tab) = self.dirty_tabs().iter().find(|&&t| self.tab_has_no_path(t)) {
+            self.editor.workspace.focus_tab(tab);
+            self.open_save_as();
+            self.editor
+                .notify_warn("This buffer has no file yet — name it, then quit again");
+            return;
+        }
+        self.save_all();
+        // A failed write leaves the buffer dirty; quitting anyway would discard exactly the work
+        // the user asked to save.
+        if self.dirty_tabs().is_empty() {
+            self.quit = true;
+        } else {
+            self.editor
+                .notify_error("Some files could not be saved — quit cancelled");
+        }
+    }
+
+    /// Whether the tab at `idx` is a path-less (untitled) buffer.
+    fn tab_has_no_path(&self, idx: usize) -> bool {
+        self.editor
+            .workspace
+            .tabs
+            .get(idx)
+            .and_then(|&id| self.editor.workspace.documents.get(id))
+            .is_some_and(|d| d.path.is_none())
+    }
+
+    /// `file.reloadFromDisk`: throw the buffer away and re-read the file. This is the exit from an
+    /// external-edit conflict that keeps the other writer's version. It can't be undone (the
+    /// reload drops undo history along with the text), so a dirty buffer is confirmed first.
+    pub(super) fn reload_from_disk(&mut self) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        if self.editor.is_tab_view(id) {
+            self.editor
+                .notify_warn("This tab isn't a text buffer — nothing to reload");
+            return;
+        }
+        let Some(doc) = self.editor.workspace.documents.get(id) else {
+            return;
+        };
+        if doc.path.is_none() {
+            self.editor
+                .notify_warn("This buffer has no file on disk to reload from");
+            return;
+        }
+        if doc.dirty {
+            self.editor.overlay = Some(crate::editor::Overlay::ConfirmReload);
+            return;
+        }
+        self.reload_from_disk_now();
+    }
+
+    /// Perform the reload, past any confirmation: drop the local edits, re-read the file through
+    /// the same open policy a fresh open uses, and clear the conflict flag.
+    pub(super) fn reload_from_disk_now(&mut self) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let Some(path) = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .and_then(|d| d.path.clone())
+        else {
+            return;
+        };
+        // The full open policy, not a bare read: a file that turned binary or grew past the
+        // ceiling while it was open must not be slurped onto the UI thread through this door
+        // any more than through `open_path`.
+        match files::open(&path, &self.config.file_limits()) {
+            Ok(files::Opened::Refused(refusal)) => {
+                self.editor.notify_error(format!(
+                    "{} can't be reloaded as text: {} — the buffer is unchanged",
+                    display_name(&path),
+                    refusal.label()
+                ));
+            }
+            Ok(files::Opened::Text(fresh)) => {
+                let text = fresh.to_string();
+                let (encoding, line_ending, large) =
+                    (fresh.encoding, fresh.line_ending, fresh.large);
+                let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
+                    return;
+                };
+                doc.reload_from_str(&text);
+                doc.encoding = encoding;
+                doc.line_ending = line_ending;
+                doc.large = large;
+                doc.disk = files::fingerprint(text.as_bytes());
+                doc.dirty = false;
+                doc.deleted_on_disk = false;
+                doc.external_conflict = None;
+                doc.externally_reloaded = true;
+                let caret = doc.clamp(doc.selections.primary().head);
+                doc.set_caret(caret);
+                // The old highlighter is keyed to the replaced text; drop it so it re-parses.
+                self.editor.highlighters.remove(&id);
+                self.editor.notify_info(format!(
+                    "{} reloaded from disk — local changes and undo history for this file were discarded",
+                    display_name(&path)
+                ));
+                self.editor
+                    .emit(editor_plugin::event::Event::ExternalReload(id));
+                self.request_git_status(id);
+            }
+            Err(e) => {
+                let msg = io_reason(&path, &e);
+                self.editor.notify_error(format!("Reload failed: {msg}"));
+            }
+        }
+    }
+
+    /// `file.keepMine`: accept the buffer as the truth and clear the conflict. The next save
+    /// writes over the on-disk change, which is now what the user has explicitly chosen.
+    pub(super) fn keep_mine(&mut self) {
+        let Some(id) = self.editor.workspace.active_doc() else {
+            return;
+        };
+        let name = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .and_then(|d| d.path.as_deref())
+            .map(display_name);
+        let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
+            return;
+        };
+        let Some(fp) = doc.external_conflict.take() else {
+            self.editor
+                .notify_info("This file has no unresolved external change");
+            return;
+        };
+        // Adopt the on-disk fingerprint so the watcher stops re-reporting the same change; the
+        // buffer stays dirty, so the next save writes our version over it.
+        doc.disk = fp;
+        let name = name.unwrap_or_else(|| "This buffer".to_string());
+        self.editor.notify_info(format!(
+            "Keeping your version of {name} — saving will overwrite the change on disk"
+        ));
     }
 
     /// Ctrl+K S: save every open, path-backed tab that has unsaved changes.
@@ -95,6 +291,7 @@ impl App {
         let restore = self.editor.workspace.active_tab;
         let count = self.editor.workspace.tabs.len();
         let mut saved = 0;
+        let mut failed = 0;
         for i in 0..count {
             self.editor.workspace.focus_tab(i);
             // A notice/viewer tab has a path but no text — writing its empty placeholder would
@@ -114,11 +311,35 @@ impl App {
                 .unwrap_or((false, false));
             if has_path && dirty {
                 self.save_active();
-                saved += 1;
+                // `save_active` clears `dirty` only on a successful write, so this counts what
+                // actually reached the disk rather than what was attempted.
+                let ok = self.editor.active_document().is_some_and(|d| !d.dirty);
+                if ok {
+                    saved += 1;
+                } else {
+                    failed += 1;
+                }
             }
         }
         self.editor.workspace.focus_tab(restore);
-        self.editor.status_message = Some(format!("Saved {saved} file(s)"));
+        // A per-file error published inside the loop can be superseded by the next file's success
+        // notice, so the summary — the message that survives — has to carry the bad news itself.
+        if failed > 0 {
+            self.editor.notify_error(format!(
+                "Saved {saved} file(s); {failed} could not be saved (see {})",
+                self.notifications_hint()
+            ));
+        } else {
+            self.editor.notify_info(format!("Saved {saved} file(s)"));
+        }
+    }
+
+    /// How to reach the notice scrollback, named by its live chord when it has one.
+    pub(super) fn notifications_hint(&self) -> String {
+        match self.keymap.binding_label("view.notifications") {
+            Some(chord) => format!("{chord} for details"),
+            None => "View: Show Notifications".to_string(),
+        }
     }
 
     /// Ctrl+K Ctrl+W: close every tab. Clean tabs close outright; the first dirty one opens
@@ -181,10 +402,42 @@ impl App {
         match files::open(path, &self.config.file_limits()) {
             Ok(files::Opened::Text(doc)) => self.open_text_tab(path, *doc),
             Ok(files::Opened::Refused(refusal)) => self.open_notice_tab(path, refusal),
-            Err(e) => {
-                self.editor.status_message = Some(format!("Open failed: {e}"));
-            }
+            Err(e) => self.report_open_failure(path, &e),
         }
+    }
+
+    /// Report a failed open in the user's terms: what file, why, and — where one exists — the
+    /// move that gets past it, named by its live chord.
+    fn report_open_failure(&mut self, path: &std::path::Path, e: &anyhow::Error) {
+        let mut msg = format!("Open failed: {}", io_reason(path, e));
+        if let Some(recovery) = self.open_recovery(e) {
+            msg.push_str(" — ");
+            msg.push_str(&recovery);
+        }
+        self.editor.notify_error(msg);
+    }
+
+    /// The recovery that applies to an open failure, if any.
+    fn open_recovery(&self, e: &anyhow::Error) -> Option<String> {
+        match io_kind(e)? {
+            std::io::ErrorKind::NotFound => Some(format!(
+                "{} opens a new empty buffer",
+                self.chord_for("file.new", "Ctrl+N")
+            )),
+            std::io::ErrorKind::IsADirectory => Some(format!(
+                "{} browses files instead",
+                self.chord_for("view.quickOpen", "Ctrl+P")
+            )),
+            _ => None,
+        }
+    }
+
+    /// The live chord bound to `id`, falling back to `default` when the user unbound it. Used to
+    /// name a recovery in a message, so the text tracks the keymap instead of a hard-coded key.
+    pub(super) fn chord_for(&self, id: &str, default: &str) -> String {
+        self.keymap
+            .binding_label(id)
+            .unwrap_or_else(|| default.to_string())
     }
 
     /// The viewer id claiming `path`'s extension, if a loaded plugin contributes one. Disabling
@@ -200,10 +453,10 @@ impl App {
         let large = doc.large;
         let id = self.editor.workspace.open_document(doc);
         self.editor.emit(editor_plugin::event::Event::DidOpen(id));
-        // Degraded mode is invisible otherwise — say so once, or the missing syntax colours read
-        // as a bug rather than a deliberate trade.
+        // Degraded mode is a persistent state, so it also gets a persistent `LARGE` segment in the
+        // status bar; this says it once in words so the *reason* isn't left to be guessed.
         if large {
-            self.editor.status_message = Some(format!(
+            self.editor.notify_warn(format!(
                 "{} opened in large-file mode — syntax highlighting, git gutter, and LSP are off",
                 display_name(path)
             ));
@@ -225,7 +478,10 @@ impl App {
     /// A *dirty* text tab is never closed for this — unsaved work outranks a view request.
     pub(super) fn open_viewer_tab(&mut self, path: &std::path::Path, viewer_id: &str) {
         let Some(title) = self.registry.viewer(viewer_id).map(|v| v.title.clone()) else {
-            self.editor.status_message = Some(format!("No such viewer: {viewer_id}"));
+            self.editor.notify_error(format!(
+                "No viewer named “{viewer_id}” is loaded — the plugin providing it may be disabled \
+                 in Settings → Plugins"
+            ));
             return;
         };
         let abs = files::absolute_path(path);
@@ -238,8 +494,9 @@ impl App {
                 .is_some_and(|d| d.dirty);
             if dirty {
                 self.editor.workspace.focus_doc(existing);
-                self.editor.status_message = Some(format!(
-                    "{} has unsaved changes — save or close it first",
+                let save = self.chord_for("file.save", "Ctrl+S");
+                self.editor.notify_warn(format!(
+                    "{} has unsaved changes — {save} to save it first, then try again",
                     display_name(&abs)
                 ));
                 return;
@@ -265,21 +522,26 @@ impl App {
     /// make those files unopenable as text for as long as it is installed — a viewer could take
     /// a file hostage. Binary content is still refused: it cannot round-trip a UTF-8 rope.
     pub(super) fn open_as_text(&mut self) {
-        let Some(view) = self.editor.active_tab_view() else {
+        let Some(path) = self
+            .editor
+            .active_tab_view()
+            .and_then(|v| v.path())
+            .map(|p| p.to_path_buf())
+        else {
             return;
         };
-        let path = view.path().to_path_buf();
         let limits = self.config.file_limits();
         match files::probe(&path) {
             Ok(probe) => {
                 if let files::FileKind::Binary { label } = probe.kind {
-                    self.editor.status_message =
-                        Some(format!("{label} is not text — it can't be edited"));
+                    self.editor.notify_warn(format!(
+                        "{label} is not text — editing it here would corrupt the file"
+                    ));
                     return;
                 }
             }
             Err(e) => {
-                self.editor.status_message = Some(format!("Open failed: {e}"));
+                self.report_open_failure(&path, &e);
                 return;
             }
         }
@@ -289,9 +551,7 @@ impl App {
                 self.close_and_forget(tab);
                 self.open_text_tab(&path, doc);
             }
-            Err(e) => {
-                self.editor.status_message = Some(format!("Open failed: {e}"));
-            }
+            Err(e) => self.report_open_failure(&path, &e),
         }
     }
 
@@ -327,8 +587,8 @@ impl App {
         };
         let (path, refusal) = (path.clone(), *refusal);
         if !refusal.is_overridable() {
-            self.editor.status_message = Some(format!(
-                "{} is not text — it can't be edited",
+            self.editor.notify_warn(format!(
+                "{} is not text — editing it here would corrupt the file",
                 refusal.label()
             ));
             return;
@@ -339,9 +599,7 @@ impl App {
                 self.close_and_forget(tab);
                 self.open_text_tab(&path, doc);
             }
-            Err(e) => {
-                self.editor.status_message = Some(format!("Open failed: {e}"));
-            }
+            Err(e) => self.report_open_failure(&path, &e),
         }
     }
 
@@ -367,10 +625,12 @@ impl App {
     /// the write: no bytes lost, but the tab would then claim a file it isn't showing.
     pub(super) fn open_save_as(&mut self) {
         if let Some(view) = self.editor.active_tab_view() {
-            self.editor.status_message = Some(format!(
-                "{} is not a text buffer — nothing to save",
-                display_name(view.path())
-            ));
+            let what = view
+                .path()
+                .map(display_name)
+                .unwrap_or_else(|| "This tab".to_string());
+            self.editor
+                .notify_warn(format!("{what} is not a text buffer — nothing to save"));
             return;
         }
         if self.editor.active_document().is_none() {
@@ -382,20 +642,53 @@ impl App {
             .and_then(|d| d.path.as_ref())
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.editor.overlay = Some(crate::editor::Overlay::SaveAsInput { buffer: initial });
+        self.editor.overlay = Some(crate::editor::Overlay::SaveAsInput {
+            buffer: initial,
+            error: None,
+            overwrite: None,
+        });
+    }
+
+    /// Resolve what the user typed into the Save As box against the project root, exactly as
+    /// [`Self::save_as_to`] will. Shared with the renderer so the box can *show* where the file
+    /// will land before it lands there.
+    pub(crate) fn resolve_save_as(&self, raw: &str) -> Option<PathBuf> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let path = PathBuf::from(raw);
+        Some(if path.is_relative() {
+            self.editor.workspace.root.join(path)
+        } else {
+            path
+        })
+    }
+
+    /// Vet a Save As target before anything is written. Returns the message for the overlay's
+    /// error slot when the path can't work — a missing parent directory or a directory in the
+    /// file's place both used to surface only as `"Save failed: …"` after the fact.
+    pub(super) fn save_as_problem(&self, path: &std::path::Path) -> Option<String> {
+        if path.is_dir() {
+            return Some(format!("{} is a directory", path.display()));
+        }
+        match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() && !dir.is_dir() => {
+                Some(format!("No such directory: {}", dir.display()))
+            }
+            _ => None,
+        }
     }
 
     /// Point the active document at `raw` (resolved against the project root when relative),
     /// refresh its language, and write it (plan §1.5).
+    ///
+    /// The overwrite check lives in the overlay (which can ask), not here: this is also the
+    /// path a confirmed overwrite takes.
     pub(super) fn save_as_to(&mut self, raw: &str) {
-        let raw = raw.trim();
-        if raw.is_empty() {
+        let Some(path) = self.resolve_save_as(raw) else {
             return;
-        }
-        let mut path = PathBuf::from(raw);
-        if path.is_relative() {
-            path = self.editor.workspace.root.join(path);
-        }
+        };
         let Some(id) = self.editor.workspace.active_doc() else {
             return;
         };
@@ -428,17 +721,22 @@ impl App {
         // The load-bearing guard: a notice/viewer tab's buffer is empty but its path points at a
         // real file, so saving it would replace that file with nothing.
         if let Some(view) = self.editor.tab_views.get(&id) {
-            self.editor.status_message = Some(format!(
-                "{} is not a text buffer — nothing to save",
-                display_name(view.path())
-            ));
+            let what = view
+                .path()
+                .map(display_name)
+                .unwrap_or_else(|| "This tab".to_string());
+            self.editor
+                .notify_warn(format!("{what} is not a text buffer — nothing to save"));
             return;
         }
+        let save_as = self.chord_for("file.saveAs", "Ctrl+K Ctrl+S");
         let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
             return;
         };
         let Some(path) = doc.path.clone() else {
-            self.editor.status_message = Some("No path — use Save As".into());
+            self.editor.notify_warn(format!(
+                "This buffer has no file yet — {save_as} to name one"
+            ));
             return;
         };
         // On-save hygiene runs as an undoable Transaction before the write (plan §1.4).
@@ -453,11 +751,17 @@ impl App {
                 self.pending_self_writes.insert(path.clone(), fp.hash);
                 doc.disk = fp;
                 doc.history.break_group();
-                self.editor.status_message = Some(format!("Saved {}", path.display()));
+                self.editor.notify_info(format!("Saved {}", path.display()));
                 self.editor.emit(editor_plugin::event::Event::DidSave(id));
             }
             Err(e) => {
-                self.editor.status_message = Some(format!("Save failed: {e}"));
+                // A failed save leaves the work only in the buffer, so the message has to carry
+                // the way out, not just the diagnosis — and it is an Error, so it stays on screen
+                // instead of vanishing under the next keystroke.
+                self.editor.notify_error(format!(
+                    "Save failed: {} — {save_as} to save it elsewhere",
+                    io_reason(&path, &e)
+                ));
             }
         }
         // Refresh the git gutter against the just-written file (plan §4.1).
@@ -470,4 +774,44 @@ pub(super) fn display_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// The `io::ErrorKind` behind an `anyhow` chain, when there is one. File IO here is wrapped with
+/// context (`"reading /path"`), so the kind has to be recovered rather than matched on directly.
+pub(super) fn io_kind(err: &anyhow::Error) -> Option<std::io::ErrorKind> {
+    err.chain()
+        .find_map(|e| e.downcast_ref::<std::io::Error>())
+        .map(|e| e.kind())
+}
+
+/// A plain-language sentence for a file operation that failed, always naming the file.
+///
+/// `io::Error`'s own text is written for whoever is reading a log — *"Permission denied (os error
+/// 13)"* — and the anyhow context that wraps it names the operation, not the file the user thinks
+/// in terms of. This maps the kinds a user can actually act on and keeps the raw text only as the
+/// fallback for the ones they can't.
+pub(super) fn io_reason(path: &std::path::Path, err: &anyhow::Error) -> String {
+    use std::io::ErrorKind;
+    let name = display_name(path);
+    match io_kind(err) {
+        Some(ErrorKind::NotFound) => format!("{name} doesn't exist"),
+        Some(ErrorKind::PermissionDenied) => format!("no permission to write {name}"),
+        Some(ErrorKind::IsADirectory) => format!("{name} is a directory, not a file"),
+        Some(ErrorKind::NotADirectory) => {
+            format!("part of the path to {name} is a file, not a directory")
+        }
+        Some(ErrorKind::ReadOnlyFilesystem) => format!("{name} is on a read-only filesystem"),
+        Some(ErrorKind::StorageFull) => format!("no space left on the device holding {name}"),
+        Some(ErrorKind::InvalidData) => format!("{name} isn't valid text"),
+        // Anything else keeps the underlying text — vague is better than wrong — but still says
+        // which file it was about, which the raw error often doesn't.
+        _ => {
+            let root = err
+                .chain()
+                .last()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            format!("{name}: {root}")
+        }
+    }
 }

@@ -18,6 +18,9 @@ pub enum PickerKind {
 pub struct PickerItem {
     pub id: String,
     pub label: String,
+    /// Right-aligned annotation for the row — the command's keybinding, when it has one. Kept out
+    /// of `label` so it doesn't participate in fuzzy matching.
+    pub hint: Option<String>,
 }
 
 pub struct Picker {
@@ -198,10 +201,12 @@ mod tests {
             PickerItem {
                 id: "1".into(),
                 label: "Reload Window".into(),
+                hint: None,
             },
             PickerItem {
                 id: "2".into(),
                 label: "File: Save".into(),
+                hint: None,
             },
         ];
         let mut p = Picker::unified("Files", items, Vec::new(), false);
@@ -214,6 +219,7 @@ mod tests {
         PickerItem {
             id: id.into(),
             label: label.into(),
+            hint: None,
         }
     }
 

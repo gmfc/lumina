@@ -187,8 +187,12 @@ pub(super) fn render_picker(f: &mut Frame, app: &App, body: Rect) {
     };
     let width = 72u16.min(body.width.saturating_sub(4)).max(20);
     let max_rows = 12u16;
-    let list_rows = (picker.filtered.len() as u16).min(max_rows);
-    let height = (list_rows + 3).min(body.height);
+    // `max(1)` reserves the row the empty state is drawn into; without it a zero-result picker
+    // collapses to a query line over a blank box.
+    let list_rows = (picker.filtered.len().max(1) as u16).min(max_rows);
+    // Query line + blank + `list_rows` + the two borders. The old `+3` was one short, so the last
+    // result row (or the empty state) was clipped by the bottom border.
+    let height = (list_rows + 4).min(body.height);
     let rect = Rect::new(
         body.x + (body.width.saturating_sub(width)) / 2,
         body.y + 1,
@@ -228,6 +232,7 @@ pub(super) fn render_picker(f: &mut Frame, app: &App, body: Rect) {
     let active = picker.active_items();
     let visible = inner.height.saturating_sub(2) as usize;
     let start = picker.selected.saturating_sub(visible.saturating_sub(1));
+    let row_w = inner.width as usize;
     for (row_idx, &item_idx) in picker.filtered.iter().enumerate().skip(start).take(visible) {
         let item = &active[item_idx];
         let selected = row_idx == picker.selected;
@@ -237,9 +242,32 @@ pub(super) fn render_picker(f: &mut Frame, app: &App, body: Rect) {
             Style::default().fg(Color::Gray)
         };
         let prefix = if selected { "▸ " } else { "  " };
+        let label = format!("{prefix}{}", item.label);
+        let mut spans = vec![TSpan::styled(label.clone(), style)];
+        // The command's keybinding, right-aligned — dropped rather than wrapped when the label
+        // already fills the row.
+        if let Some(hint) = &item.hint {
+            let used = label.chars().count() + hint.chars().count() + 2;
+            if used <= row_w {
+                spans.push(TSpan::styled(" ".repeat(row_w - used), style));
+                spans.push(TSpan::styled(
+                    format!("{hint} "),
+                    Style::default().fg(CLR_ACCENT),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    // An empty result list rendered as a blank box, indistinguishable from one still loading.
+    if picker.filtered.is_empty() {
+        let what = if picker.command_mode() {
+            "No matching commands"
+        } else {
+            "No matching files"
+        };
         lines.push(Line::from(TSpan::styled(
-            format!("{prefix}{}", item.label),
-            style,
+            format!("  {what}"),
+            Style::default().fg(Color::DarkGray),
         )));
     }
     f.render_widget(Paragraph::new(lines), inner);

@@ -74,8 +74,7 @@ fn ex_unknown_command_reports() {
     app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app
         .editor
-        .status_message
-        .as_deref()
+        .status_text()
         .unwrap_or_default()
         .contains("Not an editor command"));
     std::fs::remove_file(&path).ok();

@@ -21,17 +21,59 @@ impl App {
         match self.keymap.resolve(&self.pending) {
             Resolve::Command(id) => {
                 self.pending.clear();
-                self.editor.status_message = None;
+                self.editor.clear_transient_status();
                 self.exec_id(&id);
             }
             Resolve::Pending => {
-                // Keep the prefix armed; show it in the status bar.
-                self.editor.status_message = Some(format!("{} …", chords_label(&self.pending)));
+                // Keep the prefix armed, and show what may follow it. The prefix alone said a
+                // chord was armed but left its six continuations to memory; the keymap already
+                // knows them, so listing them makes the multi-chord layer learnable in place.
+                let hint = self.which_key_hint();
+                self.editor
+                    .notify_info(format!("{} …{hint}", chords_label(&self.pending)));
+            }
+            // Esc dismisses a held warning/error — but only here, where it resolved to nothing.
+            // Every modal, the sidebar, vim's normal-mode Esc, and any Esc the user has bound all
+            // get it first, so this claims only the keystroke that had nowhere else to go.
+            Resolve::None
+                if key.code == crossterm::event::KeyCode::Esc
+                    && self.editor.has_sticky_status() =>
+            {
+                self.pending.clear();
+                self.editor.dismiss_status();
             }
             Resolve::None => self.text_entry_fallback(key),
         }
         // The completion popup re-syncs to the edit just made through its owner's `on_event`
         // (broadcast when the edit's DidChange drains); nothing to do here.
+    }
+
+    /// The which-key trailer for the armed prefix: `"  Ctrl+S save-as · Ctrl+W close-all · …"`.
+    ///
+    /// Continuations are labelled by the tail of their command id — short enough to fit several
+    /// on one status line, and stable across remaps since it comes from the id, not a title.
+    /// Truncated to a budget so the bar can't be pushed past its width by a busy prefix.
+    fn which_key_hint(&self) -> String {
+        /// Columns the trailer may use. The bar also carries the position cluster on the right.
+        const BUDGET: usize = 72;
+        let mut out = String::new();
+        let mut rest = 0usize;
+        for (chord, id) in self.keymap.continuations(&self.pending) {
+            let leaf = id.rsplit('.').next().unwrap_or(id);
+            let piece = format!(
+                "{}{chord} {leaf}",
+                if out.is_empty() { "   " } else { " · " }
+            );
+            if out.len() + piece.len() > BUDGET {
+                rest += 1;
+                continue;
+            }
+            out.push_str(&piece);
+        }
+        if rest > 0 {
+            out.push_str(&format!(" · +{rest} more"));
+        }
+        out
     }
 
     /// Give the active focus/overlay handlers first refusal on a key, in priority order.
@@ -298,28 +340,13 @@ fn to_plugin_key(key: crossterm::event::KeyEvent) -> Option<editor_plugin::Key> 
     })
 }
 
-/// Human label for a pending chord prefix (shown in the status bar).
+/// Human label for a pending chord prefix (shown in the status bar). Uses the keymap's own
+/// formatter, so an armed `Ctrl+K` reads exactly as the keybinding reference and the palette
+/// spell it — this used to render a lowercase `Ctrl+k` that matched nothing else on screen.
 fn chords_label(chords: &[Chord]) -> String {
-    use crossterm::event::KeyCode;
     chords
         .iter()
-        .map(|c| {
-            let mut s = String::new();
-            if c.ctrl {
-                s.push_str("Ctrl+");
-            }
-            if c.alt {
-                s.push_str("Alt+");
-            }
-            if c.shift {
-                s.push_str("Shift+");
-            }
-            match c.code {
-                KeyCode::Char(ch) => s.push(ch),
-                other => s.push_str(&format!("{other:?}")),
-            }
-            s
-        })
+        .map(crate::keymap::chord_label)
         .collect::<Vec<_>>()
         .join(" ")
 }

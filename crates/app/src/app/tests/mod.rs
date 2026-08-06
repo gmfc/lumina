@@ -21,6 +21,7 @@ mod render_overlays;
 mod settings;
 mod sync;
 mod terminal;
+mod usability;
 mod vim;
 mod vscode_shortcuts;
 
