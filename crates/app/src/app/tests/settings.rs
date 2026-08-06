@@ -3,7 +3,7 @@
 //! config persistence, rendering, and mouse clicks.
 
 use super::*;
-use crate::settings::Entry;
+use crate::settings::{Entry, Widget};
 
 /// An app with a Settings tab open and its config writes redirected to a temp file.
 fn settings_app() -> (App, PathBuf, PathBuf) {
@@ -299,4 +299,35 @@ fn line_wrap_toggle_applies_live_and_persists() {
 
     std::fs::remove_file(&file).ok();
     std::fs::remove_file(&cfg).ok();
+}
+
+/// Regression for the Settings checkbox lying about wrap state: `Alt+Z` (`view.toggleWrap`)
+/// used to update `editor.wrap_enabled` without mirroring `config.line_wrap`, so opening the
+/// Settings tab afterward (`Ctrl+,`) rendered "Word wrap" unchecked even though wrap was
+/// visibly on. Toggle first, *then* open Settings, matching the reported repro order.
+#[test]
+fn alt_z_toggle_reflects_in_settings_checkbox() {
+    let file = temp_file("hello");
+    let mut app = app_with(&file);
+
+    app.dispatch(Command::ToggleWrap);
+    assert!(app.editor.wrap_enabled, "Alt+Z turned wrap on");
+
+    app.open_settings();
+    let view = app.settings.as_ref().expect("settings open");
+    let item = view
+        .entries
+        .iter()
+        .find_map(|e| match e {
+            Entry::Item(it) if it.key == "line_wrap" => Some(it),
+            _ => None,
+        })
+        .expect("line_wrap entry present");
+    assert_eq!(
+        item.widget,
+        Widget::Toggle(app.editor.wrap_enabled),
+        "Word wrap checkbox must reflect the live wrap state after Alt+Z"
+    );
+
+    std::fs::remove_file(&file).ok();
 }
