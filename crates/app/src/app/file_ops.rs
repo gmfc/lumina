@@ -216,9 +216,13 @@ impl App {
         self.editor.open_notice_tab(path, refusal);
     }
 
-    /// Open (or re-open) `path` in the viewer `viewer_id`. An existing *view* tab for the same
-    /// path is replaced, so "view as hex" swaps the notice tab in place rather than stacking a
-    /// second tab on the same file.
+    /// Open (or re-open) `path` in the viewer `viewer_id`, **replacing** any existing tab for
+    /// that path — so `view.openAsHex` swaps a notice (or a clean text tab) in place rather than
+    /// leaving two tabs claiming one file. Two documents with the same path would desynchronize:
+    /// `find_by_path` answers with the first, so the watcher would reload one and leave the
+    /// other stale.
+    ///
+    /// A *dirty* text tab is never closed for this — unsaved work outranks a view request.
     pub(super) fn open_viewer_tab(&mut self, path: &std::path::Path, viewer_id: &str) {
         let Some(title) = self.registry.viewer(viewer_id).map(|v| v.title.clone()) else {
             self.editor.status_message = Some(format!("No such viewer: {viewer_id}"));
@@ -226,20 +230,69 @@ impl App {
         };
         let abs = files::absolute_path(path);
         if let Some(existing) = self.editor.workspace.find_by_path(&abs) {
-            if self.editor.is_tab_view(existing) {
-                if let Some(idx) = self
-                    .editor
-                    .workspace
-                    .tabs
-                    .iter()
-                    .position(|&t| t == existing)
-                {
-                    self.close_and_forget(idx);
-                }
+            let dirty = self
+                .editor
+                .workspace
+                .documents
+                .get(existing)
+                .is_some_and(|d| d.dirty);
+            if dirty {
+                self.editor.workspace.focus_doc(existing);
+                self.editor.status_message = Some(format!(
+                    "{} has unsaved changes — save or close it first",
+                    display_name(&abs)
+                ));
+                return;
+            }
+            if let Some(idx) = self
+                .editor
+                .workspace
+                .tabs
+                .iter()
+                .position(|&t| t == existing)
+            {
+                self.close_and_forget(idx);
             }
         }
         let id = self.editor.open_viewer_tab(&abs, viewer_id, &title);
         self.render_viewer_tab(id);
+    }
+
+    /// `file.openAsText`: open the active view tab's file in a real text buffer, bypassing both
+    /// a viewer's extension claim and the size ceiling.
+    ///
+    /// Without this a plugin claiming a *text* extension (`plugins/csvview` claims `.csv`) would
+    /// make those files unopenable as text for as long as it is installed — a viewer could take
+    /// a file hostage. Binary content is still refused: it cannot round-trip a UTF-8 rope.
+    pub(super) fn open_as_text(&mut self) {
+        let Some(view) = self.editor.active_tab_view() else {
+            return;
+        };
+        let path = view.path().to_path_buf();
+        let limits = self.config.file_limits();
+        match files::probe(&path) {
+            Ok(probe) => {
+                if let files::FileKind::Binary { label } = probe.kind {
+                    self.editor.status_message =
+                        Some(format!("{label} is not text — it can't be edited"));
+                    return;
+                }
+            }
+            Err(e) => {
+                self.editor.status_message = Some(format!("Open failed: {e}"));
+                return;
+            }
+        }
+        match files::open_forced(&path, &limits) {
+            Ok(doc) => {
+                let tab = self.editor.workspace.active_tab;
+                self.close_and_forget(tab);
+                self.open_text_tab(&path, doc);
+            }
+            Err(e) => {
+                self.editor.status_message = Some(format!("Open failed: {e}"));
+            }
+        }
     }
 
     /// Ask the owning plugin to (re)render the viewer tab `id`. A viewer whose plugin has since

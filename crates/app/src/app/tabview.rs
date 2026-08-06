@@ -21,9 +21,22 @@ pub(crate) const NOTICE_ACTIONS: &[(&str, &str)] = &[
     ("tab.close", "Close this tab"),
 ];
 
+/// Actions offered on a *viewer* tab, same rules. `file.openAsText` is the escape hatch that
+/// keeps a viewer from taking a text extension hostage.
+pub(crate) const VIEWER_ACTIONS: &[(&str, &str)] = &[
+    ("file.openAsText", "Open as text"),
+    ("view.openAsHex", "View as hex"),
+];
+
 impl App {
     /// Route a key on a notice/viewer tab. Returns `true` when it was consumed.
     pub(super) fn tab_view_key(&mut self, key: KeyEvent) -> bool {
+        // A chord prefix is armed (the user pressed Ctrl+K): its continuation key is a plain
+        // char, so swallowing it here would make every `ctrl+k <key>` chord — Save All among
+        // them — silently dead on exactly the tabs this runs for.
+        if !self.pending.is_empty() {
+            return false;
+        }
         let page = self.tab_view_page().max(1);
         // A chord with Ctrl/Alt belongs to the keymap (Ctrl+W, Ctrl+P, the palette); only bare
         // and Shift-modified keys are ours.
@@ -47,11 +60,13 @@ impl App {
         true
     }
 
-    /// Enter on a notice tab takes its primary action: force a size-refused file open as text.
-    /// On a viewer tab there is nothing to activate (viewers are read-only).
+    /// Enter takes the tab's primary action: on a notice, force a size-refused file open as
+    /// text; on a viewer, open the file as text (the escape hatch from an extension claim).
     fn tab_view_activate(&mut self) {
-        if matches!(self.editor.active_tab_view(), Some(TabView::Notice { .. })) {
-            self.open_anyway();
+        match self.editor.active_tab_view() {
+            Some(TabView::Notice { .. }) => self.open_anyway(),
+            Some(TabView::Viewer(_)) => self.open_as_text(),
+            None => {}
         }
     }
 
@@ -73,16 +88,23 @@ impl App {
         }
     }
 
-    /// Rows of viewer body currently on screen (at least 1, so paging always advances).
+    /// Rows of viewer body currently on screen. May be 0 on a pane too short to draw a body;
+    /// callers that page apply their own `.max(1)` so a keypress always does something.
     fn tab_view_page(&self) -> usize {
         crate::ui::viewer_body_rows(self.regions.editor.height)
     }
 
-    /// The largest scroll offset that still shows content — the last page, not the last row.
+    /// The largest scroll offset that still shows content — the last *page*, not the last row.
+    /// Zero when the pane is too short to draw a body at all: there is nothing to scroll, and
+    /// letting `scroll` wander would strand the view once the pane grew again.
     fn tab_view_max_scroll(&self) -> usize {
+        let rows = self.tab_view_page();
+        if rows == 0 {
+            return 0;
+        }
         let Some(TabView::Viewer(v)) = self.editor.active_tab_view() else {
             return 0;
         };
-        v.content.lines.len().saturating_sub(self.tab_view_page())
+        v.content.lines.len().saturating_sub(rows)
     }
 }

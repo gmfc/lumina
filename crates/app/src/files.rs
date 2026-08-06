@@ -162,19 +162,19 @@ pub fn absolute_path(path: &Path) -> PathBuf {
 /// for every magic number below plus a representative NUL scan.
 const SNIFF_BYTES: usize = 8 * 1024;
 
-/// Leading byte sequences that identify a file as binary, with the label shown to the user.
+/// Leading byte sequences that identify a file as binary on their own, with the label shown to
+/// the user.
 ///
-/// Deliberately conservative: every entry is either non-ASCII or a long, distinctive ASCII run,
-/// because a match here *refuses* the file. Formats whose signature is short and plausibly
-/// text-like (`MZ`, `BM`, `ID3`, `BZh`) are left out — they are caught by the NUL scan instead,
-/// where the worst case is a less specific label rather than a rejected text file.
+/// A match here *refuses* the file, so every entry must be one no text file could plausibly
+/// begin with: non-ASCII bytes, or a long distinctive ASCII run. Short text-like signatures
+/// (`MZ`, `BM`, `ID3`, `BZh`) are omitted — the NUL scan catches those formats anyway, at the
+/// cost of a less specific label rather than a rejected source file.
 const MAGIC: &[(&[u8], &str)] = &[
     (b"%PDF-", "PDF document"),
     (b"\x89PNG\r\n\x1a\n", "PNG image"),
     (b"\xFF\xD8\xFF", "JPEG image"),
     (b"GIF87a", "GIF image"),
     (b"GIF89a", "GIF image"),
-    (b"8BPS", "Photoshop document"),
     (b"\x7FELF", "ELF executable"),
     (b"\xCA\xFE\xBA\xBE", "Java class file"),
     (b"\xFE\xED\xFA\xCE", "Mach-O binary"),
@@ -194,9 +194,16 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"\xED\xAB\xEE\xDB", "RPM package"),
     (b"SQLite format 3\x00", "SQLite database"),
     (b"\xD0\xCF\x11\xE0", "Microsoft Office document"),
+    (b"\x1A\x45\xDF\xA3", "Matroska video"),
+];
+
+/// Signatures that are only four printable ASCII characters. These *refine the label* of a file
+/// the NUL scan has already condemned; they never condemn one themselves, because a text file
+/// beginning "OggS is a container format" must not be refused as media.
+const MAGIC_WEAK: &[(&[u8], &str)] = &[
+    (b"8BPS", "Photoshop document"),
     (b"OggS", "Ogg media"),
     (b"fLaC", "FLAC audio"),
-    (b"\x1A\x45\xDF\xA3", "Matroska video"),
     (b"OTTO", "OpenType font"),
     (b"wOFF", "WOFF font"),
     (b"wOF2", "WOFF2 font"),
@@ -315,15 +322,36 @@ pub fn probe(path: &Path) -> Result<Probe> {
 }
 
 /// Fill `buf` from `file`, tolerating short reads, and return how many bytes landed.
+///
+/// `Read::read` on a `File` does not retry `EINTR` (only `read_to_end`/`read_exact` do), and a
+/// TUI takes signals routinely — a terminal resize mid-probe would otherwise turn a perfectly
+/// good file into "Open failed: Interrupted system call".
 fn read_head(file: &mut fs::File, buf: &mut [u8]) -> Result<usize> {
     let mut filled = 0;
     while filled < buf.len() {
-        match file.read(&mut buf[filled..])? {
-            0 => break,
-            n => filled += n,
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.into()),
         }
     }
     Ok(filled)
+}
+
+/// Read at most `cap` bytes of `path` (`0` = no cap). Returns the bytes read; the caller checks
+/// whether the cap was hit.
+fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>> {
+    if cap == 0 {
+        return fs::read(path).with_context(|| format!("reading {}", path.display()));
+    }
+    let file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut bytes = Vec::new();
+    // `read_to_end` retries EINTR for us.
+    std::io::Read::take(file, cap)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("reading {}", path.display()))?;
+    Ok(bytes)
 }
 
 /// Classify a file's head bytes. Ordered so the *specific* answer wins: BOM (which makes NULs
@@ -331,6 +359,16 @@ fn read_head(file: &mut fs::File, buf: &mut [u8]) -> Result<usize> {
 pub fn classify(head: &[u8]) -> FileKind {
     // UTF-16 is text whose encoding is half NUL bytes — it must be decided before the NUL scan
     // or every UTF-16 file in the project would be refused as binary.
+    //
+    // UTF-32 must be ruled out *first*: its LE BOM is `FF FE 00 00`, which starts with the
+    // UTF-16LE BOM. Treating it as UTF-16 would decode the file into interleaved NULs and then
+    // re-encode that mojibake over the original on the first save — the exact destruction this
+    // module exists to prevent. There is no UTF-32 decoder, so it is honestly refused.
+    if head.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) || head.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return FileKind::Binary {
+            label: "UTF-32 text (unsupported encoding)",
+        };
+    }
     if head.starts_with(&[0xFF, 0xFE]) || head.starts_with(&[0xFE, 0xFF]) {
         return FileKind::Text;
     }
@@ -352,15 +390,24 @@ pub fn classify(head: &[u8]) -> FileKind {
             _ => {}
         }
     }
-    if head.len() >= 8 && &head[4..8] == b"ftyp" {
+    // ISO-BMFF (`.mp4`, `.mov`, `.heic`): `ftyp` at offset 4, preceded by the box's big-endian
+    // size. Those two leading zero bytes are the whole guard — without them any source line
+    // whose 5th–8th characters spell "ftyp" ("int ftype;", "let ftype = 1;") is refused as
+    // video. Every real ftyp box is far under 64 KiB, so this rejects no genuine media file.
+    if head.len() >= 8 && &head[4..8] == b"ftyp" && head[0] == 0 && head[1] == 0 {
         return FileKind::Binary {
             label: "MP4 / QuickTime media",
         };
     }
     if head.contains(&0) {
-        return FileKind::Binary {
-            label: "Binary file",
-        };
+        // Condemned by the NUL scan — now a four-character ASCII signature may name it, which
+        // it was not trusted to do on its own.
+        let label = MAGIC_WEAK
+            .iter()
+            .find(|(prefix, _)| head.starts_with(prefix))
+            .map(|(_, label)| *label)
+            .unwrap_or("Binary file");
+        return FileKind::Binary { label };
     }
     FileKind::Text
 }
@@ -383,7 +430,27 @@ pub fn open(path: &Path, limits: &Limits) -> Result<Opened> {
             limit: limits.max_bytes,
         }));
     }
-    Ok(Opened::Text(Box::new(load_sized(path, limits)?)))
+    // Read with the ceiling as a hard bound (+1 byte, to notice overshoot). The gate above
+    // trusted `metadata().len()`, and that number can lie: a `/proc` entry reports 0 while
+    // yielding unbounded data, and a file can grow between the stat and the read. If the read
+    // overshoots, refuse — a *truncated* buffer must never become an editable one, because
+    // saving it would destroy everything past the cut.
+    let cap = if limits.max_bytes == 0 {
+        0
+    } else {
+        limits.max_bytes.saturating_add(1)
+    };
+    let bytes = read_capped(path, cap)?;
+    let len = bytes.len() as u64;
+    if limits.is_over(len) {
+        return Ok(Opened::Refused(Refusal::TooLarge {
+            len,
+            limit: limits.max_bytes,
+        }));
+    }
+    let mut doc = document_from(path, &bytes);
+    doc.large = limits.is_large(len);
+    Ok(Opened::Text(Box::new(doc)))
 }
 
 /// Load `path` past the size ceiling (the `file.openAnyway` escape hatch).
@@ -393,17 +460,11 @@ pub fn open(path: &Path, limits: &Limits) -> Result<Opened> {
 /// tree-sitter parse plus a full-buffer `didOpen` on the file they were just warned about is
 /// the opposite of what "open anyway" asks for.
 pub fn open_forced(path: &Path, limits: &Limits) -> Result<Document> {
-    let mut doc = load_sized(path, limits)?;
-    let len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    doc.large |= limits.is_over(len);
-    Ok(doc)
-}
-
-/// [`load`], plus the degraded-mode flag derived from the file's size.
-fn load_sized(path: &Path, limits: &Limits) -> Result<Document> {
-    let mut doc = load(path)?;
-    let len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    doc.large = limits.is_large(len);
+    // Uncapped by definition — the user asked for the whole thing.
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let len = bytes.len() as u64;
+    let mut doc = document_from(path, &bytes);
+    doc.large = limits.is_large(len) || limits.is_over(len);
     Ok(doc)
 }
 
@@ -424,17 +485,27 @@ pub fn human_bytes(n: u64) -> String {
     }
 }
 
-/// Load a file into a `Document`, recording its (absolute) path, language, encoding, and fingerprint.
+/// Load a file into a `Document` with **no size or binary policy** — the raw loader behind
+/// [`open`] and [`open_forced`]. Kept for tests that want a document straight off disk;
+/// production code goes through [`open`] so the policy can't be bypassed by adding a caller.
+#[cfg(test)]
 pub fn load(path: &Path) -> Result<Document> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let fp = fingerprint(&bytes);
-    let (text, encoding) = decode(&bytes);
+    Ok(document_from(path, &bytes))
+}
+
+/// Build a `Document` from bytes already read, recording the path, language, encoding, and
+/// fingerprint. Shared by [`load`] and the policy-aware [`open`], so the size gate can bound its
+/// own read without duplicating the decode.
+fn document_from(path: &Path, bytes: &[u8]) -> Document {
+    let fp = fingerprint(bytes);
+    let (text, encoding) = decode(bytes);
     let mut doc = Document::from_str(&text);
     doc.path = Some(absolute_path(path));
     doc.language = language_for(path);
     doc.encoding = encoding;
     doc.disk = fp;
-    Ok(doc)
+    doc
 }
 
 /// Serialize a document's text back to the file's original line-ending style.
@@ -561,6 +632,90 @@ mod tests {
                 label: "MP4 / QuickTime media"
             }
         );
+    }
+
+    #[test]
+    fn ordinary_source_lines_are_not_mistaken_for_media() {
+        // Regression: `head[4..8] == "ftyp"` with no box-size guard refused any line whose 5th
+        // to 8th characters spell "ftyp" — which real C and Rust source does.
+        for src in [
+            &b"int ftype;\nstruct x{};\n"[..],
+            b"let ftype = 1;\n",
+            b"my_ftype_helper()\n",
+        ] {
+            assert_eq!(
+                classify(src),
+                FileKind::Text,
+                "{:?}",
+                String::from_utf8_lossy(src)
+            );
+        }
+        // A real ISO-BMFF file still is detected: its box size makes the first two bytes zero.
+        assert_eq!(
+            classify(b"\x00\x00\x00\x18ftypmp42"),
+            FileKind::Binary {
+                label: "MP4 / QuickTime media"
+            }
+        );
+    }
+
+    #[test]
+    fn a_four_letter_ascii_signature_only_labels_a_file_the_nul_scan_condemned() {
+        // Prose beginning with one of these words must stay text …
+        assert_eq!(classify(b"OggS is a container format\n"), FileKind::Text);
+        assert_eq!(classify(b"OTTO\nHANS\nFRANZ\n"), FileKind::Text);
+        assert_eq!(classify(b"8BPS notes for the design doc\n"), FileKind::Text);
+        // … but once the NUL scan has condemned the file, the signature names it.
+        assert_eq!(
+            classify(b"OggS\x00\x02\x00\x00binary"),
+            FileKind::Binary { label: "Ogg media" }
+        );
+        assert_eq!(
+            classify(b"wOFF\x00\x01\x00\x00binary"),
+            FileKind::Binary { label: "WOFF font" }
+        );
+    }
+
+    #[test]
+    fn utf32_is_refused_rather_than_decoded_as_utf16() {
+        // `FF FE 00 00` is the UTF-32LE BOM and starts with the UTF-16LE one. Reading it as
+        // UTF-16 yields interleaved NULs, and saving re-encodes that mojibake over the file.
+        let le = [0xFF, 0xFE, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00];
+        let be = [0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x61];
+        for head in [&le[..], &be[..]] {
+            assert_eq!(
+                classify(head),
+                FileKind::Binary {
+                    label: "UTF-32 text (unsupported encoding)"
+                }
+            );
+        }
+        // Plain UTF-16 (no trailing NUL pair) is still text.
+        assert_eq!(
+            classify(&[0xFF, 0xFE, 0x61, 0x00, 0x62, 0x00]),
+            FileKind::Text
+        );
+    }
+
+    #[test]
+    fn a_file_whose_reported_size_lies_is_refused_rather_than_truncated() {
+        // The gate trusts `metadata().len()`; the read must not. A buffer truncated at the cap
+        // would destroy everything past the cut on the first save, so overshoot is a refusal.
+        let path = temp_bytes("liar.txt", &vec![b'a'; 4096]);
+        // A 1-byte ceiling: the probe's own length check catches this one …
+        let tiny = Limits {
+            max_bytes: 1,
+            large_bytes: 0,
+        };
+        assert!(matches!(
+            open(&path, &tiny),
+            Ok(Opened::Refused(Refusal::TooLarge { .. }))
+        ));
+        // … and the capped read independently reports the same refusal for the same file.
+        let bytes = read_capped(&path, 2).unwrap();
+        assert_eq!(bytes.len(), 2, "the read is bounded by the cap");
+        assert!(tiny.is_over(bytes.len() as u64));
+        fs::remove_file(&path).ok();
     }
 
     #[test]

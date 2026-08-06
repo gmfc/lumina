@@ -121,11 +121,12 @@ impl SettingsView {
         entries.push(Entry::Item(SettingItem {
             key: "max_file_size_mb".into(),
             label: "Max file size (MB)".into(),
-            description: "Files larger than this open as a notice you can override, not a buffer."
-                .into(),
+            description:
+                "Files larger than this open as a notice you can override, not a buffer (0 = no limit)."
+                    .into(),
             widget: Widget::Number {
                 value: config.max_file_size_mb as i64,
-                min: 1,
+                min: 0,
                 max: 4096,
             },
         }));

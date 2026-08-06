@@ -111,6 +111,11 @@ impl App {
             return;
         }
         self.editor.focus = Focus::Editor;
+        // A notice/viewer tab has no text: the editing menu (Cut/Copy/Paste, code actions)
+        // would act on the placeholder buffer behind it.
+        if self.editor.active_tab_view().is_some() {
+            return;
+        }
         if let Some(off) = self.editor_offset_at(col, row) {
             // Keep the selection if the click lands inside *any* of its ranges (multi-cursor too),
             // so Cut/Copy still act on it; otherwise place a fresh caret at the click.

@@ -474,6 +474,11 @@ pub(super) fn decode_stream(dict: &Dict, data: &[u8]) -> Option<Vec<u8>> {
             .collect(),
         Some(_) => return None,
     };
+    // A chain is legal but a long one is always an attack: each RunLengthDecode pass expands up
+    // to 64×, so four passes turn two bytes into 33 MB and eight into a terabyte.
+    if filters.len() > 8 {
+        return None;
+    }
     let mut out = data.to_vec();
     for filter in &filters {
         out = match filter.as_str() {
@@ -574,10 +579,12 @@ fn push_base85(out: &mut Vec<u8>, group: &[u8; 5], n: usize) {
     out.extend_from_slice(&bytes[..n.saturating_sub(1).min(4)]);
 }
 
+/// Run-length decoding expands up to 64× per pass, so the output is capped like the inflater's:
+/// a decoder without a ceiling is a decompression bomb.
 fn run_length_decode(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut i = 0usize;
-    while i < data.len() {
+    while i < data.len() && out.len() < MAX_DECODED {
         let len = data[i];
         i += 1;
         match len {
@@ -613,9 +620,21 @@ fn apply_predictor(dict: &Dict, data: Vec<u8>) -> Vec<u8> {
         .and_then(Obj::as_f64)
         .unwrap_or(8.0) as usize;
     let columns = get(parms, "Columns").and_then(Obj::as_f64).unwrap_or(1.0) as usize;
-    let bpp = (colors * bpc).div_ceil(8).max(1);
-    let row_len = (columns * colors * bpc).div_ceil(8);
-    if row_len == 0 {
+    // `Colors`/`Columns`/`BitsPerComponent` are file-supplied floats: `1e19 as usize`
+    // saturates, and the product then overflows — a debug panic on a malformed stream. A
+    // geometry we can't compute is a geometry we don't apply.
+    let Some(row_len) = columns
+        .checked_mul(colors)
+        .and_then(|n| n.checked_mul(bpc))
+        .map(|bits| bits.div_ceil(8))
+    else {
+        return data;
+    };
+    let Some(bpp) = colors.checked_mul(bpc).map(|bits| bits.div_ceil(8).max(1)) else {
+        return data;
+    };
+    // A row wider than the data itself can only produce padding; refuse rather than allocate it.
+    if row_len == 0 || row_len > data.len().max(1) * 8 {
         return data;
     }
 
@@ -837,6 +856,57 @@ mod tests {
         // 2 → copy 3 literal bytes; 254 → repeat the next byte 3 times; 128 → EOD.
         let encoded = [2u8, b'a', b'b', b'c', 254, b'z', 128];
         assert_eq!(run_length_decode(&encoded), b"abczzz");
+    }
+
+    #[test]
+    fn an_absurd_predictor_geometry_is_declined_rather_than_overflowing() {
+        // `Columns`/`Colors` are file-supplied floats: `1e19 as usize` saturates, and the
+        // product then overflows — a debug panic on a malformed stream.
+        let dict: Dict = vec![(
+            "DecodeParms".into(),
+            Obj::Dict(vec![
+                ("Predictor".into(), Obj::Number(12.0)),
+                ("Columns".into(), Obj::Number(1e19)),
+                ("Colors".into(), Obj::Number(1e19)),
+            ]),
+        )];
+        let out = decode_stream(&dict, &[0u8, 1, 2, 3]).unwrap();
+        assert_eq!(
+            out,
+            vec![0u8, 1, 2, 3],
+            "geometry we can't compute isn't applied"
+        );
+    }
+
+    #[test]
+    fn a_run_length_filter_chain_cannot_become_a_decompression_bomb() {
+        // Each pass expands up to 64×: four turn two bytes into 33 MB, eight into a terabyte.
+        let chain = |n: usize| -> Dict {
+            vec![(
+                "Filter".into(),
+                Obj::Array(std::iter::repeat_n(Obj::Name("RunLengthDecode".into()), n).collect()),
+            )]
+        };
+        // A long chain is refused outright — the cheapest place to stop the amplification.
+        assert_eq!(decode_stream(&chain(9), &[129u8, 129]), None);
+        // A short chain runs, and stays proportional to what its passes can produce.
+        let out = decode_stream(&chain(3), &[129u8, 129]).unwrap();
+        assert!(
+            out.len() <= 128 * 128 * 128,
+            "3 passes stayed bounded: {}",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn run_length_output_is_capped() {
+        // One pass, given input crafted to expand past the ceiling, stops at it rather than
+        // allocating without bound.
+        let bomb: Vec<u8> = std::iter::repeat_n([129u8, b'x'], 600_000)
+            .flatten()
+            .collect();
+        let out = run_length_decode(&bomb);
+        assert!(out.len() <= MAX_DECODED, "capped at {} bytes", out.len());
     }
 
     #[test]

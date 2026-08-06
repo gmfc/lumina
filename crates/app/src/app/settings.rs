@@ -324,10 +324,10 @@ impl App {
             // Both take effect on the next open — already-open buffers keep their mode, since
             // re-classifying them would mean silently reloading files the user is editing.
             ("max_file_size_mb", SettingValue::Int(n)) => {
-                self.config.max_file_size_mb = n.clamp(1, 4096) as u64;
+                self.config.max_file_size_mb = n.clamp(0, 4096) as u64;
             }
             ("large_file_mb", SettingValue::Int(n)) => {
-                self.config.large_file_mb = n.clamp(1, 4096) as u64;
+                self.config.large_file_mb = n.clamp(0, 4096) as u64;
             }
             ("terminal_height", SettingValue::Int(n)) => {
                 self.config.terminal_height = n.clamp(3, 60) as u16;

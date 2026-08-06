@@ -88,6 +88,7 @@ impl App {
             Command::CloseAllTabs => self.close_all_tabs(),
             Command::ReopenClosedTab => self.reopen_closed_tab(),
             Command::OpenAnyway => self.open_anyway(),
+            Command::OpenAsText => self.open_as_text(),
             Command::NextTab => self.cycle_tab(1),
             Command::PrevTab => self.cycle_tab(-1),
             Command::GotoTab(i) => self.editor.workspace.focus_tab(i),
@@ -126,6 +127,13 @@ impl App {
         let Some(id) = self.editor.workspace.active_doc() else {
             return;
         };
+        // The app-side mutation chokepoint, so this is where a notice/viewer tab's placeholder
+        // is protected from *every* editing command at once — including the ones that never go
+        // near `tab_view_key`, like a bracketed paste (`CtEvent::Paste` skips `on_key`
+        // entirely) or a `Ctrl+`-chord that resolves through the keymap.
+        if self.editor.is_tab_view(id) {
+            return;
+        }
         let Some(d) = self.editor.workspace.documents.get_mut(id) else {
             return;
         };

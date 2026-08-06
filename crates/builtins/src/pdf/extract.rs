@@ -16,6 +16,13 @@ use super::parse::{decode_stream, find, get, Dict, Lexer, Obj};
 /// a hostile file that declares millions of objects stops here instead of exhausting memory.
 const MAX_OBJECTS: usize = 500_000;
 
+/// Decoded content bytes we will accumulate for a single page.
+const MAX_PAGE_CONTENT: usize = 64 * 1024 * 1024;
+
+/// Total nodes the `/Pages` → `/Kids` walk may visit. The depth cap bounds one path; this
+/// bounds the whole traversal, which is what a branching or self-referential tree needs.
+const MAX_TREE_VISITS: usize = 100_000;
+
 /// Depth cap for the `/Pages` → `/Kids` walk, so a cyclic or absurd page tree terminates.
 const MAX_TREE_DEPTH: usize = 32;
 
@@ -76,7 +83,8 @@ impl Pdf {
             .and_then(Obj::dict);
         if let Some(pages) = root {
             let mut out = Vec::new();
-            self.walk_pages(pages, 0, &mut out);
+            let mut budget = MAX_TREE_VISITS;
+            self.walk_pages(pages, 0, &mut out, &mut budget);
             if !out.is_empty() {
                 return out;
             }
@@ -91,10 +99,21 @@ impl Pdf {
         numbered.into_iter().map(|(_, d)| d).collect()
     }
 
-    fn walk_pages<'a>(&'a self, node: &'a Dict, depth: usize, out: &mut Vec<&'a Dict>) {
-        if depth > MAX_TREE_DEPTH || out.len() >= MAX_OBJECTS {
+    /// `budget` bounds *total node visits*, which the depth cap alone does not: a node whose
+    /// `/Kids` names itself, or a chain of `/Kids [n n]` branches, visits 2^depth nodes without
+    /// ever reaching a leaf — so `out` never grows and only the depth cap applies, at 2^32
+    /// visits. That is a hang on a damaged or hostile file, not a slow parse.
+    fn walk_pages<'a>(
+        &'a self,
+        node: &'a Dict,
+        depth: usize,
+        out: &mut Vec<&'a Dict>,
+        budget: &mut usize,
+    ) {
+        if depth > MAX_TREE_DEPTH || out.len() >= MAX_OBJECTS || *budget == 0 {
             return;
         }
+        *budget -= 1;
         let Some(kids) = self.lookup(node, "Kids").and_then(Obj::as_array) else {
             // A leaf reached directly (a one-page document sometimes has no intermediate node).
             if get(node, "Type").and_then(Obj::as_name) == Some("Page") {
@@ -107,11 +126,11 @@ impl Pdf {
                 continue;
             };
             match get(kid, "Type").and_then(Obj::as_name) {
-                Some("Pages") => self.walk_pages(kid, depth + 1, out),
+                Some("Pages") => self.walk_pages(kid, depth + 1, out, budget),
                 // Missing `/Type` is common in generated files; a node with `/Kids` is a branch,
                 // anything else is a leaf.
                 Some("Page") => out.push(kid),
-                _ if get(kid, "Kids").is_some() => self.walk_pages(kid, depth + 1, out),
+                _ if get(kid, "Kids").is_some() => self.walk_pages(kid, depth + 1, out, budget),
                 _ => out.push(kid),
             }
         }
@@ -131,6 +150,11 @@ impl Pdf {
             other => vec![other],
         };
         for part in parts {
+            // `/Contents` may name the same stream hundreds of times; each entry is decoded
+            // again, so a 3 MB stream referenced 300× is a gigabyte of work from a small file.
+            if out.len() >= MAX_PAGE_CONTENT {
+                break;
+            }
             if let Obj::Stream { dict, data } = part {
                 if let Some(decoded) = decode_stream(dict, data) {
                     out.extend_from_slice(&decoded);
@@ -335,7 +359,11 @@ fn expand_object_streams(objects: &mut HashMap<u32, Obj>) {
             if num < 0.0 || offset < 0.0 {
                 break;
             }
-            let at = first + offset as usize;
+            // `offset` is a file-supplied float: `1e30 as usize` saturates to `usize::MAX`, so
+            // a plain add panics in debug and wraps in release.
+            let Some(at) = first.checked_add(offset as usize) else {
+                continue;
+            };
             if at >= decoded.len() {
                 continue;
             }
@@ -765,6 +793,110 @@ mod tests {
         let src = b"1 beginbfrange\n<FFFFFFFF> <FFFFFFFF> [<0041> <0042> <0043>]\nendbfrange\n";
         let cmap = CMap::parse(src);
         assert_eq!(cmap.decode(&[0xFF, 0xFF, 0xFF, 0xFF]), "A");
+    }
+
+    #[test]
+    fn a_self_referential_page_tree_terminates() {
+        // `/Kids` naming its own node never reaches a leaf, so `out` never grows and only the
+        // depth cap applies — at 2^32 visits, which is a hang, not a slow parse.
+        let mut src = Vec::from(&b"%PDF-1.4\n"[..]);
+        src.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        src.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [2 0 R 2 0 R] >>\nendobj\n");
+        let pdf = Pdf::parse(&src);
+        let start = std::time::Instant::now();
+        let pages = pdf.pages();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "cyclic page tree took {:?}",
+            start.elapsed()
+        );
+        assert!(pages.is_empty(), "a cycle contains no real pages");
+    }
+
+    #[test]
+    fn a_branching_page_tree_is_bounded_by_total_visits() {
+        // Each node doubling into the next gives 2^depth visits without ever reaching a leaf —
+        // the depth cap alone doesn't bound it.
+        let depth = 24usize;
+        let mut src = Vec::from(&b"%PDF-1.4\n"[..]);
+        src.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        for k in 2..(2 + depth) {
+            src.extend_from_slice(
+                format!(
+                    "{k} 0 obj\n<< /Type /Pages /Kids [{n} 0 R {n} 0 R] >>\nendobj\n",
+                    n = k + 1
+                )
+                .as_bytes(),
+            );
+        }
+        src.extend_from_slice(
+            format!("{} 0 obj\n<< /Type /Page >>\nendobj\n", 2 + depth).as_bytes(),
+        );
+        let pdf = Pdf::parse(&src);
+        let start = std::time::Instant::now();
+        let _ = pdf.pages();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "branching page tree took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn an_object_stream_offset_past_usize_is_skipped_not_added() {
+        // `1e30 as usize` saturates to `usize::MAX`; a plain `first + offset` then panics.
+        let dict: Dict = vec![
+            ("Type".into(), Obj::Name("ObjStm".into())),
+            ("N".into(), Obj::Number(1.0)),
+            ("First".into(), Obj::Number(8.0)),
+        ];
+        let mut objects = HashMap::new();
+        objects.insert(
+            1u32,
+            Obj::Stream {
+                dict,
+                data: b"1 1e30 <</X 1>>".to_vec(),
+            },
+        );
+        expand_object_streams(&mut objects);
+        assert_eq!(objects.len(), 1, "the bad entry was skipped, not expanded");
+    }
+
+    #[test]
+    fn repeated_content_references_are_bounded() {
+        // `/Contents` naming one stream hundreds of times decodes it hundreds of times, so a
+        // small file becomes gigabytes of work. Asserted against `page_content` directly, so the
+        // test proves the cap without paying to extract text from 64 MB.
+        use std::io::Write;
+        let payload = b"BT (x) Tj ET ".repeat(200_000); // ~2.6 MB per decode
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&payload).unwrap();
+        let stream = enc.finish().unwrap();
+        let mut src = Vec::from(&b"%PDF-1.4\n"[..]);
+        src.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        src.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] >>\nendobj\n");
+        // 400 × 2.6 MB is a gigabyte uncapped, from a file under 20 KB.
+        let refs = "4 0 R ".repeat(400);
+        src.extend_from_slice(
+            format!("3 0 obj\n<< /Type /Page /Contents [{refs}] >>\nendobj\n").as_bytes(),
+        );
+        src.extend_from_slice(
+            format!(
+                "4 0 obj\n<< /Length {} /Filter /FlateDecode >>\nstream\n",
+                stream.len()
+            )
+            .as_bytes(),
+        );
+        src.extend_from_slice(&stream);
+        src.extend_from_slice(b"\nendstream\nendobj\n");
+        let pdf = Pdf::parse(&src);
+        let pages = pdf.pages();
+        let content = pdf.page_content(pages[0]);
+        assert!(
+            content.len() <= MAX_PAGE_CONTENT + payload.len() + 1,
+            "page content grew to {} bytes",
+            content.len()
+        );
     }
 
     #[test]

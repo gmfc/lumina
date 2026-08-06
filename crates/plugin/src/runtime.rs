@@ -236,10 +236,15 @@ impl Plugin for ScriptPlugin {
         let mut ctx = Self::build_ctx(host);
         ctx.insert("path".into(), path.to_string_lossy().into_owned().into());
         if self.has_cap("fs:read") {
-            let text = std::fs::read(path)
-                .map(|bytes| {
-                    let end = bytes.len().min(SCRIPT_VIEWER_BYTES);
-                    String::from_utf8_lossy(&bytes[..end]).into_owned()
+            // Bounded at the *read*, not after it: `fs::read` then truncate would still pull a
+            // 4 GB file into memory before the cap could apply, which is the opposite of what
+            // `SCRIPT_VIEWER_BYTES` is for.
+            let text = std::fs::File::open(path)
+                .map(|f| {
+                    use std::io::Read;
+                    let mut bytes = Vec::new();
+                    let _ = f.take(SCRIPT_VIEWER_BYTES as u64).read_to_end(&mut bytes);
+                    String::from_utf8_lossy(&bytes).into_owned()
                 })
                 .unwrap_or_default();
             ctx.insert("text".into(), text.into());

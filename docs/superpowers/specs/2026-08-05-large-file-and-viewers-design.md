@@ -298,6 +298,15 @@ parse with clamping, `write_to` serialization, and a row in the Settings tab.
   ceiling would otherwise admit a file the "large" threshold does not cover.)
 - **A viewer plugin is disabled** — its extension claim disappears with it, so `.pdf` falls back
   to the binary notice.
+- **A viewer claims a *text* extension** (the `csvview` example claims `.csv`) — `file.openAsText`
+  is the escape hatch, advertised in the viewer tab's header. Without it a viewer could take a
+  file type hostage for as long as it is installed.
+- **A file changes on disk while open** — the reload re-applies the same policy, so a log that
+  grows past the ceiling (or turns binary) is *not* reloaded, and one that crosses the degraded
+  threshold picks it up. The watcher was otherwise a back door into the unbounded read.
+- **`metadata().len()` lies** (a `/proc` entry, a file growing between stat and read) — the read
+  is capped at the ceiling and overshoot is a refusal, because a truncated buffer would destroy
+  everything past the cut on the first save.
 - **Two plugins claim `.pdf`** — first registered wins, deterministically (registration order).
 - **A viewer publishes nothing** — the tab renders its status row and an empty body, not a blank
   screen.

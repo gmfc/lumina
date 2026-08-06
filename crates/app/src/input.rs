@@ -56,6 +56,9 @@ pub enum Command {
     /// Force a file the size ceiling refused into a real text buffer (the notice tab's escape
     /// hatch). Binary refusals stand — see `App::open_anyway`.
     OpenAnyway,
+    /// Open a view tab's file as text, bypassing a viewer's extension claim — so a plugin
+    /// claiming a text extension can't take those files hostage.
+    OpenAsText,
     // search — find/replace + project search are builtin plugins now.
     // language server: request commands are the `lsp` plugin; diagnostic navigation is the
     // `diagnostics` plugin. git change navigation (NextHunk/PrevHunk) is the `git-nav` plugin.
