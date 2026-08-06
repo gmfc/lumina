@@ -264,6 +264,20 @@ impl LspManager {
         }
     }
 
+    /// The display name of the server serving `lang`: the binary it resolved to
+    /// (`rust-analyzer`), not the protocol's acronym. `None` until the language has been resolved.
+    /// Used to attribute a server's own text in a message the user can place.
+    pub fn server_name(&self, lang: &str) -> Option<&str> {
+        let argv = self.resolved.get(lang)?.as_ref()?;
+        let first = argv.first()?;
+        Some(
+            Path::new(first)
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or(first),
+        )
+    }
+
     /// Drain incoming messages: complete pending handshakes, and turn feature responses into
     /// high-level [`LspEvent`]s by matching each against the request that produced it.
     pub fn poll(&mut self) -> Vec<LspEvent> {

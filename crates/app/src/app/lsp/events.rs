@@ -90,7 +90,9 @@ impl App {
                     .push(editor_plugin::event::Event::LspWorkspaceEdit(we));
             }
             LspEvent::Message(text) => {
-                self.editor.status_message = Some(format!("LSP: {text}"));
+                // "LSP" is the protocol's acronym, not a thing the user has a name for; say who
+                // is talking in words instead.
+                self.editor.notify_info(format!("Language server: {text}"));
             }
             LspEvent::Progress(line) => {
                 // Store the rendered work-done progress as a statusline item (spinner added at
@@ -220,11 +222,12 @@ impl App {
                     changes: vec![(path.to_string_lossy().into_owned(), edits)],
                 };
                 if self.apply_workspace_edit(edit) > 0 {
-                    self.editor.status_message = Some("Formatted document".to_string());
+                    self.editor.notify_info("Formatted document");
                 }
             }
             LspEvent::Error(message) => {
-                self.editor.status_message = Some(format!("LSP: {message}"));
+                self.editor
+                    .notify_error(format!("Language server: {message}"));
             }
         }
     }
@@ -353,7 +356,9 @@ impl App {
             })
             .collect();
         if stale > 0 {
-            self.editor.status_message = Some(format!("Skipped {stale} stale edit(s)"));
+            self.editor.notify_warn(format!(
+                "The file changed while the rename was in flight — {stale} edit(s) were skipped"
+            ));
         }
         editor_plugin::LspWorkspaceEdit { changes }
     }
@@ -422,7 +427,8 @@ impl App {
             count += 1;
         }
         if count > 0 {
-            self.editor.status_message = Some(format!("Applied edits across {count} file(s)"));
+            self.editor
+                .notify_info(format!("Applied edits across {count} file(s)"));
         }
         count
     }

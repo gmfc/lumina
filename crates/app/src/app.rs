@@ -113,6 +113,7 @@ mod dispatch;
 mod dock;
 mod file_ops;
 mod git;
+mod help;
 mod keys;
 mod lifecycle;
 mod lsp;
@@ -143,16 +144,20 @@ fn in_rect(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
 /// every registry-contributed command — into a flat `CommandInfo` list. A palette plugin reads
 /// this through `Host::commands`, mirroring the registry across the split-borrow wall (it sees
 /// only `&mut EditorState`). Rebuilt whenever the plugin set changes (i.e. at construction).
-fn command_catalog(registry: &Registry) -> Vec<editor_plugin::CommandInfo> {
+/// Each entry carries its *live* chord, resolved from `keymap`, so the palette can teach the
+/// shortcut for what it just ran — the data was always there (`Keymap::binding_label`, already
+/// used by the welcome screen and the notice tab), just never wired to the palette. Rebuilt
+/// alongside the keymap on config reload so a remap shows through.
+fn command_catalog(registry: &Registry, keymap: &Keymap) -> Vec<editor_plugin::CommandInfo> {
     let mut cat: Vec<editor_plugin::CommandInfo> = crate::commands::palette_entries()
         .iter()
-        .map(|(id, title)| editor_plugin::CommandInfo::new(*id, *title))
+        .map(|(id, title)| {
+            editor_plugin::CommandInfo::new(*id, *title).keys(keymap.binding_label(id))
+        })
         .collect();
     for spec in registry.commands() {
-        cat.push(editor_plugin::CommandInfo::new(
-            spec.id.clone(),
-            spec.title.clone(),
-        ));
+        let keys = keymap.binding_label(&spec.id);
+        cat.push(editor_plugin::CommandInfo::new(spec.id.clone(), spec.title.clone()).keys(keys));
     }
     cat
 }

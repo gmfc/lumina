@@ -94,8 +94,7 @@ fn open_anyway_refuses_a_binary_notice() {
     );
     assert!(app
         .editor
-        .status_message
-        .as_deref()
+        .status_text()
         .is_some_and(|m| m.contains("not text")));
     std::fs::remove_file(&path).ok();
 }
@@ -191,8 +190,7 @@ fn saving_a_view_tab_leaves_the_file_untouched() {
     app.save_active();
     assert!(
         app.editor
-            .status_message
-            .as_deref()
+            .status_text()
             .is_some_and(|m| m.contains("not a text buffer")),
         "and says why: {:?}",
         app.editor.status_message
@@ -214,7 +212,10 @@ fn saving_a_view_tab_leaves_the_file_untouched() {
         "the file's bytes must be byte-for-byte unchanged"
     );
     assert_eq!(
-        app.editor.active_tab_view().map(|v| v.path().to_path_buf()),
+        app.editor
+            .active_tab_view()
+            .and_then(|v| v.path())
+            .map(|p| p.to_path_buf()),
         Some(crate::files::absolute_path(&path)),
         "and the tab still points at the file it is showing"
     );
@@ -308,8 +309,7 @@ fn a_large_file_opens_without_syntax_highlighting() {
     );
     assert!(
         app.editor
-            .status_message
-            .as_deref()
+            .status_text()
             .is_some_and(|m| m.contains("large-file mode")),
         "the mode is announced, so missing colour isn't mistaken for a bug"
     );
@@ -506,8 +506,7 @@ fn a_dirty_text_tab_is_never_closed_to_open_a_viewer() {
     );
     assert!(app
         .editor
-        .status_message
-        .as_deref()
+        .status_text()
         .is_some_and(|m| m.contains("unsaved changes")));
     std::fs::remove_file(&path).ok();
 }
@@ -529,8 +528,7 @@ fn a_file_that_grows_past_the_limit_while_open_is_not_reloaded() {
     );
     assert!(app
         .editor
-        .status_message
-        .as_deref()
+        .status_text()
         .is_some_and(|m| m.contains("grew past")));
     std::fs::remove_file(&path).ok();
 }
@@ -544,8 +542,7 @@ fn a_file_that_becomes_binary_while_open_is_not_reloaded() {
     assert_eq!(app.editor.active_document().unwrap().to_string(), "text\n");
     assert!(app
         .editor
-        .status_message
-        .as_deref()
+        .status_text()
         .is_some_and(|m| m.contains("no longer text")));
     std::fs::remove_file(&path).ok();
 }
@@ -586,8 +583,7 @@ fn a_chord_still_resolves_while_a_view_tab_is_focused() {
     app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
     assert!(
         app.editor
-            .status_message
-            .as_deref()
+            .status_text()
             .is_some_and(|m| m.contains("Saved")),
         "ctrl+k s (Save All) must still resolve: {:?}",
         app.editor.status_message

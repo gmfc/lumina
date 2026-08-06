@@ -59,6 +59,12 @@ pub enum Command {
     /// Open a view tab's file as text, bypassing a viewer's extension claim — so a plugin
     /// claiming a text extension can't take those files hostage.
     OpenAsText,
+    /// Discard the buffer and re-read the file — one of the two exits from an external-edit
+    /// conflict (the other is [`Command::KeepMine`]).
+    ReloadFromDisk,
+    /// Accept the buffer as the truth and clear the external-edit conflict, so the next save
+    /// deliberately overwrites the change on disk.
+    KeepMine,
     // search — find/replace + project search are builtin plugins now.
     // language server: request commands are the `lsp` plugin; diagnostic navigation is the
     // `diagnostics` plugin. git change navigation (NextHunk/PrevHunk) is the `git-nav` plugin.

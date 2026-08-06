@@ -46,6 +46,73 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                 .style(Style::default().bg(Color::Rgb(30, 33, 39)));
             f.render_widget(Paragraph::new(text).block(block), rect);
         }
+        Overlay::ConfirmQuit { dirty } => {
+            let names = app.tab_names(dirty);
+            let headline = match names.len() {
+                1 => format!(" {} has unsaved changes", names[0]),
+                n => format!(" {n} files have unsaved changes"),
+            };
+            let mut text = vec![Line::from(TSpan::styled(
+                headline,
+                Style::default().add_modifier(Modifier::BOLD),
+            ))];
+            // Name what is at risk — "some files" is not something a user can weigh. Long lists
+            // are capped so the box can't grow past the screen.
+            const MAX_LISTED: usize = 6;
+            if names.len() > 1 {
+                for name in names.iter().take(MAX_LISTED) {
+                    text.push(Line::from(TSpan::styled(
+                        format!("   {name}"),
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+                if names.len() > MAX_LISTED {
+                    text.push(Line::from(TSpan::styled(
+                        format!("   … and {} more", names.len() - MAX_LISTED),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            text.push(Line::from(""));
+            text.push(Line::from(
+                " [S] Save all & quit   [D] Discard & quit   [Esc] Cancel ",
+            ));
+            let rect = centered(body, 60, text.len() as u16 + 2);
+            f.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CLR_ACCENT))
+                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+            f.render_widget(Paragraph::new(text).block(block), rect);
+        }
+        Overlay::ConfirmReload => {
+            let name = app
+                .editor
+                .active_document()
+                .and_then(|d| d.path.as_ref())
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "This file".into());
+            let text = vec![
+                Line::from(TSpan::styled(
+                    format!(" Revert {name}?"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(TSpan::styled(
+                    " Your unsaved changes and this file's undo history are discarded.",
+                    Style::default().fg(Color::Gray),
+                )),
+                Line::from(""),
+                Line::from(" [R] Revert   [Esc] Cancel "),
+            ];
+            let rect = centered(body, 64, 6);
+            f.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CLR_ACCENT))
+                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+            f.render_widget(Paragraph::new(text).block(block), rect);
+        }
         Overlay::Info(body_text) => {
             // A hover/info popup: wrap the text into a centered box, capped in size.
             let lines: Vec<Line> = body_text
@@ -72,20 +139,54 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                 .style(Style::default().bg(Color::Rgb(30, 33, 39)));
             f.render_widget(Paragraph::new(lines).block(block), rect);
         }
-        Overlay::SaveAsInput { buffer } => {
-            let text = vec![
+        Overlay::SaveAsInput {
+            buffer,
+            error,
+            overwrite,
+        } => {
+            let mut text = vec![
                 Line::from(TSpan::styled(
                     " Save As",
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(format!(" › {buffer}▏")),
-                Line::from(TSpan::styled(
+            ];
+            // Where the file will actually land. A relative path is resolved against the project
+            // root, which the box otherwise never showed — the user found out on save.
+            if let Some(resolved) = app.resolve_save_as(buffer) {
+                text.push(Line::from(TSpan::styled(
+                    format!("   {}", resolved.display()),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            if let Some(err) = error {
+                text.push(Line::from(TSpan::styled(
+                    format!(" {err}"),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+            match overwrite {
+                Some(target) => {
+                    let name = target
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| target.display().to_string());
+                    text.push(Line::from(TSpan::styled(
+                        format!(" {name} already exists"),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                    text.push(Line::from(TSpan::styled(
+                        " [O] Overwrite   [Esc] Cancel   any other key: edit the path ",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                None => text.push(Line::from(TSpan::styled(
                     " [Enter] Save   [Esc] Cancel ",
                     Style::default().fg(Color::DarkGray),
-                )),
-            ];
-            let rect = centered(body, 60, 6);
+                ))),
+            }
+            let rect = centered(body, 68, text.len() as u16 + 2);
             f.render_widget(Clear, rect);
             let block = Block::default()
                 .borders(Borders::ALL)

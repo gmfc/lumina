@@ -119,9 +119,9 @@ fn lsp_error_event_is_shown_on_status_bar() {
     let mut app = app_with(&path);
     app.handle_lsp_event(crate::lsp::LspEvent::Error("rename failed".into()));
     assert_eq!(
-        app.editor.status_message.as_deref(),
-        Some("LSP: rename failed"),
-        "a server error should surface, not be swallowed"
+        app.editor.status_text(),
+        Some("Language server: rename failed"),
+        "a server error should surface, not be swallowed — and say who is talking in words"
     );
     std::fs::remove_file(&path).ok();
 }
@@ -185,7 +185,7 @@ fn handle_server_request_covers_window_methods_and_unknown() {
         "window/showMessageRequest",
         serde_json::json!({ "type": 1, "message": "reload?", "actions": [{"title": "OK"}] }),
     );
-    assert_eq!(app.editor.status_message.as_deref(), Some("LSP: reload?"));
+    assert_eq!(app.editor.status_text(), Some("Language server: reload?"));
     // showDocument for a non-file / missing target claims no success but still answers.
     app.handle_server_request(
         "rust".into(),

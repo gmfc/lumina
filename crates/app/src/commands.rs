@@ -72,6 +72,8 @@ pub fn command_for_id(id: &str) -> Option<Command> {
         "tab.reopenClosed" => Command::ReopenClosedTab,
         "file.openAnyway" => Command::OpenAnyway,
         "file.openAsText" => Command::OpenAsText,
+        "file.reloadFromDisk" => Command::ReloadFromDisk,
+        "file.keepMine" => Command::KeepMine,
         "tab.next" => Command::NextTab,
         "tab.prev" => Command::PrevTab,
         "tab.goto1" => Command::GotoTab(0),

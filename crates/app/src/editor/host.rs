@@ -120,6 +120,7 @@ impl Host for EditorState {
                 .map(|i| crate::picker::PickerItem {
                     id: i.id,
                     label: i.label,
+                    hint: i.hint,
                 })
                 .collect()
         };
@@ -193,7 +194,7 @@ impl Host for EditorState {
     fn active_path(&self) -> Option<std::path::PathBuf> {
         let id = self.workspace.active_doc()?;
         if let Some(view) = self.tab_views.get(&id) {
-            return Some(view.path().to_path_buf());
+            return view.path().map(|p| p.to_path_buf());
         }
         self.workspace.documents.get(id)?.path.clone()
     }
@@ -202,8 +203,10 @@ impl Host for EditorState {
         self.status_items.insert(item_id.to_string(), text);
     }
 
+    /// A plugin's notice is informational by construction — the port carries no severity, so
+    /// levelled messages stay app-side where the failure is actually known.
     fn notify(&mut self, message: String) {
-        self.status_message = Some(message);
+        self.notify_info(message);
     }
 
     fn toggle_theme(&mut self) {

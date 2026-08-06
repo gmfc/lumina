@@ -13,6 +13,14 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("tab.reopenClosed", "Tab: Reopen Closed Editor"),
         ("file.openAnyway", "File: Open Anyway (ignore size limit)"),
         ("file.openAsText", "File: Open as Text"),
+        (
+            "file.reloadFromDisk",
+            "File: Revert File (reload from disk)",
+        ),
+        (
+            "file.keepMine",
+            "File: Keep My Version (dismiss external change)",
+        ),
         ("tab.next", "Tab: Next"),
         ("tab.prev", "Tab: Previous"),
         ("edit.undo", "Edit: Undo"),
@@ -46,8 +54,12 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         // view.toggleTheme title comes from the `theme` plugin; terminal.* from the `terminal` plugin.
         // view.commandPalette / view.quickOpen / view.gotoLine titles come from the `palette` plugin.
         ("view.settings", "Preferences: Open Settings"),
+        ("view.notifications", "View: Show Notifications"),
+        ("view.dismissNotice", "View: Dismiss Status Message"),
         ("lsp.panel.toggle", "LSP: Toggle Servers Panel"),
         ("config.reload", "Preferences: Reload Configuration"),
+        ("help.keybindings", "Help: Keyboard Shortcuts"),
+        ("help.commands", "Help: Show All Commands"),
         // vim.toggle/enable/disable titles come from the `vim` plugin via the registry.
         ("app.quit", "Quit"),
     ]
@@ -86,6 +98,10 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         // `ctrl+shift+l` folds to `ctrl+l` (edit.selectLine) in this keymap, so the LSP panel uses
         // a `ctrl+k` multi-chord instead (also on the palette as "LSP: Toggle Servers Panel").
         ("ctrl+k ctrl+l", "lsp.panel.toggle"),
+        // VS Code's help chord is `ctrl+k ctrl+s` (taken here by Save As, which had to move off
+        // `ctrl+shift+s` — see the SPEC-NOTE above), so the reference sits one letter over.
+        ("ctrl+k ctrl+r", "help.keybindings"),
+        ("ctrl+k ctrl+n", "view.notifications"),
         // NOTE: `cursor.addNextMatch` (ctrl+d), `cursor.selectAllMatches` (ctrl+f2), and
         // `cursor.addAbove`/`addBelow` (ctrl+alt+up/down) are contributed by the `multicursor`
         // plugin; `git.nextHunk`/`git.prevHunk` (alt+j/alt+k) by `git-nav`. The keymap folds in

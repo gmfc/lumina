@@ -39,6 +39,65 @@ pub(crate) struct LspPanelUi {
     pub(crate) scroll: u16,
 }
 
+/// How loud a status notice is — and, with it, how long it lives.
+///
+/// The editor has one slot for telling the user anything, so that slot has to distinguish a
+/// confirmation from a failure: an `Info` is cleared by the next command or resolved keystroke,
+/// while a `Warn`/`Error` is held until it is superseded or explicitly dismissed. Without this a
+/// failed save reads exactly like a successful one to anyone who kept typing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NoticeLevel {
+    /// A routine confirmation ("Saved …"). Lives until the next keystroke.
+    Info,
+    /// Something the user should know about and may need to act on.
+    Warn,
+    /// Something the user asked for did not happen.
+    Error,
+}
+
+impl NoticeLevel {
+    /// Whether a notice at this level survives the next dispatch / resolved chord.
+    pub(crate) fn sticky(self) -> bool {
+        !matches!(self, NoticeLevel::Info)
+    }
+}
+
+/// One message for the status bar: what to say and how loud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Notice {
+    pub(crate) text: String,
+    pub(crate) level: NoticeLevel,
+}
+
+/// How many notices the scrollback (`view.notifications`) keeps. Bounded so a long session with a
+/// chatty language server can't grow the log without limit.
+pub(crate) const NOTICE_LOG_CAP: usize = 100;
+
+/// Which app-generated read-only text tab this is. These tabs are built from live state rather
+/// than a file, so they are keyed by kind (reopening focuses the existing tab, and it re-renders
+/// from state rather than showing a stale snapshot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextTabKind {
+    /// `help.keybindings` — the keymap reference, generated from the live keymap.
+    Keybindings,
+    /// `view.notifications` — the notice scrollback.
+    Notifications,
+}
+
+/// An app-generated, read-only text tab (the keybinding reference, the notice log).
+///
+/// It rides the same machinery as a plugin viewer — an empty placeholder buffer plus published
+/// rows — so scrolling, tab management, and every "don't write this to disk" guard apply to it
+/// for free. Unlike a viewer it has no file behind it, so its buffer carries no path.
+#[derive(Debug, Clone)]
+pub(crate) struct TextTab {
+    pub(crate) kind: TextTabKind,
+    pub(crate) title: String,
+    pub(crate) content: editor_plugin::ViewerContent,
+    /// First visible body row (the app owns scrolling, exactly as for a viewer).
+    pub(crate) scroll: usize,
+}
+
 /// A tab that renders something other than the (empty, placeholder) buffer backing it.
 ///
 /// This generalizes the pattern the Settings tab already uses: keep the tab in the normal
@@ -59,14 +118,45 @@ pub(crate) enum TabView {
     },
     /// A plugin-owned viewer rendering a file lumina itself can't display.
     Viewer(ViewerTab),
+    /// An app-generated read-only text tab (help, notifications) — no file behind it.
+    Text(TextTab),
 }
 
 impl TabView {
-    /// The file this tab is about.
-    pub(crate) fn path(&self) -> &std::path::Path {
+    /// The file this tab is about, when there is one. `None` for the app-generated text tabs,
+    /// which are built from live state rather than bytes on disk.
+    pub(crate) fn path(&self) -> Option<&std::path::Path> {
         match self {
-            TabView::Notice { path, .. } => path,
-            TabView::Viewer(v) => &v.path,
+            TabView::Notice { path, .. } => Some(path),
+            TabView::Viewer(v) => Some(&v.path),
+            TabView::Text(_) => None,
+        }
+    }
+
+    /// The tab-bar name for this view. Only the app-generated tabs override it; notice and viewer
+    /// tabs are named by their file, like every other tab.
+    pub(crate) fn tab_title(&self) -> Option<&str> {
+        match self {
+            TabView::Text(t) => Some(&t.title),
+            _ => None,
+        }
+    }
+
+    /// The scrollable body, when this view has one.
+    pub(crate) fn body(&self) -> Option<&editor_plugin::ViewerContent> {
+        match self {
+            TabView::Viewer(v) => Some(&v.content),
+            TabView::Text(t) => Some(&t.content),
+            TabView::Notice { .. } => None,
+        }
+    }
+
+    /// The view's scroll offset, for the views that scroll.
+    pub(crate) fn scroll_mut(&mut self) -> Option<&mut usize> {
+        match self {
+            TabView::Viewer(v) => Some(&mut v.scroll),
+            TabView::Text(t) => Some(&mut t.scroll),
+            TabView::Notice { .. } => None,
         }
     }
 }
@@ -102,10 +192,22 @@ pub(crate) struct ContextMenuItem {
 pub(crate) enum Overlay {
     /// Closing a dirty tab: save / discard / cancel.
     ConfirmClose { tab: usize },
+    /// Quitting with unsaved buffers: save all / discard / cancel. `dirty` lists the tab indices
+    /// with unsaved changes so the box can name the files at risk.
+    ConfirmQuit { dirty: Vec<usize> },
+    /// Discarding the active buffer for the on-disk copy (`file.reloadFromDisk`). The reload
+    /// replaces the text and drops undo history, so it is never done silently on a dirty buffer.
+    ConfirmReload,
     /// A dismissable information popup (e.g. LSP hover).
     Info(String),
-    /// Save As prompt: type a path for the active document (plan §1.5).
-    SaveAsInput { buffer: String },
+    /// Save As prompt: type a path for the active document (plan §1.5). `error` reports a bad
+    /// path in place (a missing parent directory) instead of failing after the fact, and
+    /// `overwrite` holds the resolved path while the box asks before clobbering an existing file.
+    SaveAsInput {
+        buffer: String,
+        error: Option<String>,
+        overwrite: Option<PathBuf>,
+    },
     /// The right-click context menu, anchored at screen `(x, y)`; `selected` is the highlighted row.
     ContextMenu {
         x: u16,
@@ -124,7 +226,12 @@ pub(crate) struct EditorState {
     /// `view.wrap` so `editor-core` motions/mapping can read it per document.
     pub(crate) wrap_enabled: bool,
     pub(crate) focus: Focus,
-    pub(crate) status_message: Option<String>,
+    /// The one status-bar message slot. Typed so severity survives the trip to the renderer, and
+    /// so a `Warn`/`Error` isn't wiped by the next keystroke like a save confirmation is.
+    pub(crate) status_message: Option<Notice>,
+    /// Scrollback of the most recent notices (newest last), surfaced by `view.notifications`.
+    /// Nothing the editor says is unrecoverable once it has scrolled out of the status bar.
+    pub(crate) notice_log: Vec<Notice>,
     /// Rendered panel content, keyed by panel id (set by plugins).
     pub(crate) panels: HashMap<String, PanelContent>,
     /// Status-bar item text, keyed by item id.
@@ -230,6 +337,7 @@ impl EditorState {
             wrap_enabled: false,
             focus: Focus::Editor,
             status_message: None,
+            notice_log: Vec::new(),
             panels: HashMap::new(),
             status_items: HashMap::new(),
             pending_events: Vec::new(),
@@ -264,6 +372,116 @@ impl EditorState {
             tab_views: HashMap::new(),
             pending_viewers: Vec::new(),
         }
+    }
+
+    /// Say something routine — a confirmation. Cleared by the next command or keystroke.
+    pub(crate) fn notify_info(&mut self, text: impl Into<String>) {
+        self.push_notice(NoticeLevel::Info, text);
+    }
+
+    /// Say something the user should notice and may need to act on. Held until superseded or
+    /// dismissed, so it can't be missed by continuing to type.
+    pub(crate) fn notify_warn(&mut self, text: impl Into<String>) {
+        self.push_notice(NoticeLevel::Warn, text);
+    }
+
+    /// Report that something the user asked for did not happen. Held like a warning.
+    pub(crate) fn notify_error(&mut self, text: impl Into<String>) {
+        self.push_notice(NoticeLevel::Error, text);
+    }
+
+    /// Publish a notice into the status slot and append it to the scrollback. A repeat of the
+    /// newest entry is not logged twice — a watcher storm or a held key would otherwise fill the
+    /// log with one message.
+    fn push_notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
+        let notice = Notice {
+            text: text.into(),
+            level,
+        };
+        if self.notice_log.last() != Some(&notice) {
+            if self.notice_log.len() >= NOTICE_LOG_CAP {
+                self.notice_log.remove(0);
+            }
+            self.notice_log.push(notice.clone());
+        }
+        self.status_message = Some(notice);
+    }
+
+    /// The current status text, whatever its level.
+    pub(crate) fn status_text(&self) -> Option<&str> {
+        self.status_message.as_ref().map(|n| n.text.as_str())
+    }
+
+    /// How loud the current status message is, for the renderer to colour the bar by.
+    pub(crate) fn status_level(&self) -> Option<NoticeLevel> {
+        self.status_message.as_ref().map(|n| n.level)
+    }
+
+    /// Clear the status slot *if* the message was transient. This runs at the top of every
+    /// dispatch and on every resolved chord: an `Info` has served its purpose by then, while a
+    /// `Warn`/`Error` has not been read yet just because a key was pressed.
+    pub(crate) fn clear_transient_status(&mut self) {
+        if !self
+            .status_message
+            .as_ref()
+            .is_some_and(|n| n.level.sticky())
+        {
+            self.status_message = None;
+        }
+    }
+
+    /// Drop the status message regardless of level (the explicit dismiss).
+    pub(crate) fn dismiss_status(&mut self) {
+        self.status_message = None;
+    }
+
+    /// True when a held (non-transient) notice is on screen — what `Esc` dismisses.
+    pub(crate) fn has_sticky_status(&self) -> bool {
+        self.status_message
+            .as_ref()
+            .is_some_and(|n| n.level.sticky())
+    }
+
+    /// Open (or re-focus) an app-generated read-only text tab of `kind`, filling it with
+    /// `content`. Keyed by kind rather than by path, since these tabs have no file: asking for
+    /// the keybinding reference twice re-renders the one tab instead of stacking duplicates.
+    pub(crate) fn open_text_view_tab(
+        &mut self,
+        kind: TextTabKind,
+        title: &str,
+        content: editor_plugin::ViewerContent,
+    ) {
+        let existing = self.tab_views.iter().find_map(|(&id, view)| {
+            matches!(view, TabView::Text(t) if t.kind == kind).then_some(id)
+        });
+        let id = match existing {
+            Some(id) => {
+                self.workspace.focus_doc(id);
+                id
+            }
+            None => {
+                let mut doc = Document::from_str("");
+                // No path: this tab is generated from live state, so it must never be mistaken
+                // for a file — not by `find_by_path`, not by the session writer, not by a save.
+                doc.path = None;
+                doc.language = None;
+                self.workspace.open_document(doc)
+            }
+        };
+        let scroll = match self.tab_views.get(&id) {
+            Some(TabView::Text(t)) => t.scroll,
+            _ => 0,
+        };
+        self.tab_views.insert(
+            id,
+            TabView::Text(TextTab {
+                kind,
+                title: title.to_string(),
+                content,
+                scroll,
+            }),
+        );
+        self.focus = Focus::Editor;
     }
 
     /// True when `id` backs a non-text tab (a refusal notice or a plugin viewer). Every path

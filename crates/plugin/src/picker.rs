@@ -13,6 +13,11 @@
 pub struct CommandInfo {
     pub id: String,
     pub title: String,
+    /// The chord currently bound to this command (`"Ctrl+K Ctrl+S"`), resolved from the *live*
+    /// keymap by the host — so it reflects plugin contributions and user `[keys]` overrides, and
+    /// is `None` for a command with no chord. The palette shows it, which is how a user learns a
+    /// shortcut for something they just ran by name.
+    pub keys: Option<String>,
 }
 
 impl CommandInfo {
@@ -20,7 +25,14 @@ impl CommandInfo {
         CommandInfo {
             id: id.into(),
             title: title.into(),
+            keys: None,
         }
+    }
+
+    /// Attach the command's current chord.
+    pub fn keys(mut self, keys: Option<String>) -> Self {
+        self.keys = keys;
+        self
     }
 }
 
@@ -29,6 +41,9 @@ impl CommandInfo {
 pub struct PickerItem {
     pub id: String,
     pub label: String,
+    /// Trailing, right-aligned annotation for the row — a keybinding on a command row. Not part
+    /// of the fuzzy-match text, so typing a chord doesn't filter by it.
+    pub hint: Option<String>,
 }
 
 impl PickerItem {
@@ -36,7 +51,14 @@ impl PickerItem {
         PickerItem {
             id: id.into(),
             label: label.into(),
+            hint: None,
         }
+    }
+
+    /// Annotate the row (e.g. with its keybinding).
+    pub fn hint(mut self, hint: Option<String>) -> Self {
+        self.hint = hint;
+        self
     }
 }
 

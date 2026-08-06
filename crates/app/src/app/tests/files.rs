@@ -62,9 +62,10 @@ fn save_active_on_untitled_reports_no_path() {
     app.dispatch(Command::NewFile); // untitled, no path
     app.dispatch(Command::InsertText("scratch".into()));
     app.save_active();
-    assert_eq!(
-        app.editor.status_message.as_deref(),
-        Some("No path — use Save As")
+    let msg = app.editor.status_text().unwrap_or_default().to_string();
+    assert!(
+        msg.contains("no file yet") && msg.contains("Ctrl+K Ctrl+S"),
+        "it should name the way out, by live chord: {msg:?}"
     );
     std::fs::remove_file(&path).ok();
 }

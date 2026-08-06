@@ -11,7 +11,7 @@ impl App {
         let (config, config_error) = crate::config::Config::load();
         // Surface a malformed config instead of silently booting on defaults (§5).
         if let Some(e) = &config_error {
-            editor.status_message = Some(config_parse_status(e));
+            editor.notify_error(config_parse_status(e));
         }
 
         // Built-in plugins + any external (script) plugins from the plugins dirs. Both
@@ -28,9 +28,12 @@ impl App {
         if config.vim {
             registry.dispatch_command("vim.enable", &mut editor);
         }
+        // The keymap has to exist before the catalog: each command carries its live chord so the
+        // palette can show it (and so a remap shows through on reload).
+        let keymap = build_keymap(&config, &registry);
         // Mirror the command set onto EditorState so a palette plugin can enumerate it through
         // `Host::commands` (the registry is unreachable behind the split-borrow wall).
-        editor.command_catalog = command_catalog(&registry);
+        editor.command_catalog = command_catalog(&registry, &keymap);
 
         // Startup opens go through the same size/binary/viewer policy as every later open, so
         // `lmn big.pdf` explains itself instead of stalling — and so a PDF left in a saved
@@ -38,7 +41,7 @@ impl App {
         let limits = config.file_limits();
         if let Some(file) = open_file {
             if let Err(e) = open_at_startup(&mut editor, &mut registry, &file, &limits, 0, 0) {
-                editor.status_message = Some(format!("Could not open {}: {e}", file.display()));
+                editor.notify_error(format!("Could not open {}: {e}", file.display()));
             }
         } else if let Some(session) = crate::session::load(&editor.workspace.root) {
             // Restore the previous session for this project root (plan §6).
@@ -90,7 +93,6 @@ impl App {
         // Mirror LSP availability onto EditorState so the `lsp` plugin can no-op through
         // `Host::lsp_enabled` when the layer is off.
         editor.lsp_enabled = lsp.is_enabled();
-        let keymap = build_keymap(&config, &registry);
 
         // Background worker channel + directory watcher on the project root (plan §6). Also
         // watch the config dir (non-recursively) so edits to config.toml hot-reload.
@@ -109,8 +111,7 @@ impl App {
             worker_tx.clone(),
         );
         if watcher.is_none() {
-            editor.status_message =
-                Some("File watching unavailable (edits won't auto-reload)".into());
+            editor.notify_warn("File watching unavailable (edits won't auto-reload)");
         }
 
         Ok(App {
@@ -156,6 +157,8 @@ impl App {
         self.editor.terminal_shell =
             crate::terminal::default_shell(self.config.terminal_shell.as_deref());
         self.keymap = build_keymap(&self.config, &self.registry);
+        // The palette shows each command's chord, so the catalog has to follow the keymap.
+        self.editor.command_catalog = command_catalog(&self.registry, &self.keymap);
         // Reconcile the `vim` plugin with the reloaded config (enable is idempotent when on).
         let vim_cmd = if self.config.vim {
             "vim.enable"
@@ -165,10 +168,10 @@ impl App {
         self.registry.dispatch_command(vim_cmd, &mut self.editor);
         // Report the parse failure rather than a misleading "reloaded" when the file is
         // malformed (§5) — a typo reverts to defaults, so say so instead of lying.
-        self.editor.status_message = Some(match config_error {
-            Some(e) => config_parse_status(&e),
-            None => "Configuration reloaded".into(),
-        });
+        match config_error {
+            Some(e) => self.editor.notify_error(config_parse_status(&e)),
+            None => self.editor.notify_info("Configuration reloaded"),
+        }
     }
 
     /// Persist the open files + cursor/scroll for this project root (plan §6).
@@ -302,10 +305,10 @@ impl App {
             }
         }
         self.last_caret = None;
-        self.editor.status_message = Some(if on {
-            "Word wrap: on".into()
+        self.editor.notify_info(if on {
+            "Word wrap: on"
         } else {
-            "Word wrap: off".into()
+            "Word wrap: off"
         });
     }
 
