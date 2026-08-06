@@ -27,6 +27,8 @@ mod sidebar;
 mod tabview;
 mod util;
 
+#[cfg(test)]
+pub(crate) use chrome::fit_left;
 pub(crate) use settings::settings_entry_at;
 pub(crate) use tabview::viewer_body_rows;
 

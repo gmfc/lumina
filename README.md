@@ -102,8 +102,8 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 
 You never have to keep this list: **`Ctrl+K Ctrl+R`** opens the same table generated from the
 keymap actually in use, so it includes plugin chords and your own `[keys]` overrides. The command
-palette shows each command's chord next to it, and an armed prefix like `Ctrl+K` lists what may
-follow it in the status bar.
+palette shows each command's chord next to it and floats what you actually reach for to the top,
+and an armed prefix like `Ctrl+K` lists what may follow it in the status bar.
 
 ## Integrated terminal
 
@@ -214,7 +214,13 @@ enable/disable takes effect on the next launch.
 ## Configuration
 
 Everything the Settings tab writes can also be edited by hand in
-`~/.config/lumina/config.toml`:
+`~/.config/lumina/config.toml`. A project can override any of it from
+**`<project>/.lumina/config.toml`**, alongside the `.lumina/plugins` folder — so a per-project
+`tab_width`, keybinding, or language server has somewhere to live. The project file is layered
+over the global one: `[settings]` keys and `[lsp]` entries win per key, `[keys]` entries are
+applied last (so they win), and `[plugins]` can switch a plugin off but never force one on. Both
+files hot-reload. The Settings tab writes the *global* file and says so when a project override
+would beat the change you just made.
 
 ```toml
 [settings]

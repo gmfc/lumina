@@ -193,8 +193,9 @@ impl App {
         // file watcher (§8.1) — independent of whether it's an open document or the config file.
         self.lsp.notify_watched_file_change(path);
 
-        // A change to the user config file → hot-reload keymap/settings (plan §6).
-        if self.config_path.as_deref() == Some(path) {
+        // A change to either config file — global or project-local — hot-reloads keymap/settings
+        // (plan §6). The project one sits inside the watched tree, so it arrives here too.
+        if self.config_path.as_deref() == Some(path) || self.project_config_path == path {
             self.reload_config();
             return;
         }

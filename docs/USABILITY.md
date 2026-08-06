@@ -18,9 +18,8 @@ rated by what they cost the user, not by implementation effort.
 
 ## Status — what has been fixed
 
-Every **critical** and **major** finding below has been addressed, along with most of the minor
-ones. The findings are kept verbatim as the record of *why* each change was made; the resolution
-notes say what was actually built and where it lives.
+**Every finding below has been addressed.** The findings are kept verbatim as the record of
+*why* each change was made; the resolution notes say what was actually built and where it lives.
 
 | Finding | Severity | Status |
 |---|---|---|
@@ -38,20 +37,21 @@ notes say what was actually built and where it lives.
 | U13 · palette shows no keybindings | MAJOR | ✅ `CommandInfo::keys` → `PickerItem::hint`, right-aligned in the row |
 | U14 · picker has no empty state | MINOR | ✅ `No matching commands` / `No matching files` |
 | U15 · chord prefixes hide continuations | MINOR | ✅ which-key list on an armed prefix |
-| U16 · no recency/frequency ordering | MINOR | ⬜ not done |
-| U17 · no project-local configuration | MINOR | ⬜ not done |
-| U18 · status bar's left slot has four meanings | MINOR | 🟡 partly — levels are now colour-coded, but diagnostics still share the slot |
+| U16 · no recency/frequency ordering | MINOR | ✅ bounded recency bonus over the fuzzy score |
+| U17 · no project-local configuration | MINOR | ✅ `<root>/.lumina/config.toml` layered over the global one |
+| U18 · status bar's left slot has four meanings | MINOR | ✅ the diagnostic holds its own segment; levels are colour-coded |
 | U19 · errors offer no way out | MAJOR | ✅ every error names its recovery, by live chord |
 | U20 · raw `io::Error` text | MINOR | ✅ `ErrorKind` → plain sentences, always naming the file |
 | U21 · no in-app help | MAJOR | ✅ `help.keybindings` (generated from the live keymap) + `help.commands` |
 
-The work landed in: `editor.rs` (the notice type, the notice log, the `Text` tab view),
-`app/help.rs` (the reference tabs — new), `app/file_ops.rs` (the quit guard, the conflict exits,
-the Save As checks, the error humanizer), `app/overlay.rs` (the new confirmations),
-`ui/chrome.rs` (levelled colouring, the `LARGE`/`CONFLICT` segments, message truncation),
-`ui/pickers.rs` (hints + the empty state), and `app/tests/usability.rs` (new tests, one per
-finding). Regressions in behaviour the findings called out as *already strong* are covered by the
-existing suite, which still passes.
+The work landed in: `editor.rs` (the notice type, the notice log, the `Text` tab view, the
+picker MRU), `app/help.rs` (the reference tabs — new), `app/file_ops.rs` (the quit guard, the
+conflict exits, the Save As checks, the error humanizer), `app/overlay.rs` (the new
+confirmations), `ui/chrome.rs` (levelled colouring, the `LARGE`/`CONFLICT` segments, the
+diagnostic segment, message truncation), `ui/pickers.rs` (hints + the empty state), `picker.rs`
+(recency ranking), `config.rs` (the project-local tier), and `app/tests/usability.rs` (new tests,
+one per finding). Regressions in behaviour the findings called out as *already strong* are covered
+by the existing suite, which still passes.
 
 ---
 
@@ -98,8 +98,8 @@ no `help.*` entry at all.
 | **4** | Consistency and standards | 🟡 MINOR DRIFT | ✅ | VS Code conventions followed closely and deviations are *documented in code*; but three overlays use three different dismissal idioms, and one dismisses on **any** key. *Fixed: `Esc` dismisses everywhere and the hover no longer swallows the key; the deviations head the in-app reference.* |
 | **5** | Error prevention | 🔴 **CRITICAL** | ✅ | Excellent guards where they exist (viewer-tab save guard, reload re-probe, non-overridable binary refusals). Two unguarded destructive paths: quit-with-unsaved, and Save As silently overwriting an existing file. *Fixed: both are confirmed, and Save As vets the path before assigning it.* |
 | **6** | Recognition rather than recall | 🟠 **MAJOR GAP** | ✅ | Palette shows no keybindings despite the API existing and being used elsewhere; no empty state; multi-chord prefixes show `Ctrl+K …` without the continuations. *Fixed: all three.* |
-| **7** | Flexibility and efficiency of use | ✅ HEALTHY | ✅ | Vim mode, full remapping, palette + quick-open, multi-cursor, session restore, two plugin substrates. Minor: no frecency ordering, no project-local config — both still open (U16, U17). |
-| **8** | Aesthetic and minimalist design | ✅ HEALTHY | ✅ | Genuinely good: responsive welcome screen, width-aware truncation, status bar earns its density. One overload (see U18) — the message slot is now colour-coded by level, but diagnostics still share it. |
+| **7** | Flexibility and efficiency of use | ✅ HEALTHY | ✅ | Vim mode, full remapping, palette + quick-open, multi-cursor, session restore, two plugin substrates. *The two gaps named — frecency ordering and project-local config — are now closed (U16, U17).* |
+| **8** | Aesthetic and minimalist design | ✅ HEALTHY | ✅ | Genuinely good: responsive welcome screen, width-aware truncation, status bar earns its density. *The one overload (U18) is resolved: the diagnostic holds its own segment and the message slot is colour-coded by level.* |
 | **9** | Recognize, diagnose, recover from errors | 🟠 **MAJOR GAP** | ✅ | The notice tab is a model of this heuristic. Everywhere else, errors state the problem and offer no way out — `"Save failed: {e}"` is the whole interaction. *Fixed: `io::Error` kinds became sentences, and each error names its recovery by live chord.* |
 | **10** | Help and documentation | 🟠 **MAJOR GAP** | ✅ | No in-app help, no keybinding reference, no `help.*` command. The welcome screen's 13 hints are the only in-app documentation, and they disappear the moment a file is open. *Fixed: `help.keybindings` generates the reference from the live keymap.* |
 
@@ -426,11 +426,12 @@ keymap.
 | 9 | U15 | Which-key completions for armed multi-chord prefixes. |
 | 10 | U14 / U8 | Picker empty state; standardise overlay dismissal on `Esc`. |
 
-**P3 — polish.** Delivered: U4 (vocabulary), U7 (undo-reset notice), U12 (Save As path preview),
-U9 (the keymap deviations are documented in the in-app reference). Still open: U16 (MRU
-ordering), U17 (project-local config), and the second half of U18 — diagnostics still time-share
-the message slot rather than holding a segment of their own, though the slot is now colour-coded
-by level, so a save confirmation and a diagnostic no longer look alike.
+**P3 — polish. All delivered.** U4 (vocabulary), U7 (undo-reset notice), U12 (Save As path
+preview), U9 (the keymap deviations head the in-app reference), U16 (a bounded recency bonus over
+the fuzzy score, so habit breaks ties without outranking what was typed), U17
+(`<root>/.lumina/config.toml` layered over the global file, matching the plugin loader's
+precedent), and U18 (the caret diagnostic holds its own segment beside the message rather than
+replacing it — the two share the bar's width by a stated rule instead of one silently winning).
 
 ---
 

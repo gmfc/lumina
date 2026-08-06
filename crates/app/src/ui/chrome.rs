@@ -278,18 +278,19 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
     if let Some(text) = app.editor.status_text() {
         left = format!(" {text}");
         bar = level_style(app.editor.status_level(), bar);
-    } else if let Some(item) = app
+    }
+
+    // The caret diagnostic, published by the `diagnostics` plugin (glyph + message), gets its own
+    // segment rather than time-sharing the message slot. It used to *replace* whatever was there,
+    // so moving the caret onto a diagnostic silently ate a save confirmation and a save
+    // confirmation hid the diagnostic being read — both correct rules, with no way to tell which
+    // had fired. Now both are on screen, separated, and it is obvious which is which.
+    let diagnostic = app
         .editor
         .status_items
         .get("lsp.diag")
         .filter(|s| !s.is_empty())
-    {
-        // The caret diagnostic, published by the `diagnostics` plugin (glyph + message), single-
-        // lined and truncated to fit (plan §2.2).
-        let avail = (area.width as usize).saturating_sub(display_len(&right) + 4);
-        let msg: String = item.replace('\n', " ").chars().take(avail).collect();
-        left = format!(" {msg}");
-    }
+        .map(|item| item.replace('\n', " "));
 
     // Vim mode badge (and any pending count/operator) at the far left, from the plugin's mirror.
     if let Some(vim) = &app.editor.vim_view {
@@ -325,19 +326,23 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
     }
 
     // The left slot is free-form text; the right cluster is fixed-width state the user navigates
-    // by. A long message must not push the position, encoding, or CONFLICT/LARGE segments off the
-    // end of the bar, so the message yields instead.
-    let avail = (area.width as usize).saturating_sub(display_len(&right));
-    if display_len(&left) > avail {
-        left = truncate_display(&left, avail);
-    }
+    // by. Neither the message nor the diagnostic may push the position, encoding, or
+    // CONFLICT/LARGE segments off the end of the bar, so they yield instead — the message first,
+    // since the diagnostic is anchored to where the caret actually is.
+    let budget = (area.width as usize).saturating_sub(display_len(&right));
+    let diag;
+    (left, diag) = fit_left(left, diagnostic.map(|d| format!("  │ {d}")), budget);
 
     let bg = bar;
-    let pad = (area.width as usize).saturating_sub(display_len(&left) + display_len(&right));
-    // The right cluster is right-justified: it starts where `left + pad` ends.
+    let used = display_len(&left) + display_len(&diag) + display_len(&right);
+    let pad = (area.width as usize).saturating_sub(used);
+    // The right cluster is right-justified: it starts where `left + diag + pad` ends.
     let right_start = area.x + area.width.saturating_sub(display_len(&right) as u16);
     let line = Line::from(vec![
         TSpan::styled(left, bg),
+        // Dimmed against the bar so the diagnostic reads as a distinct segment, not a continuation
+        // of the message next to it.
+        TSpan::styled(diag, bg.add_modifier(Modifier::DIM)),
         TSpan::styled(" ".repeat(pad), bg),
         TSpan::styled(right, bg),
     ]);
@@ -349,6 +354,40 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
         let x = right_start.saturating_add(progress_prefix as u16);
         Rect::new(x, area.y, display_len(&lsp_seg) as u16, 1)
     })
+}
+
+/// Share `budget` display columns between the message slot and the diagnostic segment.
+///
+/// Both fit → both unchanged. They don't → the message is capped at [`MESSAGE_SHARE`] of the
+/// budget and the diagnostic takes the rest, so a long message can't squeeze the diagnostic out
+/// entirely and a long diagnostic can't hide a save failure. Whichever is naturally shorter than
+/// its share keeps its full width; only the one that overflows is cut.
+pub(crate) fn fit_left(left: String, diag: Option<String>, budget: usize) -> (String, String) {
+    /// Columns the message may claim when both segments are competing, as a fraction of the
+    /// budget. Anything left over still goes to the message.
+    const MESSAGE_SHARE: (usize, usize) = (3, 5);
+
+    let Some(diag) = diag else {
+        return (fit(left, budget), String::new());
+    };
+    if display_len(&left) + display_len(&diag) <= budget {
+        return (left, diag);
+    }
+    let share = budget * MESSAGE_SHARE.0 / MESSAGE_SHARE.1;
+    // Give the message its share, plus whatever the diagnostic doesn't need.
+    let for_left = share.max(budget.saturating_sub(display_len(&diag)));
+    let left = fit(left, for_left);
+    let diag = fit(diag, budget.saturating_sub(display_len(&left)));
+    (left, diag)
+}
+
+/// `s` truncated to `width` columns, unchanged when it already fits.
+fn fit(s: String, width: usize) -> String {
+    if display_len(&s) > width {
+        truncate_display(&s, width)
+    } else {
+        s
+    }
 }
 
 /// Cut `s` down to at most `width` display columns, ending in an ellipsis when anything was

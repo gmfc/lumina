@@ -64,6 +64,9 @@ pub struct App {
     _watcher: Option<Box<dyn std::any::Any>>,
     /// The user config file path, watched for hot-reload (plan §6).
     config_path: Option<PathBuf>,
+    /// The project-local `<root>/.lumina/config.toml`. Already inside the watched project tree,
+    /// so it hot-reloads through the same path; this is what the watcher compares against.
+    project_config_path: PathBuf,
     /// Content hashes of our own pending saves, to suppress save-echo (plan §6).
     pending_self_writes: std::collections::HashMap<PathBuf, u64>,
     /// Auto-scroll to the first externally-changed line on reload (follow mode).
