@@ -73,6 +73,10 @@ pub(crate) struct Notice {
 /// chatty language server can't grow the log without limit.
 pub(crate) const NOTICE_LOG_CAP: usize = 100;
 
+/// How many recently-activated picker ids are remembered for recency ranking. Small on purpose:
+/// past this the bonus has decayed to nothing anyway.
+pub(crate) const PICKER_MRU_CAP: usize = 16;
+
 /// Which app-generated read-only text tab this is. These tabs are built from live state rather
 /// than a file, so they are keyed by kind (reopening focuses the existing tab, and it re-renders
 /// from state rather than showing a stale snapshot).
@@ -239,6 +243,10 @@ pub(crate) struct EditorState {
     /// Monotonic count of notices ever published. An open notification tab stamps itself with
     /// this so it can detect new messages without diffing the log.
     pub(crate) notice_seq: u64,
+    /// Ids activated from a picker, newest first and bounded by [`PICKER_MRU_CAP`]. Seeds each
+    /// new picker's recency bonus, so the rows a user actually reaches for rise to the top of an
+    /// unfiltered list. Session-scoped: it is a ranking hint, not state worth persisting.
+    pub(crate) picker_mru: Vec<String>,
     /// Rendered panel content, keyed by panel id (set by plugins).
     pub(crate) panels: HashMap<String, PanelContent>,
     /// Status-bar item text, keyed by item id.
@@ -346,6 +354,7 @@ impl EditorState {
             status_message: None,
             notice_log: Vec::new(),
             notice_seq: 0,
+            picker_mru: Vec::new(),
             panels: HashMap::new(),
             status_items: HashMap::new(),
             pending_events: Vec::new(),
@@ -442,6 +451,14 @@ impl EditorState {
     /// Drop the status message regardless of level (the explicit dismiss).
     pub(crate) fn dismiss_status(&mut self) {
         self.status_message = None;
+    }
+
+    /// Record that `id` was activated from a picker: move it to the front of the recency list.
+    /// Re-activating something already remembered promotes it rather than duplicating it.
+    pub(crate) fn remember_picked(&mut self, id: &str) {
+        self.picker_mru.retain(|r| r != id);
+        self.picker_mru.insert(0, id.to_string());
+        self.picker_mru.truncate(PICKER_MRU_CAP);
     }
 
     /// True when a held (non-transient) notice is on screen — what `Esc` dismisses.

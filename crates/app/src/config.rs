@@ -1,8 +1,13 @@
-//! User configuration: `<config>/lumina/config.toml` (plan §6). Carries keybinding
-//! overrides and a few settings. Hot-reloadable — the app rebuilds its keymap when the
-//! file changes (watcher wired in Phase 8; a `config.reload` command reloads on demand).
+//! User configuration: `<config>/lumina/config.toml` (plan §6), layered under an optional
+//! project-local `<root>/.lumina/config.toml`. Carries keybinding overrides and a few settings.
+//! Hot-reloadable — the app rebuilds its keymap when either file changes (watcher wired in
+//! Phase 8; a `config.reload` command reloads on demand).
+//!
+//! The project-local tier matches the precedent the plugin loader already sets (it scans
+//! `<root>/.lumina/plugins`), and answers the thing a single global file can't: a per-project
+//! `tab_width` or LSP mapping had nowhere to live.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Parsed configuration with sensible defaults.
 pub struct Config {
@@ -47,6 +52,10 @@ pub struct Config {
     /// Plugin ids the user has disabled (`[plugins] "<id>" = false`). Applied when
     /// plugins load, so the change takes effect on the next launch / config reload.
     pub disabled_plugins: Vec<String>,
+    /// `[settings]` keys the *project-local* file set, so the Settings tab can say when a change
+    /// it just wrote to the global file is being overridden here. Without it, editing such a
+    /// setting in the UI would appear to do nothing, with nothing on screen explaining why.
+    pub project_overrides: Vec<String>,
 }
 
 impl Default for Config {
@@ -71,6 +80,7 @@ impl Default for Config {
             terminal_height: 12,
             lsp_servers: std::collections::HashMap::new(),
             disabled_plugins: Vec::new(),
+            project_overrides: Vec::new(),
         }
     }
 }
@@ -81,44 +91,91 @@ impl Config {
         directories::ProjectDirs::from("", "", "lumina").map(|d| d.config_dir().join("config.toml"))
     }
 
-    /// Load from the user config file. Returns the parsed config plus, when the file existed
-    /// but failed to parse, the parse error so the caller can surface it (§5 — never swallow
-    /// errors silently). A malformed file falls back to defaults, but the error is handed back
-    /// rather than dropped: otherwise one typo would silently revert every setting. An
-    /// absent/unreadable file is not an error — defaults with `None`.
-    pub fn load() -> (Config, Option<String>) {
-        match Config::path().and_then(|p| std::fs::read_to_string(p).ok()) {
-            Some(src) => match Config::from_toml_str(&src) {
-                Ok(cfg) => (cfg, None),
-                Err(e) => (Config::default(), Some(e)),
-            },
-            None => (Config::default(), None),
-        }
+    /// The project-local config file for `root`, alongside the `.lumina/plugins` directory the
+    /// plugin loader already scans. Not required to exist.
+    pub fn project_path(root: &Path) -> PathBuf {
+        root.join(".lumina").join("config.toml")
     }
 
-    /// Parse a config from a TOML string.
-    pub fn from_toml_str(src: &str) -> Result<Config, String> {
-        let value: toml::Value = src.parse().map_err(|e| format!("{e}"))?;
+    /// Load the global config, then layer the project-local one over it.
+    ///
+    /// Returns the merged config plus, when a file existed but failed to parse, an error naming
+    /// *which* file (§5 — never swallow errors silently). A malformed file falls back to what was
+    /// loaded before it rather than to defaults, so a typo in the project file can't silently
+    /// revert the global settings too. An absent/unreadable file is not an error.
+    pub fn load_for(root: &Path) -> (Config, Option<String>) {
         let mut cfg = Config::default();
+        let mut error = None;
+
+        for (path, is_project) in [
+            (Config::path(), false),
+            (Some(Config::project_path(root)), true),
+        ] {
+            let Some(src) = path
+                .as_deref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+            else {
+                continue;
+            };
+            // A layer that fails to parse is skipped, not fatal: the tiers under it still apply.
+            if let Err(e) = cfg.apply_toml_str(&src, is_project) {
+                let name = if is_project {
+                    "project config"
+                } else {
+                    "config"
+                };
+                error = Some(format!("{name}: {e}"));
+            }
+        }
+        (cfg, error)
+    }
+
+    /// Parse a config from a single, unlayered TOML tier.
+    #[cfg(test)]
+    pub fn from_toml_str(src: &str) -> Result<Config, String> {
+        let mut cfg = Config::default();
+        cfg.apply_toml_str(src, false)?;
+        Ok(cfg)
+    }
+
+    /// Merge one TOML tier onto this config. Later tiers win: `[settings]` keys overwrite,
+    /// `[keys]` entries append (the keymap is last-writer-wins, so appending gives the project
+    /// file precedence), `[lsp]` entries overwrite per language, and `[plugins]` entries can only
+    /// add to the disabled set — a project may switch a plugin off, never force one on.
+    fn apply_toml_str(&mut self, src: &str, is_project: bool) -> Result<(), String> {
+        let value: toml::Value = src.parse().map_err(|e| format!("{e}"))?;
 
         if let Some(settings) = value.get("settings").and_then(|v| v.as_table()) {
-            cfg.apply_settings(settings);
+            if is_project {
+                for key in settings.keys() {
+                    if !self.project_overrides.contains(key) {
+                        self.project_overrides.push(key.clone());
+                    }
+                }
+            }
+            self.apply_settings(settings);
         }
         if let Some(keys) = value.get("keys").and_then(|v| v.as_table()) {
-            cfg.apply_keys(keys);
+            self.apply_keys(keys);
         }
         if let Some(lsp) = value.get("lsp").and_then(|v| v.as_table()) {
-            cfg.apply_lsp(lsp);
+            self.apply_lsp(lsp);
         }
         if let Some(plugins) = value.get("plugins").and_then(|v| v.as_table()) {
             for (id, enabled) in plugins {
-                if enabled.as_bool() == Some(false) {
-                    cfg.disabled_plugins.push(id.clone());
+                if enabled.as_bool() == Some(false) && !self.disabled_plugins.contains(id) {
+                    self.disabled_plugins.push(id.clone());
                 }
             }
         }
 
-        Ok(cfg)
+        Ok(())
+    }
+
+    /// Whether the project-local file sets `key`, so a change written to the global file will not
+    /// take effect here.
+    pub fn is_project_override(&self, key: &str) -> bool {
+        self.project_overrides.iter().any(|k| k == key)
     }
 
     /// True unless the user disabled the plugin `id` in `[plugins]`.

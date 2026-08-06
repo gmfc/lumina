@@ -37,6 +37,9 @@ impl App {
         // owning plugin, which decides command-vs-file.
         if picker.owner.is_some() {
             if let Some(id) = picker.selected_item().map(|i| i.id.clone()) {
+                // Activation — not merely being listed — is what makes a row "recent", so this is
+                // the one place the ranking hint is fed.
+                self.editor.remember_picked(&id);
                 let owner = picker.owner.clone().unwrap();
                 let token = picker.token.clone().unwrap_or_default();
                 self.registry

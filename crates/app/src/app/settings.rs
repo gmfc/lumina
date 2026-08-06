@@ -360,7 +360,22 @@ impl App {
             _ => {}
         }
         self.save_config();
+        self.warn_if_project_overrides(key);
         self.rebuild_settings();
+    }
+
+    /// Settings writes go to the *global* config file. When the project-local one also sets this
+    /// key it wins on the next reload, so the change the user just made would appear to do
+    /// nothing. Say so rather than letting them fight an invisible file.
+    pub(super) fn warn_if_project_overrides(&mut self, key: &str) {
+        if !self.config.is_project_override(key) {
+            return;
+        }
+        let path = crate::config::Config::project_path(&self.editor.workspace.root);
+        self.editor.notify_warn(format!(
+            "Saved to your global config, but {} sets “{key}” for this project and wins",
+            path.display()
+        ));
     }
 
     /// Persist the current config to the config file (the same one the watcher reloads).

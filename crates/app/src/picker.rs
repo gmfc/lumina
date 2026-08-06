@@ -38,6 +38,11 @@ pub struct Picker {
     /// (the LSP locations list).
     pub owner: Option<String>,
     pub token: Option<String>,
+    /// Ids activated from a picker before, newest first. Seeded from
+    /// [`crate::editor::EditorState::picker_mru`] when the picker opens; [`Picker::refilter`]
+    /// gives these a bounded score bonus so a command used forty times a day doesn't rank
+    /// identically to one never used.
+    pub recent: Vec<String>,
 }
 
 impl Picker {
@@ -63,6 +68,7 @@ impl Picker {
             selected: 0,
             owner: None,
             token: None,
+            recent: Vec::new(),
         };
         p.refilter();
         p
@@ -74,6 +80,26 @@ impl Picker {
         self.owner = Some(owner.into());
         self.token = Some(token.into());
         self
+    }
+
+    /// Seed the recently-used ids (newest first) and re-rank against them.
+    pub fn with_recent(mut self, recent: Vec<String>) -> Picker {
+        self.recent = recent;
+        self.refilter();
+        self
+    }
+
+    /// The score bonus for `id` from its position in the recently-used list — largest for the
+    /// most recent, decaying to nothing. Deliberately **bounded**: recency should break ties and
+    /// float familiar rows up an unfiltered list, never outrank a visibly better text match.
+    fn recency_bonus(&self, id: &str) -> i64 {
+        /// Bonus for the most recently used id. A tight contiguous match scores well above this,
+        /// so typing still wins over habit.
+        const MAX: i64 = 24;
+        match self.recent.iter().position(|r| r == id) {
+            Some(rank) => (MAX - rank as i64 * 2).max(0),
+            None => 0,
+        }
     }
 
     /// True when the `>` command mode is active (unified picker, query starts with `>`).
@@ -115,7 +141,9 @@ impl Picker {
             .active_items()
             .iter()
             .enumerate()
-            .filter_map(|(i, item)| fuzzy_score(&query, &item.label).map(|s| (i, s)))
+            .filter_map(|(i, item)| {
+                fuzzy_score(&query, &item.label).map(|s| (i, s + self.recency_bonus(&item.id)))
+            })
             .collect();
         // Higher score first; ties keep original order (stable sort).
         scored.sort_by_key(|&(_, score)| std::cmp::Reverse(score));

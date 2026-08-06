@@ -131,7 +131,8 @@ impl Host for EditorState {
                 to_items(request.commands),
                 request.start_in_commands,
             )
-            .owned_by(request.owner, request.token),
+            .owned_by(request.owner, request.token)
+            .with_recent(self.picker_mru.clone()),
         );
     }
 

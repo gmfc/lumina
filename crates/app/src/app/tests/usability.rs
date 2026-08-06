@@ -975,3 +975,260 @@ fn a_long_message_yields_to_the_state_the_user_navigates_by() {
     assert!(screen.contains('…'), "and it says it was cut");
     std::fs::remove_file(&path).ok();
 }
+
+// --- U16: recency ranking in the picker -------------------------------------------------------
+
+#[test]
+fn a_command_you_actually_use_rises_to_the_top() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+
+    // Baseline: with no query, the palette is in registration order.
+    app.exec_id("view.commandPalette");
+    let first = app
+        .editor
+        .picker
+        .as_ref()
+        .unwrap()
+        .selected_item()
+        .unwrap()
+        .id
+        .clone();
+    assert_ne!(first, "app.quit", "precondition: quit is not already first");
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    // Run something from the palette. Activation — not merely listing — is what counts.
+    app.editor.remember_picked("view.toggleWrap");
+    app.exec_id("view.commandPalette");
+    assert_eq!(
+        app.editor
+            .picker
+            .as_ref()
+            .unwrap()
+            .selected_item()
+            .unwrap()
+            .id,
+        "view.toggleWrap",
+        "the last thing run is the first thing offered"
+    );
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    // A newer pick displaces it, and the older one stays ahead of everything untouched.
+    app.editor.remember_picked("view.toggleSidebar");
+    app.exec_id("view.commandPalette");
+    let order: Vec<String> = {
+        let p = app.editor.picker.as_ref().unwrap();
+        p.filtered
+            .iter()
+            .map(|&i| p.commands[i].id.clone())
+            .collect()
+    };
+    assert_eq!(order[0], "view.toggleSidebar");
+    assert_eq!(order[1], "view.toggleWrap");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn recency_breaks_ties_but_does_not_beat_a_better_match() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    // Habit must not outrank what was typed: the bonus is bounded for exactly this case.
+    app.editor.remember_picked("view.toggleSidebar");
+    app.exec_id("view.commandPalette");
+    for c in "save".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let top = app
+        .editor
+        .picker
+        .as_ref()
+        .unwrap()
+        .selected_item()
+        .unwrap()
+        .id
+        .clone();
+    assert!(
+        top.contains("save") || top.contains("Save"),
+        "typing still wins over habit: {top}"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn the_recency_list_promotes_rather_than_duplicating() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.editor.remember_picked("a");
+    app.editor.remember_picked("b");
+    app.editor.remember_picked("a");
+    assert_eq!(app.editor.picker_mru, vec!["a", "b"]);
+
+    for i in 0..crate::editor::PICKER_MRU_CAP * 2 {
+        app.editor.remember_picked(&format!("cmd{i}"));
+    }
+    assert_eq!(app.editor.picker_mru.len(), crate::editor::PICKER_MRU_CAP);
+    std::fs::remove_file(&path).ok();
+}
+
+// --- U17: project-local configuration ---------------------------------------------------------
+
+/// A project directory with a `.lumina/config.toml` and a file to open.
+fn project_with_config(toml: &str) -> (PathBuf, PathBuf) {
+    let dir = temp_dir_with_files();
+    std::fs::create_dir_all(dir.join(".lumina")).unwrap();
+    std::fs::write(dir.join(".lumina").join("config.toml"), toml).unwrap();
+    let file = dir.join("a.txt");
+    (dir, file)
+}
+
+#[test]
+fn a_project_config_overrides_settings_keys_and_servers() {
+    let (dir, file) = project_with_config(
+        "[settings]\ntab_width = 2\nline_wrap = true\n\n[keys]\n\"ctrl+alt+y\" = \"app.quit\"\n\n[lsp]\nrust = \"my-analyzer --stdio\"\n",
+    );
+    let app = app_with(&file);
+
+    assert_eq!(
+        app.config.tab_width, 2,
+        "a per-project tab width now has somewhere to live"
+    );
+    assert!(app.config.line_wrap);
+    assert_eq!(
+        app.config.lsp_servers.get("rust").map(Vec::as_slice),
+        Some(["my-analyzer".to_string(), "--stdio".to_string()].as_slice())
+    );
+    assert_eq!(
+        app.keymap.binding_label("app.quit").as_deref(),
+        Some("Ctrl+Q"),
+        "the default binding is still first, and the project one is layered on"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_project_config_is_hot_reloaded_like_the_global_one() {
+    let (dir, file) = project_with_config("[settings]\ntab_width = 2\n");
+    let mut app = app_with(&file);
+    assert_eq!(app.config.tab_width, 2);
+
+    let cfg = dir.join(".lumina").join("config.toml");
+    std::fs::write(&cfg, "[settings]\ntab_width = 7\n").unwrap();
+    app.on_disk_changed(&cfg);
+    assert_eq!(
+        app.config.tab_width, 7,
+        "editing it takes effect without a restart"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_malformed_project_config_is_reported_and_does_not_revert_the_rest() {
+    let (dir, file) = project_with_config("[settings\ntab_width = ");
+    let app = app_with(&file);
+    let msg = app.editor.status_text().unwrap_or_default().to_string();
+    assert!(
+        msg.contains("project config"),
+        "the message must name which file failed: {msg:?}"
+    );
+    assert_eq!(
+        app.config.tab_width, 4,
+        "and the tiers under it still apply rather than everything reverting"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn changing_a_project_overridden_setting_says_the_project_file_wins() {
+    // Settings writes go to the global file; a project override would silently defeat them.
+    let (dir, file) = project_with_config("[settings]\ntab_width = 2\n");
+    let mut app = app_with(&file);
+    assert!(app.config.is_project_override("tab_width"));
+    assert!(!app.config.is_project_override("sidebar_width"));
+
+    app.warn_if_project_overrides("tab_width");
+    let msg = app.editor.status_text().unwrap_or_default().to_string();
+    assert!(msg.contains("tab_width") && msg.contains("wins"), "{msg:?}");
+    assert_eq!(app.editor.status_level(), Some(NoticeLevel::Warn));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn no_project_config_leaves_the_global_one_alone() {
+    let path = temp_file("hello\n");
+    let app = app_with(&path);
+    assert!(
+        app.config.project_overrides.is_empty(),
+        "an absent project file is not an error and overrides nothing"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+// --- U18: the diagnostic gets its own segment -------------------------------------------------
+
+#[test]
+fn a_diagnostic_and_a_message_are_both_visible() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.editor
+        .status_items
+        .insert("lsp.diag".into(), "✗ mismatched types".into());
+    app.editor.notify_info("Saved /tmp/hello.txt");
+
+    let screen = render_to_string(&mut app, 120, 6);
+    assert!(
+        screen.contains("Saved") && screen.contains("mismatched types"),
+        "neither may hide the other any more: {screen}"
+    );
+    assert!(
+        screen.contains('│'),
+        "and the separator makes the source of each self-evident"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_diagnostic_alone_still_shows_beside_the_file_name() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.editor
+        .status_items
+        .insert("lsp.diag".into(), "✗ mismatched types".into());
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    let screen = render_to_string(&mut app, 120, 6);
+    assert!(screen.contains(&name) && screen.contains("mismatched types"));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn the_message_and_the_diagnostic_share_a_narrow_bar() {
+    use crate::ui::fit_left;
+    let msg = "m".repeat(200);
+    let diag = "d".repeat(200);
+
+    // Both fit: neither is touched.
+    let (l, d): (String, String) = fit_left("short".into(), Some("  │ diag".into()), 80);
+    assert_eq!((l.as_str(), d.as_str()), ("short", "  │ diag"));
+
+    // Neither fits: the message is capped at its share so the diagnostic can't be squeezed out.
+    let (l, d): (String, String) = fit_left(msg.clone(), Some(diag.clone()), 80);
+    assert!(
+        !d.is_empty(),
+        "the diagnostic keeps a slice of a crowded bar"
+    );
+    assert!(l.chars().count() + d.chars().count() <= 80);
+    assert!(
+        l.chars().count() <= 48,
+        "the message takes at most its share: {}",
+        l.chars().count()
+    );
+
+    // A short message leaves the rest to the diagnostic rather than holding its full share.
+    let (l, d): (String, String) = fit_left("ok".into(), Some(diag), 80);
+    assert_eq!(l, "ok");
+    assert_eq!(l.chars().count() + d.chars().count(), 80);
+
+    // No diagnostic: the message may use the whole budget.
+    let (l, d): (String, String) = fit_left(msg, None, 80);
+    assert!(d.is_empty());
+    assert_eq!(l.chars().count(), 80);
+}

@@ -8,7 +8,10 @@ impl App {
     pub fn new(arg: Option<String>) -> Result<App> {
         let (root, open_file) = resolve_arg(arg);
         let mut editor = EditorState::new(root);
-        let (config, config_error) = crate::config::Config::load();
+        // Global config first, then the project-local `.lumina/config.toml` layered over it — the
+        // root is resolved above, so a per-project `tab_width` or LSP mapping applies from boot.
+        let (config, config_error) =
+            crate::config::Config::load_for(&editor.workspace.root.clone());
         // Surface a malformed config instead of silently booting on defaults (§5).
         if let Some(e) = &config_error {
             editor.notify_error(config_parse_status(e));
@@ -101,6 +104,7 @@ impl App {
         // off-thread and fold results back as `Event::JobComplete`.
         editor.job_tx = Some(worker_tx.clone());
         let config_path = crate::config::Config::path();
+        let project_config_path = crate::config::Config::project_path(&editor.workspace.root);
         let config_dir = config_path
             .as_ref()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -131,6 +135,7 @@ impl App {
             worker_rx,
             _watcher: watcher,
             config_path,
+            project_config_path,
             pending_self_writes: std::collections::HashMap::new(),
             follow_mode,
             lsp,
@@ -150,7 +155,8 @@ impl App {
 
     /// Reload the config file and rebuild the keymap (the `config.reload` command).
     pub(super) fn reload_config(&mut self) {
-        let (config, config_error) = crate::config::Config::load();
+        let root = self.editor.workspace.root.clone();
+        let (config, config_error) = crate::config::Config::load_for(&root);
         self.config = config;
         self.editor.sidebar_width = self.config.sidebar_width;
         self.editor.terminal_height = self.config.terminal_height.clamp(3, 60);
