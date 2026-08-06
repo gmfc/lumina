@@ -213,8 +213,13 @@ row and preserve the goal column; `Home`/`End` snap to the visual row; `PageUp`/
 logical.
 
 Current limits: wrapped rows carry no continuation indent, wrapping happens at the pane width
-only (there is no fixed wrap column), Vim's `j`/`k` stay logical, and inline virtual text —
-inlay hints — is not drawn while wrap is on.
+only (there is no fixed wrap column), and inline virtual text — inlay hints — is not drawn
+while wrap is on.
+
+In Vim mode, `j`/`k` follow the visual row under wrap, the same as `Up`/`Down`; operator-pending
+motions such as `dj` and `cj` still act on whole logical lines. Real Vim keeps `j`/`k` logical
+and reserves `gj`/`gk` for display lines, so this is a known deviation rather than a design
+choice — see issue #54.
 
 ## Settings
 
