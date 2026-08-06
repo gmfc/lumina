@@ -155,8 +155,11 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
             // Where the file will actually land. A relative path is resolved against the project
             // root, which the box otherwise never showed — the user found out on save.
             if let Some(resolved) = app.resolve_save_as(buffer) {
+                // Truncated from the *left* when it won't fit: the tail (the directory it lands in
+                // and the file name) is the part being checked, and a deep temp path would
+                // otherwise push it off the box.
                 text.push(Line::from(TSpan::styled(
-                    format!("   {}", resolved.display()),
+                    format!("   {}", tail(&resolved.display().to_string(), 62)),
                     Style::default().fg(Color::DarkGray),
                 )));
             }
@@ -398,6 +401,17 @@ fn render_prompt_centered(f: &mut Frame, prompt: &Prompt, area: Rect) {
         .border_style(Style::default().fg(CLR_ACCENT))
         .style(Style::default().bg(Color::Rgb(30, 33, 39)));
     f.render_widget(Paragraph::new(lines).block(block), rect);
+}
+
+/// The last `width` characters of `s`, prefixed with `…` when anything was dropped. For paths,
+/// where the end carries the information and the start is boilerplate.
+fn tail(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n <= width {
+        return s.to_string();
+    }
+    let skip = n - width.saturating_sub(1);
+    std::iter::once('…').chain(s.chars().skip(skip)).collect()
 }
 
 /// A rectangle of `w`×`h` centered within `area` (clamped to fit).
