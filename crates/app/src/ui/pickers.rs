@@ -211,64 +211,78 @@ pub(super) fn render_picker(f: &mut Frame, app: &App, body: Rect) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
-    // Query line. A subtle hint reminds the user that `>` switches to commands.
-    let cursor = "›";
-    let mut query_spans = vec![
-        TSpan::styled(format!("{cursor} "), Style::default().fg(CLR_ACCENT)),
+    let mut lines = vec![query_line(picker), Line::from("")];
+    lines.extend(result_rows(picker, inner));
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The picker's query line. A subtle hint reminds the user that `>` switches to commands.
+fn query_line(picker: &crate::picker::Picker) -> Line<'static> {
+    let mut spans = vec![
+        TSpan::styled("› ", Style::default().fg(CLR_ACCENT)),
         TSpan::styled(
             format!("{}▏", picker.query),
             Style::default().fg(Color::White),
         ),
     ];
     if picker.query.is_empty() && picker.kind == PickerKind::File {
-        query_spans.push(TSpan::styled(
+        spans.push(TSpan::styled(
             "  (type > for commands)",
             Style::default().fg(Color::DarkGray),
         ));
     }
-    let mut lines = vec![Line::from(query_spans), Line::from("")];
+    Line::from(spans)
+}
 
-    // Scroll the result window to keep the selection visible.
-    let active = picker.active_items();
-    let visible = inner.height.saturating_sub(2) as usize;
-    let start = picker.selected.saturating_sub(visible.saturating_sub(1));
-    let row_w = inner.width as usize;
-    for (row_idx, &item_idx) in picker.filtered.iter().enumerate().skip(start).take(visible) {
-        let item = &active[item_idx];
-        let selected = row_idx == picker.selected;
-        let style = if selected {
-            Style::default().fg(Color::White).bg(CLR_SEL)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        let prefix = if selected { "▸ " } else { "  " };
-        let label = format!("{prefix}{}", item.label);
-        let mut spans = vec![TSpan::styled(label.clone(), style)];
-        // The command's keybinding, right-aligned — dropped rather than wrapped when the label
-        // already fills the row.
-        if let Some(hint) = &item.hint {
-            let used = label.chars().count() + hint.chars().count() + 2;
-            if used <= row_w {
-                spans.push(TSpan::styled(" ".repeat(row_w - used), style));
-                spans.push(TSpan::styled(
-                    format!("{hint} "),
-                    Style::default().fg(CLR_ACCENT),
-                ));
-            }
-        }
-        lines.push(Line::from(spans));
-    }
-    // An empty result list rendered as a blank box, indistinguishable from one still loading.
+/// The visible slice of the ranked list, scrolled to keep the selection in view — or, when
+/// nothing matched, the one line that says so. An empty box was indistinguishable from one still
+/// loading.
+fn result_rows(picker: &crate::picker::Picker, inner: Rect) -> Vec<Line<'static>> {
     if picker.filtered.is_empty() {
         let what = if picker.command_mode() {
             "No matching commands"
         } else {
             "No matching files"
         };
-        lines.push(Line::from(TSpan::styled(
+        return vec![Line::from(TSpan::styled(
             format!("  {what}"),
             Style::default().fg(Color::DarkGray),
-        )));
+        ))];
     }
-    f.render_widget(Paragraph::new(lines), inner);
+    let active = picker.active_items();
+    let visible = inner.height.saturating_sub(2) as usize;
+    let start = picker.selected.saturating_sub(visible.saturating_sub(1));
+    let row_w = inner.width as usize;
+    picker
+        .filtered
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(row_idx, &item_idx)| {
+            let item = &active[item_idx];
+            let selected = row_idx == picker.selected;
+            let style = if selected {
+                Style::default().fg(Color::White).bg(CLR_SEL)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            let label = format!("{}{}", if selected { "▸ " } else { "  " }, item.label);
+            let mut spans = vec![TSpan::styled(label.clone(), style)];
+            // The command's keybinding, right-aligned — dropped rather than wrapped when the
+            // label already fills the row.
+            if let Some(hint) = &item.hint {
+                let used = label.chars().count() + hint.chars().count() + 2;
+                if used <= row_w {
+                    spans.push(TSpan::styled(" ".repeat(row_w - used), style));
+                    spans.push(TSpan::styled(
+                        format!("{hint} "),
+                        Style::default().fg(CLR_ACCENT),
+                    ));
+                }
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
