@@ -170,30 +170,37 @@ impl Pdf {
         let mut fonts = HashMap::new();
         let mut node = page;
         for _ in 0..MAX_TREE_DEPTH {
-            if let Some(dict) = self
-                .lookup(node, "Resources")
-                .and_then(Obj::dict)
-                .and_then(|r| self.lookup(r, "Font"))
-                .and_then(Obj::dict)
-            {
-                for (name, font_ref) in dict {
-                    if fonts.contains_key(name) {
-                        continue; // the nearest definition wins
-                    }
-                    let Some(font) = self.resolve(font_ref).and_then(Obj::dict) else {
-                        continue;
-                    };
-                    if let Some(cmap) = self.to_unicode(font) {
-                        fonts.insert(name.clone(), cmap);
-                    }
-                }
-            }
+            self.collect_fonts(node, &mut fonts);
             match self.lookup(node, "Parent").and_then(Obj::dict) {
                 Some(parent) => node = parent,
                 None => break,
             }
         }
         fonts
+    }
+
+    /// Add `node`'s own `/Resources /Font` entries to `fonts`, skipping names already present:
+    /// [`Self::page_fonts`] walks outward from the page, so the nearest definition wins.
+    fn collect_fonts(&self, node: &Dict, fonts: &mut HashMap<String, CMap>) {
+        let Some(dict) = self
+            .lookup(node, "Resources")
+            .and_then(Obj::dict)
+            .and_then(|r| self.lookup(r, "Font"))
+            .and_then(Obj::dict)
+        else {
+            return;
+        };
+        for (name, font_ref) in dict {
+            if fonts.contains_key(name) {
+                continue;
+            }
+            let Some(font) = self.resolve(font_ref).and_then(Obj::dict) else {
+                continue;
+            };
+            if let Some(cmap) = self.to_unicode(font) {
+                fonts.insert(name.clone(), cmap);
+            }
+        }
     }
 
     /// A font's `/ToUnicode` CMap, which is the only reliable way to read text set in a subset
@@ -340,38 +347,43 @@ fn expand_object_streams(objects: &mut HashMap<u32, Obj>) {
         })
         .collect();
     for (dict, data) in streams {
-        let Some(decoded) = decode_stream(&dict, &data) else {
+        expand_one_object_stream(&dict, &data, objects);
+    }
+}
+
+/// Unpack a single `/Type /ObjStm` container into `objects`.
+fn expand_one_object_stream(dict: &Dict, data: &[u8], objects: &mut HashMap<u32, Obj>) {
+    let Some(decoded) = decode_stream(dict, data) else {
+        return;
+    };
+    let count = get(dict, "N").and_then(Obj::as_f64).unwrap_or(0.0) as usize;
+    let first = get(dict, "First").and_then(Obj::as_f64).unwrap_or(0.0) as usize;
+    if first > decoded.len() {
+        return;
+    }
+    let mut header = Lexer::new(&decoded[..first]);
+    for _ in 0..count.min(MAX_OBJECTS) {
+        let (Some(num), Some(offset)) = (
+            header.object().and_then(|o| o.as_f64()),
+            header.object().and_then(|o| o.as_f64()),
+        ) else {
+            break;
+        };
+        if num < 0.0 || offset < 0.0 {
+            break;
+        }
+        // `offset` is a file-supplied float: `1e30 as usize` saturates to `usize::MAX`, so
+        // a plain add panics in debug and wraps in release.
+        let Some(at) = first.checked_add(offset as usize) else {
             continue;
         };
-        let count = get(&dict, "N").and_then(Obj::as_f64).unwrap_or(0.0) as usize;
-        let first = get(&dict, "First").and_then(Obj::as_f64).unwrap_or(0.0) as usize;
-        if first > decoded.len() {
+        if at >= decoded.len() {
             continue;
         }
-        let mut header = Lexer::new(&decoded[..first]);
-        for _ in 0..count.min(MAX_OBJECTS) {
-            let (Some(num), Some(offset)) = (
-                header.object().and_then(|o| o.as_f64()),
-                header.object().and_then(|o| o.as_f64()),
-            ) else {
-                break;
-            };
-            if num < 0.0 || offset < 0.0 {
-                break;
-            }
-            // `offset` is a file-supplied float: `1e30 as usize` saturates to `usize::MAX`, so
-            // a plain add panics in debug and wraps in release.
-            let Some(at) = first.checked_add(offset as usize) else {
-                continue;
-            };
-            if at >= decoded.len() {
-                continue;
-            }
-            if let Some(obj) = Lexer::at(&decoded, at).object() {
-                // Containers never override a top-level definition: a later incremental update
-                // writes the object directly, and that copy is the current one.
-                objects.entry(num as u32).or_insert(obj);
-            }
+        if let Some(obj) = Lexer::at(&decoded, at).object() {
+            // Containers never override a top-level definition: a later incremental update
+            // writes the object directly, and that copy is the current one.
+            objects.entry(num as u32).or_insert(obj);
         }
     }
 }
@@ -397,6 +409,11 @@ fn scan_trailers(buf: &[u8], objects: &HashMap<u32, Obj>) -> Vec<Dict> {
 
 // --- content-stream text extraction -----------------------------------------------------
 
+/// CMap entry cap. A real `/ToUnicode` CMap holds at most a few thousand mappings; a file
+/// declaring range after 64 K-wide range would otherwise build an arbitrarily large map on the
+/// UI thread.
+const MAX_CMAP_ENTRIES: usize = 65_536;
+
 /// A `/ToUnicode` CMap: source codes → replacement text, plus how many bytes a code occupies.
 struct CMap {
     map: HashMap<u32, String>,
@@ -407,13 +424,10 @@ impl CMap {
     /// Parse the `beginbfchar`/`beginbfrange` sections. The rest of the CMap grammar (codespace
     /// ranges, usecmap) only refines what we already infer from the entries themselves.
     fn parse(data: &[u8]) -> CMap {
-        /// Entry cap. A real `/ToUnicode` CMap holds at most a few thousand mappings; a file
-        /// declaring range after 64 K-wide range would otherwise build an arbitrarily large map
-        /// on the UI thread.
-        const MAX_ENTRIES: usize = 65_536;
-
-        let mut map: HashMap<u32, String> = HashMap::new();
-        let mut code_bytes = 1usize;
+        let mut cmap = CMap {
+            map: HashMap::new(),
+            code_bytes: 1,
+        };
         let mut lex = Lexer::new(data);
         let mut pending: Vec<Obj> = Vec::new();
         loop {
@@ -431,63 +445,8 @@ impl CMap {
                 continue;
             };
             match word {
-                b"endbfchar" => {
-                    for pair in pending.chunks(2) {
-                        let [Obj::Str(src), Obj::Str(dst)] = pair else {
-                            continue;
-                        };
-                        if map.len() >= MAX_ENTRIES {
-                            break;
-                        }
-                        code_bytes = code_bytes.max(src.len().clamp(1, 4));
-                        map.insert(be_code(src), decode_utf16be(dst));
-                    }
-                }
-                b"endbfrange" => {
-                    for triple in pending.chunks(3) {
-                        let [Obj::Str(lo), Obj::Str(hi), dst] = triple else {
-                            continue;
-                        };
-                        if map.len() >= MAX_ENTRIES {
-                            break;
-                        }
-                        code_bytes = code_bytes.max(lo.len().clamp(1, 4));
-                        let (lo, hi) = (be_code(lo), be_code(hi));
-                        // A range of 2^32 would hang; real ranges are tiny.
-                        if hi < lo || hi - lo > 0xFFFF {
-                            continue;
-                        }
-                        match dst {
-                            // `<lo> <hi> <dstStart>`: consecutive codes map to consecutive chars.
-                            Obj::Str(start) => {
-                                let base = decode_utf16be(start);
-                                let Some(first) = base.chars().next() else {
-                                    continue;
-                                };
-                                let prefix: String = base.chars().skip(1).collect();
-                                for code in lo..=hi {
-                                    let ch = char::from_u32(first as u32 + (code - lo))
-                                        .unwrap_or(char::REPLACEMENT_CHARACTER);
-                                    map.insert(code, format!("{ch}{prefix}"));
-                                }
-                            }
-                            // `<lo> <hi> [<dst> <dst> …]`: one destination per code.
-                            Obj::Array(items) => {
-                                for (i, item) in items.iter().enumerate() {
-                                    // `lo` comes from the file, so the destination code can run
-                                    // past u32 — a debug-build panic on a malformed CMap.
-                                    let Some(code) = lo.checked_add(i as u32) else {
-                                        break;
-                                    };
-                                    if let Obj::Str(s) = item {
-                                        map.insert(code, decode_utf16be(s));
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                b"endbfchar" => cmap.absorb_bfchar(&pending),
+                b"endbfrange" => cmap.absorb_bfrange(&pending),
                 _ => {}
             }
             if matches!(
@@ -497,7 +456,74 @@ impl CMap {
                 pending.clear();
             }
         }
-        CMap { map, code_bytes }
+        cmap
+    }
+
+    /// `beginbfchar … endbfchar`: `<src> <dst>` pairs, one code each.
+    fn absorb_bfchar(&mut self, pending: &[Obj]) {
+        for pair in pending.chunks(2) {
+            let [Obj::Str(src), Obj::Str(dst)] = pair else {
+                continue;
+            };
+            if self.map.len() >= MAX_CMAP_ENTRIES {
+                break;
+            }
+            self.code_bytes = self.code_bytes.max(src.len().clamp(1, 4));
+            self.map.insert(be_code(src), decode_utf16be(dst));
+        }
+    }
+
+    /// `beginbfrange … endbfrange`: `<lo> <hi> <dst>` triples, where `dst` is either a starting
+    /// string (consecutive codes map to consecutive characters) or an array (one per code).
+    fn absorb_bfrange(&mut self, pending: &[Obj]) {
+        for triple in pending.chunks(3) {
+            let [Obj::Str(lo), Obj::Str(hi), dst] = triple else {
+                continue;
+            };
+            if self.map.len() >= MAX_CMAP_ENTRIES {
+                break;
+            }
+            self.code_bytes = self.code_bytes.max(lo.len().clamp(1, 4));
+            let (lo, hi) = (be_code(lo), be_code(hi));
+            // A range of 2^32 would hang; real ranges are tiny.
+            if hi < lo || hi - lo > 0xFFFF {
+                continue;
+            }
+            match dst {
+                Obj::Str(start) => self.insert_consecutive(lo, hi, start),
+                Obj::Array(items) => self.insert_each(lo, items),
+                _ => {}
+            }
+        }
+    }
+
+    /// `<lo> <hi> <dstStart>`: code `lo+n` maps to `dstStart`'s first char advanced by `n`,
+    /// keeping any trailing characters of the destination as a suffix.
+    fn insert_consecutive(&mut self, lo: u32, hi: u32, start: &[u8]) {
+        let base = decode_utf16be(start);
+        let Some(first) = base.chars().next() else {
+            return;
+        };
+        let prefix: String = base.chars().skip(1).collect();
+        for code in lo..=hi {
+            let ch =
+                char::from_u32(first as u32 + (code - lo)).unwrap_or(char::REPLACEMENT_CHARACTER);
+            self.map.insert(code, format!("{ch}{prefix}"));
+        }
+    }
+
+    /// `<lo> <hi> [<dst> <dst> …]`: one destination per code.
+    fn insert_each(&mut self, lo: u32, items: &[Obj]) {
+        for (i, item) in items.iter().enumerate() {
+            // `lo` comes from the file, so the destination code can run past u32 — a debug-build
+            // panic on a malformed CMap.
+            let Some(code) = lo.checked_add(i as u32) else {
+                break;
+            };
+            if let Obj::Str(s) = item {
+                self.map.insert(code, decode_utf16be(s));
+            }
+        }
     }
 
     /// Decode a show-string's bytes through this CMap.
@@ -567,23 +593,7 @@ const LINE_EPSILON: f64 = 0.6;
 fn extract_text(content: &[u8], fonts: &HashMap<String, CMap>) -> String {
     let mut lex = Lexer::new(content);
     let mut operands: Vec<Obj> = Vec::new();
-    let mut out = String::new();
-    let mut font: Option<&CMap> = None;
-    let mut leading = 0.0f64;
-    let mut line_y = 0.0f64;
-    let mut last_y: Option<f64> = None;
-
-    // Emit a line break when the baseline moved since the last shown string.
-    macro_rules! newline_if_moved {
-        () => {
-            if let Some(prev) = last_y {
-                if (line_y - prev).abs() > LINE_EPSILON {
-                    out.push('\n');
-                }
-            }
-            last_y = Some(line_y);
-        };
-    }
+    let mut state = TextState::default();
 
     loop {
         if let Some(obj) = lex.object() {
@@ -601,6 +611,28 @@ fn extract_text(content: &[u8], fonts: &HashMap<String, CMap>) -> String {
             lex.pos += 1; // an unparseable delimiter — step over it and keep going
             continue;
         };
+        state.apply(op, &operands, fonts);
+        operands.clear();
+    }
+    state.out
+}
+
+/// The interpreter's running state: the text recovered so far, the selected font, and just
+/// enough of the text matrix to answer "did this string start a new line?".
+#[derive(Default)]
+struct TextState<'a> {
+    out: String,
+    font: Option<&'a CMap>,
+    leading: f64,
+    line_y: f64,
+    /// The baseline the previous shown string sat on, if any.
+    last_y: Option<f64>,
+}
+
+impl<'a> TextState<'a> {
+    /// Apply one text operator with the operands that preceded it.
+    fn apply(&mut self, op: &[u8], operands: &[Obj], fonts: &'a HashMap<String, CMap>) {
+        // Operands are counted back from the end: `num(1)` is the last, `num(2)` the one before.
         let num = |i: usize| -> f64 {
             operands
                 .get(operands.len().wrapping_sub(i))
@@ -609,57 +641,74 @@ fn extract_text(content: &[u8], fonts: &HashMap<String, CMap>) -> String {
         };
         match op {
             b"BT" => {
-                line_y = 0.0;
-                last_y = None;
+                self.line_y = 0.0;
+                self.last_y = None;
             }
-            b"ET" => out.push('\n'),
+            b"ET" => self.out.push('\n'),
             b"Tf" => {
-                font = operands
+                self.font = operands
                     .iter()
                     .rev()
                     .find_map(Obj::as_name)
                     .and_then(|name| fonts.get(name));
             }
-            b"TL" => leading = num(1),
-            b"Td" => line_y += num(1),
+            b"TL" => self.leading = num(1),
+            b"Td" => self.line_y += num(1),
             b"TD" => {
-                leading = -num(1);
-                line_y += num(1);
+                self.leading = -num(1);
+                self.line_y += num(1);
             }
             // `Tm a b c d e f` sets the line matrix outright; `f` is the baseline.
-            b"Tm" => line_y = num(1),
-            b"T*" => line_y -= leading,
-            b"Tj" => {
-                newline_if_moved!();
-                if let Some(Obj::Str(s)) = operands.last() {
-                    out.push_str(&show(s, font));
-                }
-            }
+            b"Tm" => self.line_y = num(1),
+            b"T*" => self.line_y -= self.leading,
+            b"Tj" => self.show_last(operands),
+            // `'` and `"` advance to the next line before showing.
             b"'" | b"\"" => {
-                line_y -= leading;
-                newline_if_moved!();
-                if let Some(Obj::Str(s)) = operands.last() {
-                    out.push_str(&show(s, font));
-                }
+                self.line_y -= self.leading;
+                self.show_last(operands);
             }
-            b"TJ" => {
-                newline_if_moved!();
-                if let Some(Obj::Array(items)) = operands.last() {
-                    for item in items {
-                        match item {
-                            Obj::Str(s) => out.push_str(&show(s, font)),
-                            // A big negative kern is how PDFs write a space they didn't encode.
-                            Obj::Number(n) if *n < -TJ_SPACE => out.push(' '),
-                            _ => {}
-                        }
-                    }
-                }
-            }
+            b"TJ" => self.show_array(operands),
             _ => {}
         }
-        operands.clear();
     }
-    out
+
+    /// Emit a line break when the baseline moved since the last shown string.
+    fn newline_if_moved(&mut self) {
+        if let Some(prev) = self.last_y {
+            if (self.line_y - prev).abs() > LINE_EPSILON {
+                self.out.push('\n');
+            }
+        }
+        self.last_y = Some(self.line_y);
+    }
+
+    /// `Tj` / `'` / `"`: show the trailing string operand.
+    fn show_last(&mut self, operands: &[Obj]) {
+        self.newline_if_moved();
+        if let Some(Obj::Str(s)) = operands.last() {
+            let text = show(s, self.font);
+            self.out.push_str(&text);
+        }
+    }
+
+    /// `TJ`: show an array of strings interleaved with kerning adjustments.
+    fn show_array(&mut self, operands: &[Obj]) {
+        self.newline_if_moved();
+        let Some(Obj::Array(items)) = operands.last() else {
+            return;
+        };
+        for item in items {
+            match item {
+                Obj::Str(s) => {
+                    let text = show(s, self.font);
+                    self.out.push_str(&text);
+                }
+                // A big negative kern is how PDFs write a space they didn't encode.
+                Obj::Number(n) if *n < -TJ_SPACE => self.out.push(' '),
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Decode one show-string through the current font's CMap, or WinAnsi when it has none.
