@@ -582,3 +582,396 @@ fn a_hover_box_does_not_swallow_the_key_that_dismisses_it() {
     assert!(app.editor.overlay.is_none());
     std::fs::remove_file(&path).ok();
 }
+
+// --- Coverage for the paths a happy run never reaches -----------------------------------------
+//
+// The guards added above only earn their keep on the days they fire, so the failure branches are
+// exercised deliberately rather than left to be discovered in production.
+
+#[test]
+fn the_quit_box_names_the_files_and_caps_a_long_list() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    let mut extra = Vec::new();
+    for i in 0..8 {
+        let p = temp_file(&format!("file {i}\n"));
+        app.open_path(&p);
+        app.dispatch(Command::InsertText("edited".into()));
+        extra.push(p);
+    }
+    app.dispatch(Command::Quit);
+    let screen = render_to_string(&mut app, 100, 24);
+    assert!(screen.contains("files have unsaved changes"));
+    assert!(
+        screen.contains("and 2 more"),
+        "a long list is capped so the box can't outgrow the screen: {screen}"
+    );
+    for p in extra {
+        std::fs::remove_file(&p).ok();
+    }
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn the_revert_confirmation_says_what_it_will_discard() {
+    let path = temp_file("hello\n");
+    let mut app = conflicted_app(&path);
+    app.exec_id("file.reloadFromDisk");
+    let screen = render_to_string(&mut app, 100, 20);
+    assert!(screen.contains("Revert"));
+    assert!(
+        screen.contains("undo history are discarded"),
+        "the box states the cost, since the reload cannot be undone: {screen}"
+    );
+
+    // Esc leaves the buffer exactly as it was.
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.editor.overlay.is_none());
+    let doc = app.editor.active_document().unwrap();
+    assert!(doc.dirty && doc.external_conflict.is_some());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn reload_refuses_a_file_that_is_no_longer_text() {
+    let path = temp_file("hello\n");
+    let mut app = dirty_app(&path);
+    // An external process replaced the file with binary content while it was open. Reload must
+    // not force those bytes through a UTF-8 rope just because the tab is already a text tab.
+    std::fs::write(&path, [0u8, 0, 0, 1, 2, 3]).unwrap();
+    app.reload_from_disk_now();
+
+    let msg = app.editor.status_text().unwrap_or_default().to_string();
+    assert!(msg.contains("can't be reloaded as text"), "{msg:?}");
+    assert_eq!(
+        app.editor.active_document().unwrap().to_string(),
+        "editedhello\n",
+        "and the buffer is left alone"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn reload_and_keep_mine_refuse_where_there_is_nothing_to_do() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+
+    // An untitled buffer has no file behind it.
+    app.dispatch(Command::NewFile);
+    app.exec_id("file.reloadFromDisk");
+    assert!(app
+        .editor
+        .status_text()
+        .unwrap_or_default()
+        .contains("no file on disk"));
+
+    // Neither does a notice/viewer tab.
+    let bin = temp_file("");
+    std::fs::write(&bin, [0u8, 0, 0, 1]).unwrap();
+    app.open_path(&bin);
+    app.exec_id("file.reloadFromDisk");
+    assert!(app
+        .editor
+        .status_text()
+        .unwrap_or_default()
+        .contains("isn't a text buffer"));
+
+    // And keep-mine on a file with no conflict says so rather than doing nothing.
+    app.editor.workspace.focus_tab(0);
+    app.exec_id("file.keepMine");
+    assert!(app
+        .editor
+        .status_text()
+        .unwrap_or_default()
+        .contains("no unresolved external change"));
+
+    std::fs::remove_file(&bin).ok();
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn save_all_reports_the_files_it_could_not_save() {
+    let path = temp_file("hello\n");
+    let other = temp_file("world\n");
+    let mut app = app_with(&path);
+    app.dispatch(Command::InsertText("edited".into()));
+    app.open_path(&other);
+    app.dispatch(Command::InsertText("edited".into()));
+    // Point the second buffer somewhere unwritable so one save of the two fails.
+    let bad = other
+        .parent()
+        .unwrap()
+        .join("no_such_dir_here")
+        .join("x.txt");
+    app.editor.active_document_mut().unwrap().path = Some(bad);
+
+    app.dispatch(Command::SaveAll);
+    let msg = app.editor.status_text().unwrap_or_default().to_string();
+    assert!(
+        msg.contains("1 could not be saved"),
+        "the summary is the message that survives, so it carries the bad news: {msg:?}"
+    );
+    assert_eq!(app.editor.status_level(), Some(NoticeLevel::Error));
+
+    // And quitting through "save all" refuses rather than discarding the buffer that failed.
+    app.dispatch(Command::Quit);
+    app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    assert!(!app.quit);
+    assert!(app
+        .editor
+        .status_text()
+        .unwrap_or_default()
+        .contains("quit cancelled"));
+
+    std::fs::remove_file(&other).ok();
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_failed_open_names_the_file_and_offers_a_way_on() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    let missing = path.parent().unwrap().join("definitely_not_here.txt");
+    app.open_path(&missing);
+
+    let msg = app.editor.status_text().unwrap_or_default().to_string();
+    assert!(msg.contains("definitely_not_here.txt"), "{msg:?}");
+    assert!(msg.contains("doesn't exist"), "{msg:?}");
+    assert!(
+        msg.contains("Ctrl+N"),
+        "and names the move that gets past it: {msg:?}"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn io_failures_become_sentences_that_name_the_file() {
+    use super::super::file_ops::{display_name, io_reason};
+    use std::io::ErrorKind;
+    let path = std::path::Path::new("/some/where/notes.txt");
+    let wrapped = |kind: ErrorKind| {
+        anyhow::Error::new(std::io::Error::from(kind)).context("writing /some/where/notes.txt")
+    };
+    for (kind, needle) in [
+        (ErrorKind::NotFound, "doesn't exist"),
+        (ErrorKind::PermissionDenied, "no permission"),
+        (ErrorKind::IsADirectory, "is a directory"),
+        (ErrorKind::NotADirectory, "not a directory"),
+        (ErrorKind::ReadOnlyFilesystem, "read-only"),
+        (ErrorKind::StorageFull, "no space left"),
+        (ErrorKind::InvalidData, "isn't valid text"),
+    ] {
+        let msg = io_reason(path, &wrapped(kind));
+        assert!(msg.contains(needle), "{kind:?} → {msg:?}");
+        assert!(msg.contains("notes.txt"), "{kind:?} → {msg:?}");
+    }
+    // An unmapped kind keeps the underlying text — vague beats wrong — but still names the file.
+    let other = io_reason(path, &wrapped(ErrorKind::WouldBlock));
+    assert!(other.contains("notes.txt"), "{other:?}");
+    assert_eq!(display_name(path), "notes.txt");
+}
+
+#[test]
+fn each_open_failure_gets_the_recovery_that_applies() {
+    use std::io::ErrorKind;
+    let path = temp_file("hello\n");
+    let app = app_with(&path);
+    let err = |kind: ErrorKind| anyhow::Error::new(std::io::Error::from(kind)).context("opening");
+
+    assert!(app
+        .open_recovery(&err(ErrorKind::NotFound))
+        .unwrap()
+        .contains("Ctrl+N"));
+    assert!(
+        app.open_recovery(&err(ErrorKind::IsADirectory))
+            .unwrap()
+            .contains("Ctrl+P"),
+        "a directory is a case for the file picker, not a new buffer"
+    );
+    assert!(
+        app.open_recovery(&err(ErrorKind::PermissionDenied))
+            .is_none(),
+        "and a kind with no move offers none rather than inventing one"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn save_as_rejects_an_empty_name_and_a_directory() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+
+    app.dispatch(Command::SaveAs);
+    type_into_overlay(&mut app, "   ");
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match &app.editor.overlay {
+        Some(Overlay::SaveAsInput { error: Some(e), .. }) => assert!(e.contains("file name")),
+        other => panic!("expected the box to stay open: {other:?}"),
+    }
+
+    let dir = path.parent().unwrap().to_string_lossy().into_owned();
+    type_into_overlay(&mut app, &dir);
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match &app.editor.overlay {
+        Some(Overlay::SaveAsInput { error: Some(e), .. }) => {
+            assert!(e.contains("is a directory"), "{e:?}")
+        }
+        other => panic!("expected the box to stay open: {other:?}"),
+    }
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn save_as_over_the_buffers_own_file_is_just_a_save() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.dispatch(Command::InsertText("edited".into()));
+    app.dispatch(Command::SaveAs);
+    // The seeded path is the buffer's own file: that is Save, not an overwrite worth confirming.
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.editor.overlay.is_none());
+    assert!(std::fs::read_to_string(&path).unwrap().contains("edited"));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn typing_at_the_overwrite_prompt_returns_to_editing_the_path() {
+    let victim = temp_file("PRECIOUS\n");
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.dispatch(Command::SaveAs);
+    type_into_overlay(&mut app, &victim.to_string_lossy());
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Anything that isn't [O] or [Esc] backs out of the confirmation, so a stray keystroke
+    // cannot destroy the file — and does not cancel the whole dialog either.
+    app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    match &app.editor.overlay {
+        Some(Overlay::SaveAsInput { overwrite, .. }) => assert!(overwrite.is_none()),
+        other => panic!("expected the path field back: {other:?}"),
+    }
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "PRECIOUS\n");
+    std::fs::remove_file(&victim).ok();
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn the_notification_tab_follows_new_messages() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.editor.notice_log.clear();
+    app.exec_id("view.notifications");
+    assert!(
+        text_view(&app).contains("Nothing to show yet"),
+        "an empty log says so rather than rendering blank"
+    );
+
+    app.editor.notify_error("something went wrong later");
+    app.drain_workers();
+    assert!(
+        text_view(&app).contains("something went wrong later"),
+        "an open log tracks new messages instead of snapshotting at open time"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_reference_tab_scrolls_and_ignores_activation() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.exec_id("help.keybindings");
+    // Give the pane a laid-out height so scroll clamping has something to clamp against.
+    let _ = render_to_string(&mut app, 120, 24);
+
+    app.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    let at_end = match app.editor.active_tab_view() {
+        Some(TabView::Text(t)) => t.scroll,
+        _ => unreachable!(),
+    };
+    assert!(at_end > 0, "End scrolls to the last page");
+
+    app.on_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let after = match app.editor.active_tab_view() {
+        Some(TabView::Text(t)) => t.scroll,
+        _ => unreachable!(),
+    };
+    assert_eq!(after, 1, "Home returns to the top, Down moves one row");
+
+    // Enter is the "open as text" action on a file-backed view; a reference tab has no file.
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        app.editor.active_tab_view(),
+        Some(TabView::Text(_))
+    ));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn the_reference_lists_a_chord_it_has_no_section_for() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.keymap.bind("ctrl+alt+q", "mystery.command");
+    app.exec_id("help.keybindings");
+    let sheet = text_view(&app);
+    assert!(
+        sheet.contains("Other") && sheet.contains("mystery.command"),
+        "a plugin's chord under an unknown prefix must still appear: {sheet}"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn quick_open_with_no_matches_says_so_too() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir.join("a.txt"));
+    app.exec_id("view.quickOpen");
+    for c in "zzqzzq".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert!(render_to_string(&mut app, 120, 24).contains("No matching files"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn vim_force_quit_all_skips_the_guard() {
+    // `:qa` goes through the unsaved-changes confirmation; `:qa!` is vim's "I mean it".
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.config.vim = true;
+    app.registry.dispatch_command("vim.enable", &mut app.editor);
+    app.editor.active_document_mut().unwrap().dirty = true;
+
+    for c in ":qa".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!app.quit, ":qa asks first");
+    assert!(matches!(
+        app.editor.overlay,
+        Some(Overlay::ConfirmQuit { .. })
+    ));
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    for c in ":qa!".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.quit, ":qa! means it");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_long_message_yields_to_the_state_the_user_navigates_by() {
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.editor.active_document_mut().unwrap().large = true;
+    app.editor.notify_error("x".repeat(400));
+    let screen = render_to_string(&mut app, 80, 6);
+    assert!(
+        screen.contains("LARGE") && screen.contains("Ln 1"),
+        "a long message must not push the position cluster off the bar: {screen}"
+    );
+    assert!(screen.contains('…'), "and it says it was cut");
+    std::fs::remove_file(&path).ok();
+}

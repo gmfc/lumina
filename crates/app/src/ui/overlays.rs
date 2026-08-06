@@ -99,13 +99,13 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(TSpan::styled(
-                    " Your unsaved changes and this file's undo history are discarded.",
+                    " Your unsaved changes and its undo history are discarded.",
                     Style::default().fg(Color::Gray),
                 )),
                 Line::from(""),
                 Line::from(" [R] Revert   [Esc] Cancel "),
             ];
-            let rect = centered(body, 64, 6);
+            let rect = centered(body, 62, 6);
             f.render_widget(Clear, rect);
             let block = Block::default()
                 .borders(Borders::ALL)

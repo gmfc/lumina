@@ -96,6 +96,10 @@ pub(crate) struct TextTab {
     pub(crate) content: editor_plugin::ViewerContent,
     /// First visible body row (the app owns scrolling, exactly as for a viewer).
     pub(crate) scroll: usize,
+    /// The value of [`EditorState::notice_seq`] this content was built from, so a live tab can
+    /// tell it is out of date in O(1). A row count can't: the log is bounded, so its length stops
+    /// changing long before its contents do.
+    pub(crate) stamp: u64,
 }
 
 /// A tab that renders something other than the (empty, placeholder) buffer backing it.
@@ -232,6 +236,9 @@ pub(crate) struct EditorState {
     /// Scrollback of the most recent notices (newest last), surfaced by `view.notifications`.
     /// Nothing the editor says is unrecoverable once it has scrolled out of the status bar.
     pub(crate) notice_log: Vec<Notice>,
+    /// Monotonic count of notices ever published. An open notification tab stamps itself with
+    /// this so it can detect new messages without diffing the log.
+    pub(crate) notice_seq: u64,
     /// Rendered panel content, keyed by panel id (set by plugins).
     pub(crate) panels: HashMap<String, PanelContent>,
     /// Status-bar item text, keyed by item id.
@@ -338,6 +345,7 @@ impl EditorState {
             focus: Focus::Editor,
             status_message: None,
             notice_log: Vec::new(),
+            notice_seq: 0,
             panels: HashMap::new(),
             status_items: HashMap::new(),
             pending_events: Vec::new(),
@@ -403,6 +411,7 @@ impl EditorState {
                 self.notice_log.remove(0);
             }
             self.notice_log.push(notice.clone());
+            self.notice_seq += 1;
         }
         self.status_message = Some(notice);
     }
@@ -472,6 +481,7 @@ impl EditorState {
             Some(TabView::Text(t)) => t.scroll,
             _ => 0,
         };
+        let stamp = self.notice_seq;
         self.tab_views.insert(
             id,
             TabView::Text(TextTab {
@@ -479,6 +489,7 @@ impl EditorState {
                 title: title.to_string(),
                 content,
                 scroll,
+                stamp,
             }),
         );
         self.focus = Focus::Editor;
