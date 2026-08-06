@@ -122,16 +122,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Checkout FIRST: actions/checkout wipes a workspace that isn't already a git repo,
+      # so downloading artifacts before this would delete dist/ and fail the publish.
+      # The repo is needed for CHANGELOG.md, which supplies the release body below.
+      - uses: actions/checkout@v4
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-
-      # The release body is the tag's own CHANGELOG.md section; `generate_release_notes`
-      # below appends the auto-generated PR list underneath it. Needs the repo on disk —
-      # the rest of this job only handles artifacts.
-      - uses: actions/checkout@v4
 
       - name: Extract release notes from CHANGELOG.md
         shell: bash
