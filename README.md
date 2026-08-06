@@ -86,7 +86,8 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 ## Keys (defaults, remappable in config)
 
 `Ctrl+P` quick-open (files; type `>` for the command palette) · `Ctrl+F`/`Ctrl+H` find/replace ·
-`Ctrl+Shift+F` project search · `Ctrl+B` toggle sidebar · `Ctrl+D` add cursor at next match ·
+`Ctrl+Shift+F` project search · `Ctrl+B` toggle sidebar · `Alt+Z` toggle word wrap ·
+`Ctrl+D` add cursor at next match ·
 `Ctrl+F2` select all occurrences · `Shift+Alt+I` cursors to line ends · `Alt+Click` add cursor ·
 `Ctrl+G` go to line · `Ctrl+,` settings · `Ctrl+\` jump to matching bracket · `Ctrl+S` save · `Ctrl+K S` save all ·
 `Ctrl+K Ctrl+S` save as · `Ctrl+N` new file · `Ctrl+W` close tab · `Ctrl+K Ctrl+W` close all ·
@@ -200,6 +201,21 @@ about it.
   scrollback — `Ctrl+K Ctrl+N`, or *View: Show Notifications* — so nothing you blinked past is
   gone. Errors name their recovery with the chord that is actually bound to it.
 
+## Word wrap
+
+`Alt+Z` (or *View: Toggle Word Wrap*, or `line_wrap = true`) soft-wraps long lines at word
+boundaries instead of scrolling horizontally. It is off by default and applies to every open
+tab at once.
+
+Wrapping is purely a view: the buffer, its transactions, and every character offset are
+untouched, so a wrapped file saves back byte-for-byte identical. `Up`/`Down` move by *visual*
+row and preserve the goal column; `Home`/`End` snap to the visual row; `PageUp`/`PageDown` stay
+logical.
+
+Current limits: wrapped rows carry no continuation indent, wrapping happens at the pane width
+only (there is no fixed wrap column), Vim's `j`/`k` stay logical, and inline virtual text —
+inlay hints — is not drawn while wrap is on.
+
 ## Settings
 
 Prefer a UI? Open the **Settings** tab with `Ctrl+,` (or the command palette →
@@ -233,6 +249,7 @@ auto_indent = true          # copy indent on newline (brace-aware); dedent on a 
 trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from every line
 insert_final_newline = false      # on save, ensure the file ends with a single newline
 git_gutter = true           # per-line add/modify/delete change bar in the gutter (vs HEAD)
+line_wrap = false           # soft-wrap long lines at word boundaries (Alt+Z toggles live)
 max_file_size_mb = 64       # above this a file opens as a notice tab (0 = no limit)
 large_file_mb = 8           # at this size a file still opens, but with no syntax/git/LSP (0 = never)
 icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
