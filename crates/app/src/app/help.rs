@@ -81,9 +81,10 @@ impl App {
         if !open {
             return;
         }
+        let seq = self.editor.notice_seq;
         let stale = self.editor.tab_views.values().any(|v| match v {
             crate::editor::TabView::Text(t) if t.kind == TextTabKind::Notifications => {
-                t.content.lines.len() != self.notification_row_count()
+                t.stamp != seq
             }
             _ => false,
         });
@@ -95,18 +96,9 @@ impl App {
             if let crate::editor::TabView::Text(t) = view {
                 if t.kind == TextTabKind::Notifications {
                     t.content = content.clone();
+                    t.stamp = seq;
                 }
             }
-        }
-    }
-
-    /// How many body rows the notification tab would have right now — the cheap staleness check
-    /// that keeps the refresh from rebuilding the whole log every tick.
-    fn notification_row_count(&self) -> usize {
-        if self.editor.notice_log.is_empty() {
-            2
-        } else {
-            self.editor.notice_log.len() + 1
         }
     }
 

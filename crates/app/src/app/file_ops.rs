@@ -418,7 +418,7 @@ impl App {
     }
 
     /// The recovery that applies to an open failure, if any.
-    fn open_recovery(&self, e: &anyhow::Error) -> Option<String> {
+    pub(super) fn open_recovery(&self, e: &anyhow::Error) -> Option<String> {
         match io_kind(e)? {
             std::io::ErrorKind::NotFound => Some(format!(
                 "{} opens a new empty buffer",
