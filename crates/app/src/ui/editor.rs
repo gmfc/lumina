@@ -808,13 +808,20 @@ mod deco_bench {
         let mut sink = 0usize;
         for _ in 0..BENCH_REPS {
             for row in 0..BENCH_LINES {
-                let line_start = row * BENCH_LINE_LEN;
-                for off in line_start..line_start + BENCH_LINE_LEN {
-                    for d in all {
-                        if off >= d.range.0 && off < d.range.1 {
-                            sink += std::hint::black_box(d.range.1);
-                        }
-                    }
+                sink += scan_all_line(all, row * BENCH_LINE_LEN);
+            }
+        }
+        sink
+    }
+
+    /// One line the old way: every decoration considered for every char on it.
+    #[cfg(feature = "perfbench")]
+    fn scan_all_line(all: &[Decoration], line_start: usize) -> usize {
+        let mut sink = 0usize;
+        for off in line_start..line_start + BENCH_LINE_LEN {
+            for d in all {
+                if off >= d.range.0 && off < d.range.1 {
+                    sink += std::hint::black_box(d.range.1);
                 }
             }
         }
@@ -825,22 +832,35 @@ mod deco_bench {
     #[cfg(feature = "perfbench")]
     fn bench_bucketed(all: &[Decoration]) -> usize {
         let mut sink = 0usize;
+        // Hoisted out of the loop on purpose: reusing one scratch across lines is part of what
+        // this variant is measuring, so it must not become a per-line allocation.
         let mut line_decos: Vec<&Decoration> = Vec::new();
         for _ in 0..BENCH_REPS {
             for row in 0..BENCH_LINES {
-                let line_start = row * BENCH_LINE_LEN;
-                let line_end = line_start + BENCH_LINE_LEN;
-                line_decos.clear();
-                line_decos.extend(
-                    all.iter()
-                        .filter(|d| overlaps_line(d, line_start, line_end)),
-                );
-                for off in line_start..line_end {
-                    for d in &line_decos {
-                        if off >= d.range.0 && off < d.range.1 {
-                            sink += std::hint::black_box(d.range.1);
-                        }
-                    }
+                sink += bucketed_line(all, &mut line_decos, row * BENCH_LINE_LEN);
+            }
+        }
+        sink
+    }
+
+    /// One line the new way: bucket the decorations overlapping it, then scan only those.
+    #[cfg(feature = "perfbench")]
+    fn bucketed_line<'a>(
+        all: &'a [Decoration],
+        line_decos: &mut Vec<&'a Decoration>,
+        line_start: usize,
+    ) -> usize {
+        let line_end = line_start + BENCH_LINE_LEN;
+        line_decos.clear();
+        line_decos.extend(
+            all.iter()
+                .filter(|d| overlaps_line(d, line_start, line_end)),
+        );
+        let mut sink = 0usize;
+        for off in line_start..line_end {
+            for d in line_decos.iter() {
+                if off >= d.range.0 && off < d.range.1 {
+                    sink += std::hint::black_box(d.range.1);
                 }
             }
         }
