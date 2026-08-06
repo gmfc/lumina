@@ -49,8 +49,19 @@ jobs:
 
       # Default features only: the `proptests` feature is gated OFF in CI (see
       # ci.yml) to keep the workspace green — mirror that here.
+      #
+      # `--failure-mode all` is load-bearing, not a papered-over error. The suite spawns child
+      # processes — `git.rs` shells out per document, and the terminal test forks a PTY — and each
+      # `fork()` briefly carries the LLVM profiling runtime, so a child that exits before `exec`
+      # writes its own (contentless) `.profraw`. A normal run leaves a dozen of these. They are
+      # harmless until one loses the race and lands truncated: the default `any` then refuses the
+      # *entire* merge ("no profile can be merged") and the job fails with every test green.
+      # `all` skips an unreadable profile and still fails when nothing at all can be merged, so a
+      # genuinely broken coverage run is still caught — and the quality gate's coverage threshold
+      # backs that up. Verified: with a truncated profraw planted, this produces coverage
+      # identical to a clean run.
       - name: Generate coverage (LCOV)
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --failure-mode all --lcov --output-path lcov.info
 
       - name: Generate Clippy report
         run: cargo clippy --workspace --all-targets --message-format=json > clippy-report.json
