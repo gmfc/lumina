@@ -19,188 +19,193 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
         return;
     };
     match overlay {
-        Overlay::ConfirmClose { tab } => {
-            let name = app
-                .editor
-                .workspace
-                .tabs
-                .get(*tab)
-                .and_then(|&id| app.editor.workspace.documents.get(id))
-                .and_then(|d| d.path.as_ref())
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "untitled".into());
-            let text = vec![
-                Line::from(TSpan::styled(
-                    format!(" {name} has unsaved changes"),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from(" [S] Save & close   [D] Discard   [Esc] Cancel "),
-            ];
-            let rect = centered(body, 44, 5);
-            f.render_widget(Clear, rect);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(CLR_ACCENT))
-                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
-            f.render_widget(Paragraph::new(text).block(block), rect);
-        }
-        Overlay::ConfirmQuit { dirty } => {
-            let names = app.tab_names(dirty);
-            let headline = match names.len() {
-                1 => format!(" {} has unsaved changes", names[0]),
-                n => format!(" {n} files have unsaved changes"),
-            };
-            let mut text = vec![Line::from(TSpan::styled(
-                headline,
-                Style::default().add_modifier(Modifier::BOLD),
-            ))];
-            // Name what is at risk — "some files" is not something a user can weigh. Long lists
-            // are capped so the box can't grow past the screen.
-            const MAX_LISTED: usize = 6;
-            if names.len() > 1 {
-                for name in names.iter().take(MAX_LISTED) {
-                    text.push(Line::from(TSpan::styled(
-                        format!("   {name}"),
-                        Style::default().fg(Color::Gray),
-                    )));
-                }
-                if names.len() > MAX_LISTED {
-                    text.push(Line::from(TSpan::styled(
-                        format!("   … and {} more", names.len() - MAX_LISTED),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-            }
-            text.push(Line::from(""));
-            text.push(Line::from(
-                " [S] Save all & quit   [D] Discard & quit   [Esc] Cancel ",
-            ));
-            let rect = centered(body, 60, text.len() as u16 + 2);
-            f.render_widget(Clear, rect);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(CLR_ACCENT))
-                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
-            f.render_widget(Paragraph::new(text).block(block), rect);
-        }
-        Overlay::ConfirmReload => {
-            let name = app
-                .editor
-                .active_document()
-                .and_then(|d| d.path.as_ref())
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "This file".into());
-            let text = vec![
-                Line::from(TSpan::styled(
-                    format!(" Revert {name}?"),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Line::from(TSpan::styled(
-                    " Your unsaved changes and its undo history are discarded.",
-                    Style::default().fg(Color::Gray),
-                )),
-                Line::from(""),
-                Line::from(" [R] Revert   [Esc] Cancel "),
-            ];
-            let rect = centered(body, 62, 6);
-            f.render_widget(Clear, rect);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(CLR_ACCENT))
-                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
-            f.render_widget(Paragraph::new(text).block(block), rect);
-        }
-        Overlay::Info(body_text) => {
-            // A hover/info popup: wrap the text into a centered box, capped in size.
-            let lines: Vec<Line> = body_text
-                .lines()
-                .take(body.height.saturating_sub(4) as usize)
-                .map(|l| Line::from(l.to_string()))
-                .collect();
-            // On a very narrow terminal the available width can fall below the 20-col floor;
-            // `usize::clamp` panics if `max < min`, so take the wider of the two as the ceiling.
-            let max_w = (body.width.saturating_sub(8) as usize).max(20);
-            let w = body_text
-                .lines()
-                .map(|l| l.chars().count())
-                .max()
-                .unwrap_or(20)
-                .clamp(20, max_w) as u16;
-            let h = (lines.len() as u16 + 2).min(body.height.saturating_sub(2));
-            let rect = centered(body, w + 4, h);
-            f.render_widget(Clear, rect);
-            let block = Block::default()
-                .title(" Hover ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(CLR_ACCENT))
-                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
-            f.render_widget(Paragraph::new(lines).block(block), rect);
-        }
+        Overlay::ConfirmClose { tab } => render_confirm_close(f, app, body, *tab),
+        Overlay::ConfirmQuit { dirty } => render_confirm_quit(f, app, body, dirty),
+        Overlay::ConfirmReload => render_confirm_reload(f, app, body),
+        Overlay::Info(text) => render_info(f, body, text),
         Overlay::SaveAsInput {
             buffer,
             error,
             overwrite,
-        } => {
-            let mut text = vec![
-                Line::from(TSpan::styled(
-                    " Save As",
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from(format!(" › {buffer}▏")),
-            ];
-            // Where the file will actually land. A relative path is resolved against the project
-            // root, which the box otherwise never showed — the user found out on save.
-            if let Some(resolved) = app.resolve_save_as(buffer) {
-                // Truncated from the *left* when it won't fit: the tail (the directory it lands in
-                // and the file name) is the part being checked, and a deep temp path would
-                // otherwise push it off the box.
-                text.push(Line::from(TSpan::styled(
-                    format!("   {}", tail(&resolved.display().to_string(), 62)),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            if let Some(err) = error {
-                text.push(Line::from(TSpan::styled(
-                    format!(" {err}"),
-                    Style::default().fg(Color::Red),
-                )));
-            }
-            match overwrite {
-                Some(target) => {
-                    let name = target
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| target.display().to_string());
-                    text.push(Line::from(TSpan::styled(
-                        format!(" {name} already exists"),
-                        Style::default().fg(Color::Yellow),
-                    )));
-                    text.push(Line::from(TSpan::styled(
-                        " [O] Overwrite   [Esc] Cancel   any other key: edit the path ",
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-                None => text.push(Line::from(TSpan::styled(
-                    " [Enter] Save   [Esc] Cancel ",
-                    Style::default().fg(Color::DarkGray),
-                ))),
-            }
-            let rect = centered(body, 68, text.len() as u16 + 2);
-            f.render_widget(Clear, rect);
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(CLR_ACCENT))
-                .style(Style::default().bg(Color::Rgb(30, 33, 39)));
-            f.render_widget(Paragraph::new(text).block(block), rect);
-        }
+        } => render_save_as(f, app, body, buffer, error.as_deref(), overwrite.as_deref()),
         // Positioned (not centered) + needs to return item rects, so it is drawn by
         // `render_context_menu` from `draw` instead of here.
         Overlay::ContextMenu { .. } => {}
     }
+}
+
+/// The shared frame for every centered confirm/input box.
+fn boxed(f: &mut Frame, rect: Rect, text: Vec<Line>) {
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CLR_ACCENT))
+        .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+    f.render_widget(Paragraph::new(text).block(block), rect);
+}
+
+fn render_confirm_close(f: &mut Frame, app: &App, body: Rect, tab: usize) {
+    let name = app
+        .editor
+        .workspace
+        .tabs
+        .get(tab)
+        .and_then(|&id| app.editor.workspace.documents.get(id))
+        .and_then(|d| d.path.as_ref())
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "untitled".into());
+    let text = vec![
+        Line::from(TSpan::styled(
+            format!(" {name} has unsaved changes"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(" [S] Save & close   [D] Discard   [Esc] Cancel "),
+    ];
+    boxed(f, centered(body, 44, 5), text);
+}
+
+/// The quit confirmation. It *names* what is at risk — "some files" is not something a user can
+/// weigh — capped so a big session can't grow the box past the screen.
+fn render_confirm_quit(f: &mut Frame, app: &App, body: Rect, dirty: &[usize]) {
+    const MAX_LISTED: usize = 6;
+    let names = app.tab_names(dirty);
+    let headline = match names.len() {
+        1 => format!(" {} has unsaved changes", names[0]),
+        n => format!(" {n} files have unsaved changes"),
+    };
+    let mut text = vec![Line::from(TSpan::styled(
+        headline,
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    if names.len() > 1 {
+        for name in names.iter().take(MAX_LISTED) {
+            text.push(Line::from(TSpan::styled(
+                format!("   {name}"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        if names.len() > MAX_LISTED {
+            text.push(Line::from(TSpan::styled(
+                format!("   … and {} more", names.len() - MAX_LISTED),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+    text.push(Line::from(""));
+    text.push(Line::from(
+        " [S] Save all & quit   [D] Discard & quit   [Esc] Cancel ",
+    ));
+    let rect = centered(body, 60, text.len() as u16 + 2);
+    boxed(f, rect, text);
+}
+
+fn render_confirm_reload(f: &mut Frame, app: &App, body: Rect) {
+    let name = app
+        .editor
+        .active_document()
+        .and_then(|d| d.path.as_ref())
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "This file".into());
+    let text = vec![
+        Line::from(TSpan::styled(
+            format!(" Revert {name}?"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(TSpan::styled(
+            " Your unsaved changes and its undo history are discarded.",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(" [R] Revert   [Esc] Cancel "),
+    ];
+    boxed(f, centered(body, 62, 6), text);
+}
+
+/// A hover/info popup: the text wrapped into a centered box, capped in size.
+fn render_info(f: &mut Frame, body: Rect, body_text: &str) {
+    let lines: Vec<Line> = body_text
+        .lines()
+        .take(body.height.saturating_sub(4) as usize)
+        .map(|l| Line::from(l.to_string()))
+        .collect();
+    // On a very narrow terminal the available width can fall below the 20-col floor;
+    // `usize::clamp` panics if `max < min`, so take the wider of the two as the ceiling.
+    let max_w = (body.width.saturating_sub(8) as usize).max(20);
+    let w = body_text
+        .lines()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(20)
+        .clamp(20, max_w) as u16;
+    let h = (lines.len() as u16 + 2).min(body.height.saturating_sub(2));
+    let rect = centered(body, w + 4, h);
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .title(" Hover ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CLR_ACCENT))
+        .style(Style::default().bg(Color::Rgb(30, 33, 39)));
+    f.render_widget(Paragraph::new(lines).block(block), rect);
+}
+
+/// The Save As box: the path field, where it resolves to, any problem with it, and either the
+/// normal footer or the overwrite confirmation.
+fn render_save_as(
+    f: &mut Frame,
+    app: &App,
+    body: Rect,
+    buffer: &str,
+    error: Option<&str>,
+    overwrite: Option<&std::path::Path>,
+) {
+    let mut text = vec![
+        Line::from(TSpan::styled(
+            " Save As",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!(" › {buffer}▏")),
+    ];
+    // Where the file will actually land. A relative path resolves against the project root, which
+    // the box otherwise never showed — the user found out on save. Truncated from the *left* when
+    // it won't fit: the tail is the part being checked.
+    if let Some(resolved) = app.resolve_save_as(buffer) {
+        text.push(Line::from(TSpan::styled(
+            format!("   {}", tail(&resolved.display().to_string(), 62)),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    if let Some(err) = error {
+        text.push(Line::from(TSpan::styled(
+            format!(" {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    match overwrite {
+        Some(target) => {
+            let name = target
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| target.display().to_string());
+            text.push(Line::from(TSpan::styled(
+                format!(" {name} already exists"),
+                Style::default().fg(Color::Yellow),
+            )));
+            text.push(Line::from(TSpan::styled(
+                " [O] Overwrite   [Esc] Cancel   any other key: edit the path ",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        None => text.push(Line::from(TSpan::styled(
+            " [Enter] Save   [Esc] Cancel ",
+            Style::default().fg(Color::DarkGray),
+        ))),
+    }
+    let rect = centered(body, 68, text.len() as u16 + 2);
+    boxed(f, rect, text);
 }
 
 /// Render the right-click context menu at its click anchor, returning each item's screen `Rect`

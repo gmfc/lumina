@@ -209,67 +209,75 @@ pub(super) fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(out), area);
 }
 
+/// The status bar's two document-derived halves: the file name (plus a dirty dot) on the left,
+/// and the position/state cluster on the right.
+///
+/// The right cluster carries the *persistent* document states — `CONFLICT` and `LARGE` alongside
+/// the encoding and line ending. Each of them changes what the editor does for as long as it
+/// holds, and a one-shot message that scrolled away a hundred keystrokes ago is not a display of
+/// that.
+fn document_segments(app: &App) -> (String, String) {
+    let Some(doc) = app.editor.workspace.active_document() else {
+        return (" No file open".into(), String::new());
+    };
+    let head = doc.selections.primary().head;
+    let (line, col) = doc.char_to_line_col(head);
+    let name = doc
+        .path
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "untitled".into());
+    let left = format!(" {name}{}", if doc.dirty { " ●" } else { "" });
+    let le = match doc.line_ending {
+        editor_core::LineEnding::Lf => "LF",
+        editor_core::LineEnding::Crlf => "CRLF",
+    };
+    let enc = match doc.encoding {
+        editor_core::Encoding::Utf8 => "UTF-8",
+        editor_core::Encoding::Utf8Bom => "UTF-8-BOM",
+        editor_core::Encoding::Utf16Le => "UTF-16 LE",
+        editor_core::Encoding::Utf16Be => "UTF-16 BE",
+    };
+    let lang = doc.language.clone().unwrap_or_else(|| "text".into());
+    let large = if doc.large { "LARGE  " } else { "" };
+    let conflict = if doc.external_conflict.is_some() {
+        "CONFLICT  "
+    } else {
+        ""
+    };
+    let right = format!(
+        "Ln {}, Col {}   {conflict}{large}{enc}  {le}  {lang} ",
+        line + 1,
+        col + 1
+    );
+    (left, right)
+}
+
+/// The bar's colour for a notice at `level`. Severity has to reach the eye, not just the log: a
+/// held warning or error repaints the whole bar so a failed save can't read like a successful one.
+fn level_style(level: Option<crate::editor::NoticeLevel>, default: Style) -> Style {
+    match level {
+        Some(crate::editor::NoticeLevel::Warn) => Style::default()
+            .bg(Color::Rgb(196, 148, 32))
+            .fg(Color::Black),
+        Some(crate::editor::NoticeLevel::Error) => Style::default()
+            .bg(Color::Rgb(170, 52, 52))
+            .fg(Color::White),
+        _ => default,
+    }
+}
+
 /// Render the status bar. Returns the LSP indicator's screen rect (when shown) so the mouse router
 /// can make it clickable (click → toggle the LSP panel).
 pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect> {
-    let ws = &app.editor.workspace;
-    let mut left;
-    let mut right = String::new();
-    // The bar's own colour, unless a held warning/error recolours it (see below).
+    let (mut left, mut right) = document_segments(app);
+    // The bar's own colour, unless a held warning/error recolours it.
     let mut bar = Style::default().bg(CLR_ACCENT).fg(Color::Black);
-
-    if let Some(doc) = ws.active_document() {
-        let head = doc.selections.primary().head;
-        let (line, col) = doc.char_to_line_col(head);
-        let name = doc
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "untitled".into());
-        left = format!(" {name}{}", if doc.dirty { " ●" } else { "" });
-        let le = match doc.line_ending {
-            editor_core::LineEnding::Lf => "LF",
-            editor_core::LineEnding::Crlf => "CRLF",
-        };
-        let enc = match doc.encoding {
-            editor_core::Encoding::Utf8 => "UTF-8",
-            editor_core::Encoding::Utf8Bom => "UTF-8-BOM",
-            editor_core::Encoding::Utf16Le => "UTF-16 LE",
-            editor_core::Encoding::Utf16Be => "UTF-16 BE",
-        };
-        let lang = doc.language.clone().unwrap_or_else(|| "text".into());
-        // Persistent document states get persistent segments, next to the encoding/line-ending
-        // ones: both change what the editor does for as long as they hold, and a one-shot message
-        // that scrolled away a hundred keystrokes ago is not a display of that.
-        let large = if doc.large { "LARGE  " } else { "" };
-        let conflict = if doc.external_conflict.is_some() {
-            "CONFLICT  "
-        } else {
-            ""
-        };
-        right = format!(
-            "Ln {}, Col {}   {conflict}{large}{enc}  {le}  {lang} ",
-            line + 1,
-            col + 1
-        );
-    } else {
-        left = " No file open".into();
-    }
 
     if let Some(text) = app.editor.status_text() {
         left = format!(" {text}");
-        // Severity has to reach the eye, not just the log: a held warning or error repaints the
-        // whole bar so a failed save can't read like a successful one.
-        bar = match app.editor.status_level() {
-            Some(crate::editor::NoticeLevel::Warn) => Style::default()
-                .bg(Color::Rgb(196, 148, 32))
-                .fg(Color::Black),
-            Some(crate::editor::NoticeLevel::Error) => Style::default()
-                .bg(Color::Rgb(170, 52, 52))
-                .fg(Color::White),
-            _ => bar,
-        };
+        bar = level_style(app.editor.status_level(), bar);
     } else if let Some(item) = app
         .editor
         .status_items
