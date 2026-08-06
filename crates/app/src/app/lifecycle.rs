@@ -317,6 +317,11 @@ impl App {
     pub(super) fn toggle_wrap(&mut self) {
         let on = !self.editor.wrap_enabled;
         self.set_wrap(on);
+        // The Settings tab renders its "Word wrap" checkbox from `config.line_wrap`, not from
+        // live editor state, so this must be mirrored here or the checkbox lies about the
+        // current wrap state. This does not persist to disk — only an explicit Settings edit
+        // (`crates/app/src/app/settings.rs`) does that.
+        self.config.line_wrap = on;
         self.editor.notify_info(if on {
             "Word wrap: on"
         } else {
