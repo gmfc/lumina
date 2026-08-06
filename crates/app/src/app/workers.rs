@@ -217,6 +217,29 @@ impl App {
             return;
         };
 
+        // Re-apply the open policy before reading: an external process can turn a 4 KB log into
+        // a 3 GB one (or a text file into binary) while it is open, and an unguarded reload
+        // would slurp all of it on the UI thread — the exact freeze `files::open` prevents at
+        // open time, reached through the back door. The buffer is kept as-is and the user told.
+        let limits = self.config.file_limits();
+        // An unreadable file falls through to the deletion handling below.
+        if let Ok(probe) = crate::files::probe(path) {
+            if let crate::files::FileKind::Binary { label } = probe.kind {
+                self.editor.status_message = Some(format!(
+                    "{} changed on disk and is no longer text ({label}) — not reloaded",
+                    super::file_ops::display_name(path)
+                ));
+                return;
+            }
+            if limits.max_bytes > 0 && probe.len > limits.max_bytes {
+                self.editor.status_message = Some(format!(
+                    "{} grew past the {} open limit — not reloaded",
+                    super::file_ops::display_name(path),
+                    crate::files::human_bytes(limits.max_bytes)
+                ));
+                return;
+            }
+        }
         let Ok(bytes) = std::fs::read(path) else {
             // Deleted mid-race, or unreadable → flag deletion, keep the buffer.
             if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
@@ -225,6 +248,14 @@ impl App {
             }
             return;
         };
+        // A file that grew across the degraded-mode threshold while open must pick that up, or
+        // it keeps its highlighter and language server while being reloaded at any size.
+        if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
+            doc.large = limits.is_large(bytes.len() as u64);
+            if doc.large {
+                self.editor.highlighters.remove(&id);
+            }
+        }
         let fp = crate::files::fingerprint(&bytes);
 
         // Our own save echoing back → drop it.

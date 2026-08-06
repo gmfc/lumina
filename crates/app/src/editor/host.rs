@@ -15,6 +15,13 @@ impl Host for EditorState {
     }
 
     fn apply_transaction(&mut self, doc: DocId, txn: Transaction) {
+        // The plugin-side mutation chokepoint. A notice/viewer tab's buffer is an empty
+        // placeholder aimed at a real file, so no plugin may edit it — `edit.paste` is one
+        // keystroke away from doing exactly that, and a dirty placeholder then prompts to save
+        // over the file it is displaying.
+        if self.is_tab_view(doc) {
+            return;
+        }
         if let Some(d) = self.workspace.documents.get_mut(doc) {
             let before = d.selections.clone();
             let inverse = txn.apply(d);

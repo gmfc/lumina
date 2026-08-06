@@ -97,7 +97,7 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+Space` completions · `F12` go to definition · `Ctrl+F12` go to implementation ·
 `Shift+F12` find references · `Ctrl+Shift+O` document symbols · `F2` rename ·
 `Alt+J`/`Alt+K` next/prev git change · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
-`Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+Q` quit.
+`Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+K Ctrl+T` open as text · `Ctrl+Q` quit.
 
 ## Integrated terminal
 
@@ -162,7 +162,8 @@ filesystem plus the first 8 KiB — and decides what kind of tab to give you:
   hex view** instead, which works for any file.
 - **A file some plugin claims** → that plugin's viewer. `.pdf` opens in the built-in PDF
   viewer, which extracts the document's text page by page (`.csv`/`.tsv` too, if you install
-  the `csvview` example).
+  the `csvview` example). **`Ctrl+K Ctrl+T` opens it as text instead** — a viewer can claim an
+  extension, never hold it hostage.
 
 A notice or viewer tab behaves like any other tab — switch, reorder, close, restore with the
 session — but holds no text buffer, so nothing can write it back over the file it is showing.
@@ -198,8 +199,8 @@ auto_indent = true          # copy indent on newline (brace-aware); dedent on a 
 trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from every line
 insert_final_newline = false      # on save, ensure the file ends with a single newline
 git_gutter = true           # per-line add/modify/delete change bar in the gutter (vs HEAD)
-max_file_size_mb = 64       # above this a file opens as a notice tab (with "Open Anyway")
-large_file_mb = 8           # at this size a file still opens, but with no syntax/git/LSP
+max_file_size_mb = 64       # above this a file opens as a notice tab (0 = no limit)
+large_file_mb = 8           # at this size a file still opens, but with no syntax/git/LSP (0 = never)
 icons = false               # Nerd Font file glyphs in the explorer (needs a patched font)
 vim = false                 # start in Vim modal editing (Normal/Insert/Visual) — see "Vim mode"
 terminal_height = 12        # rows the terminal panel occupies when expanded

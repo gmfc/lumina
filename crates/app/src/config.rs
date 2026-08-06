@@ -27,9 +27,10 @@ pub struct Config {
     pub line_wrap: bool,
     /// Refuse to open text files larger than this many megabytes, showing an explanatory tab
     /// with an "Open Anyway" escape hatch instead of stalling the UI on a multi-gigabyte read.
+    /// `0` disables the ceiling entirely.
     pub max_file_size_mb: u64,
     /// At or above this many megabytes a file still opens, but in degraded mode: no syntax
-    /// highlighting, no git gutter, and nothing sent to a language server.
+    /// highlighting, no git gutter, and nothing sent to a language server. `0` disables it.
     pub large_file_mb: u64,
     /// Show Nerd Font file-type glyphs in the explorer (off → ASCII `▸ ▾` markers).
     pub icons: bool,

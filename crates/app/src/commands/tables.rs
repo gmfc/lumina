@@ -12,6 +12,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("tab.closeAll", "Tab: Close All"),
         ("tab.reopenClosed", "Tab: Reopen Closed Editor"),
         ("file.openAnyway", "File: Open Anyway (ignore size limit)"),
+        ("file.openAsText", "File: Open as Text"),
         ("tab.next", "Tab: Next"),
         ("tab.prev", "Tab: Previous"),
         ("edit.undo", "Edit: Undo"),
@@ -57,6 +58,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
 pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
     &[
         ("ctrl+q", "app.quit"),
+        ("ctrl+k ctrl+t", "file.openAsText"),
         ("ctrl+s", "file.save"),
         // SPEC-NOTE: the spec suggests `ctrl+shift+s`, but this keymap folds shift into the
         // char for letter keys (keymap.rs), so `ctrl+shift+s` is indistinguishable from
