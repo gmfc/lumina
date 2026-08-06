@@ -357,6 +357,10 @@ impl App {
                 let cmd = if b { "vim.enable" } else { "vim.disable" };
                 self.registry.dispatch_command(cmd, &mut self.editor);
             }
+            ("line_wrap", SettingValue::Bool(b)) => {
+                self.config.line_wrap = b;
+                self.set_wrap(b);
+            }
             _ => {}
         }
         self.save_config();

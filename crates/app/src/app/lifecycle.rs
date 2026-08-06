@@ -297,11 +297,11 @@ impl App {
         }
     }
 
-    /// Toggle app-wide soft word-wrap (`view.toggleWrap` / Alt+Z). Wrap is global, so the new state
-    /// is mirrored onto **every** open document; the caret itself didn't move, so a re-clamp is
-    /// forced next tick to re-anchor the viewport for the new mode.
-    pub(super) fn toggle_wrap(&mut self) {
-        let on = !self.editor.wrap_enabled;
+    /// Set app-wide soft word-wrap to `on`. Wrap is global, so the new state is mirrored onto
+    /// **every** open document; the caret itself didn't move, so a re-clamp is forced next tick
+    /// to re-anchor the viewport for the new mode. Turning wrap off also clears the wrap-only
+    /// sub-row scroll and the horizontal scroll, which no longer mean anything.
+    pub(super) fn set_wrap(&mut self, on: bool) {
         self.editor.wrap_enabled = on;
         for doc in self.editor.workspace.documents.values_mut() {
             doc.view.wrap = on;
@@ -311,6 +311,12 @@ impl App {
             }
         }
         self.last_caret = None;
+    }
+
+    /// Toggle app-wide soft word-wrap (`view.toggleWrap` / Alt+Z) and announce the new state.
+    pub(super) fn toggle_wrap(&mut self) {
+        let on = !self.editor.wrap_enabled;
+        self.set_wrap(on);
         self.editor.notify_info(if on {
             "Word wrap: on"
         } else {
