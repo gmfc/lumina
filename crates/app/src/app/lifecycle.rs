@@ -25,6 +25,12 @@ impl App {
         }
         // Honor plugins the user disabled in `[plugins]` (Settings → Plugins).
         plugins.retain(|p| config.is_plugin_enabled(p.id()));
+        // The worker channel has to exist *before* the plugins activate. `Host::spawn_job` is a
+        // silent no-op without it, so any plugin kicking off background work from `activate` —
+        // reading a repository, indexing, warming a cache — had that work dropped on the floor
+        // with no error anywhere.
+        let (worker_tx, worker_rx) = crate::worker::channel();
+        editor.job_tx = Some(worker_tx.clone());
         let mut registry = Registry::with_plugins(plugins);
         registry.activate_all(&mut editor);
         // Turn the `vim` plugin on if the config asked for it (it owns the modal state now).
@@ -99,10 +105,6 @@ impl App {
 
         // Background worker channel + directory watcher on the project root (plan §6). Also
         // watch the config dir (non-recursively) so edits to config.toml hot-reload.
-        let (worker_tx, worker_rx) = crate::worker::channel();
-        // Hand the worker sender to EditorState so `Host::spawn_job` can run plugin work
-        // off-thread and fold results back as `Event::JobComplete`.
-        editor.job_tx = Some(worker_tx.clone());
         let config_path = crate::config::Config::path();
         let project_config_path = crate::config::Config::project_path(&editor.workspace.root);
         let config_dir = config_path
