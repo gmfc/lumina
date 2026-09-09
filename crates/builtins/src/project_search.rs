@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use editor_core::{Change, Transaction};
 use editor_plugin::{
     Contributions, Event, Host, Key, KeyCode, PanelContent, PanelLine, PanelLocation, Plugin,
     Prompt, PromptPlacement, Span,
@@ -17,6 +18,7 @@ use grep_regex::RegexMatcherBuilder;
 use grep_searcher::sinks::UTF8;
 use grep_searcher::Searcher;
 use ignore::WalkBuilder;
+use regex::{Regex, RegexBuilder};
 
 /// Total hits kept, so a broad query on a big tree stays bounded.
 const HIT_CAP: usize = 2000;
@@ -77,6 +79,44 @@ pub(crate) fn run_search(
     hits
 }
 
+/// Rewrite `pattern` -> `replacement` in every file in `paths`, on disk. Blocking — call on a
+/// worker thread.
+///
+/// Only for files the editor does not have open: an open buffer is the truth for its path, so
+/// writing underneath it would either be clobbered by the next save or resurface as an
+/// external-change conflict. Those go through a `Transaction` instead (invariant #1), which is
+/// also what makes the change undoable.
+///
+/// A file that cannot be read as UTF-8 is skipped rather than mangled — the same rule the open
+/// path follows. Returns the number of files actually rewritten.
+pub(crate) fn replace_on_disk(paths: &[PathBuf], re: &Regex, replacement: &str) -> usize {
+    let mut changed = 0;
+    for path in paths {
+        let Ok(before) = std::fs::read(path) else {
+            continue;
+        };
+        let Ok(before) = String::from_utf8(before) else {
+            continue; // not text we can round-trip; leave it exactly as it is
+        };
+        let after = re.replace_all(&before, replacement);
+        if after == before {
+            continue;
+        }
+        if std::fs::write(path, after.as_bytes()).is_ok() {
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// Which field of the search box takes typed input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Field {
+    #[default]
+    Query,
+    Replace,
+}
+
 /// The project-search feature as a plugin.
 #[derive(Default)]
 pub(crate) struct ProjectSearchPlugin {
@@ -89,6 +129,14 @@ pub(crate) struct ProjectSearchPlugin {
     generation: u64,
     /// The query last actually run — Enter re-runs when it differs, else opens the selection.
     last_run: String,
+    /// The replacement text. Empty is meaningful (delete every match), so "should we replace"
+    /// is decided by the user pressing the replace key, never by this being non-empty.
+    replace: String,
+    /// Which field typing goes to (Tab switches).
+    field: Field,
+    /// Open buffers already replaced while a disk-side replace job is still running, so the
+    /// completion message can report one total rather than two halves.
+    pending_buffer_replacements: usize,
 }
 
 impl ProjectSearchPlugin {
@@ -119,6 +167,7 @@ impl ProjectSearchPlugin {
         self.selected = 0;
         self.running = false;
         self.last_run.clear();
+        self.field = Field::Query;
         host.set_prompt(Prompt::new(Self::ID, Self::PROMPT, PromptPlacement::Panel));
         self.render(host);
     }
@@ -147,6 +196,103 @@ impl ProjectSearchPlugin {
         self.render(host);
     }
 
+    /// The search pattern as a `regex::Regex`, honouring the case toggle. `grep-regex` compiles
+    /// the same syntax for searching; this is the replacement-side twin, so `$1` in the
+    /// replacement expands against the same captures the search matched.
+    fn compiled(&self) -> Option<Regex> {
+        RegexBuilder::new(&self.query)
+            .case_insensitive(!self.case_sensitive)
+            .build()
+            .ok()
+    }
+
+    /// Replace every match of the last-run query across the project.
+    ///
+    /// Open buffers and closed files take different paths on purpose. An open buffer is the
+    /// truth for its path, so it is edited through a `Transaction` — undoable, and it cannot be
+    /// clobbered by the next save. Closed files are rewritten on a worker thread, because a
+    /// project-wide replace can touch hundreds of them and the read-modify-write must not run on
+    /// the frame loop.
+    fn replace_all(&mut self, host: &mut dyn Host) {
+        if self.query.is_empty() || self.results.is_empty() {
+            return;
+        }
+        let Some(re) = self.compiled() else {
+            host.notify("Replace: the search pattern is not a valid regex".into());
+            return;
+        };
+        // Every distinct file the last search hit, in first-hit order.
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for hit in &self.results {
+            if !paths.contains(&hit.path) {
+                paths.push(hit.path.clone());
+            }
+        }
+        // Split by "is this path open in the editor right now".
+        let open: Vec<(editor_core::DocId, PathBuf)> = paths
+            .iter()
+            .filter_map(|p| {
+                let id = host
+                    .workspace()
+                    .documents
+                    .iter()
+                    .find(|(_, d)| d.path.as_deref() == Some(p.as_path()))
+                    .map(|(id, _)| id)?;
+                Some((id, p.clone()))
+            })
+            .collect();
+        let on_disk: Vec<PathBuf> = paths
+            .iter()
+            .filter(|p| !open.iter().any(|(_, o)| o == *p))
+            .cloned()
+            .collect();
+
+        // Buffers first, synchronously: they are already in memory, and doing them here keeps
+        // each file's edit in its own undo entry.
+        let mut buffers_changed = 0usize;
+        for (id, _) in &open {
+            let Some(doc) = host.workspace().documents.get(*id) else {
+                continue;
+            };
+            let text = doc.rope().to_string();
+            let mut changes = Vec::new();
+            for m in re.find_iter(&text) {
+                let at = text[..m.start()].chars().count();
+                let matched = m.as_str().to_string();
+                let mut inserted = String::new();
+                match re.captures(&matched) {
+                    Some(caps) => caps.expand(&self.replace, &mut inserted),
+                    None => inserted = self.replace.clone(),
+                }
+                changes.push(Change {
+                    at,
+                    removed: matched,
+                    inserted,
+                });
+            }
+            if changes.is_empty() {
+                continue;
+            }
+            host.apply_transaction(*id, Transaction::from_changes(changes));
+            buffers_changed += 1;
+        }
+
+        if on_disk.is_empty() {
+            host.notify(format!("Replaced in {buffers_changed} open file(s)"));
+            self.run(host); // re-search so the panel reflects what is left
+            return;
+        }
+        self.generation += 1;
+        let replacement = self.replace.clone();
+        let work = Box::new(move || {
+            let n = replace_on_disk(&on_disk, &re, &replacement);
+            (n as u64).to_le_bytes().to_vec()
+        });
+        host.spawn_job(format!("replace:{}", self.generation), work);
+        self.pending_buffer_replacements = buffers_changed;
+        host.notify("Replacing…".into());
+    }
+
     /// Open the selected hit at its line.
     fn open_selected(&self, host: &mut dyn Host) {
         if let Some(hit) = self.results.get(self.selected).cloned() {
@@ -162,10 +308,21 @@ impl ProjectSearchPlugin {
         } else {
             format!("{} result(s)", self.results.len())
         };
-        let mut lines = vec![PanelLine::new(vec![Span::new(
-            format!("Search: {}▏  [{status}]", self.query),
-            "title",
-        )])];
+        let caret = |f: Field| if self.field == f { "▏" } else { "" };
+        let mut lines = vec![
+            PanelLine::new(vec![Span::new(
+                format!("Search:  {}{}  [{status}]", self.query, caret(Field::Query)),
+                "title",
+            )]),
+            PanelLine::new(vec![Span::new(
+                format!(
+                    "Replace: {}{}   (Tab switches · Alt+A replaces every match)",
+                    self.replace,
+                    caret(Field::Replace)
+                ),
+                "dim",
+            )]),
+        ];
         let mut selected_line = 0;
         let mut last_file: Option<PathBuf> = None;
         for (i, hit) in self.results.iter().enumerate() {
@@ -237,8 +394,21 @@ impl Plugin for ProjectSearchPlugin {
                 self.move_selection(1);
                 self.render(host);
             }
+            KeyCode::Tab => {
+                self.field = match self.field {
+                    Field::Query => Field::Replace,
+                    Field::Replace => Field::Query,
+                };
+                self.render(host);
+            }
+            // Alt+A mirrors the in-buffer find widget's Replace All, so the chord means the same
+            // thing in both search surfaces.
+            KeyCode::Char('a' | 'A') if key.alt => self.replace_all(host),
             KeyCode::Backspace => {
-                self.query.pop();
+                match self.field {
+                    Field::Query => self.query.pop(),
+                    Field::Replace => self.replace.pop(),
+                };
                 self.render(host);
             }
             KeyCode::Enter => {
@@ -249,7 +419,10 @@ impl Plugin for ProjectSearchPlugin {
                 }
             }
             KeyCode::Char(c) if !key.ctrl && !key.alt => {
-                self.query.push(c);
+                match self.field {
+                    Field::Query => self.query.push(c),
+                    Field::Replace => self.replace.push(c),
+                }
                 self.render(host);
             }
             _ => {}
@@ -261,6 +434,26 @@ impl Plugin for ProjectSearchPlugin {
         let Event::JobComplete { id, payload } = event else {
             return;
         };
+        if let Some(gen) = id
+            .strip_prefix("replace:")
+            .and_then(|g| g.parse::<u64>().ok())
+        {
+            if gen != self.generation {
+                return;
+            }
+            let files = payload
+                .get(..8)
+                .and_then(|b| b.try_into().ok())
+                .map(u64::from_le_bytes)
+                .unwrap_or(0) as usize
+                + self.pending_buffer_replacements;
+            self.pending_buffer_replacements = 0;
+            host.notify(format!("Replaced in {files} file(s)"));
+            // Re-run the search so the panel shows what is left rather than stale hits that no
+            // longer exist in the files.
+            self.run(host);
+            return;
+        }
         // Only our own jobs, and only the current generation (drop stale results).
         let Some(gen) = id
             .strip_prefix("search:")
@@ -369,6 +562,58 @@ mod tests {
         let hits_cs = run_search(&dir, "needle", true, 100);
         assert_eq!(hits_cs.len(), 1); // only lowercase
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn replace_on_disk_rewrites_matches_and_expands_captures() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("lumina_prepl_{}_{}", std::process::id(), 1u32));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        std::fs::write(&a, "user@host\nplain line\n").unwrap();
+        std::fs::write(&b, "no match here\n").unwrap();
+
+        let re = Regex::new(r"(\w+)@(\w+)").unwrap();
+        let changed = replace_on_disk(&[a.clone(), b.clone()], &re, "$2.$1");
+
+        assert_eq!(
+            changed, 1,
+            "only the file that actually matched is rewritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&a).unwrap(),
+            "host.user\nplain line\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&b).unwrap(),
+            "no match here\n",
+            "a file with no match is left byte-for-byte alone"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file that is not valid UTF-8 must be skipped, not mangled — the same rule the open path
+    /// follows. Rewriting it would mean decoding lossily and writing U+FFFD back over it.
+    #[test]
+    fn replace_on_disk_skips_files_it_cannot_round_trip() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("lumina_prepl_{}_{}", std::process::id(), 2u32));
+        std::fs::create_dir_all(&dir).unwrap();
+        let latin1 = dir.join("latin1.txt");
+        let bytes = b"caf\xe9 needle\n";
+        std::fs::write(&latin1, bytes).unwrap();
+
+        let re = Regex::new("needle").unwrap();
+        let changed = replace_on_disk(std::slice::from_ref(&latin1), &re, "pin");
+
+        assert_eq!(changed, 0);
+        assert_eq!(
+            std::fs::read(&latin1).unwrap(),
+            bytes,
+            "the undecodable file is untouched"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
