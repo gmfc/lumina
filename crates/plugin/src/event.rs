@@ -29,11 +29,16 @@ pub enum Event {
     /// plugin's correlation id (e.g. carrying a generation so stale results drop); `payload`
     /// is the job's serialized result, decoded by the owning plugin.
     JobComplete { id: String, payload: Vec<u8> },
-    /// The language server published diagnostics for `doc` (translated from `editor-lsp` at the
-    /// app boundary into primitive [`crate::LspDiagnostic`]s). `None` doc = an update for a URI
-    /// with no open document.
+    /// The language server published diagnostics for a file (translated from `editor-lsp` at the
+    /// app boundary into primitive [`crate::LspDiagnostic`]s).
+    ///
+    /// `doc` is `None` when the file has no open document — which is most of a workspace during
+    /// a project-wide check. The `path` is always present, so a consumer can model diagnostics
+    /// for files that are not open; previously only the `DocId` was carried and those updates
+    /// could only be dropped.
     LspDiagnostics {
         doc: Option<DocId>,
+        path: std::path::PathBuf,
         diagnostics: Vec<crate::lsp::LspDiagnostic>,
     },
     /// The language server answered a completion request with these items (translated from

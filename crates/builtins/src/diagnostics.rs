@@ -8,11 +8,12 @@
 //! app-side behind [`Host::lsp_pos_to_offset`]; the LSP transport stays app-side entirely.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use editor_core::{DocId, Selection, Selections};
 use editor_plugin::{
     Contributions, Decoration, DecorationSet, Event, GutterMark, Host, LspDiagnostic, LspSeverity,
-    Plugin,
+    PanelContent, PanelLine, PanelLocation, Plugin, Span,
 };
 
 /// The status item id the caret-diagnostic message is published under.
@@ -21,6 +22,11 @@ const STATUS_ID: &str = "lsp.diag";
 /// footer LSP badge (empty when the active doc is clean).
 const COUNT_ID: &str = "lsp.diag.count";
 const LAYER: &str = "lsp.diag";
+/// The workspace-wide problems list. A `Bottom` panel, so it shares the results dock.
+const PANEL: &str = "lsp.problems";
+/// Rows kept in the problems panel. A project-wide check on a broken workspace can produce
+/// thousands; past a screenful or two the list stops being a list.
+const PROBLEM_CAP: usize = 500;
 
 fn sev_suffix(s: LspSeverity) -> &'static str {
     match s {
@@ -69,9 +75,105 @@ fn format_diagnostic(d: &LspDiagnostic) -> String {
 #[derive(Default)]
 pub(crate) struct DiagnosticsPlugin {
     diags: HashMap<DocId, Vec<LspDiagnostic>>,
+    /// Diagnostics keyed by path, covering files with no open document — which is most of a
+    /// workspace during a project-wide check. `diags` stays keyed by `DocId` because the
+    /// decoration and caret-status paths need a live document; this is what the problems panel
+    /// lists from.
+    by_path: BTreeMap<PathBuf, Vec<LspDiagnostic>>,
+    /// Whether the problems panel is showing. The dock draws a `Bottom` panel whenever it has
+    /// rows, so "closed" means publishing none.
+    problems_open: bool,
 }
 
 impl DiagnosticsPlugin {
+    /// Render the workspace problems list, or clear it when the panel is closed.
+    ///
+    /// Grouped by file, errors before warnings before hints, each row carrying `path\tline` so a
+    /// click opens it. Lists every file the server has reported on, not just the open ones —
+    /// which is the point: the diagnostics that matter most after a project-wide check are in
+    /// files you have not opened yet.
+    fn publish_problems(&self, host: &mut dyn Host) {
+        if !self.problems_open {
+            host.set_panel(PANEL, PanelContent::default());
+            return;
+        }
+        let root = host.root().to_path_buf();
+        let mut lines: Vec<PanelLine> = Vec::new();
+        let (mut errors, mut warnings, mut shown) = (0usize, 0usize, 0usize);
+        for diags in self.by_path.values() {
+            for d in diags {
+                match d.severity {
+                    LspSeverity::Error => errors += 1,
+                    LspSeverity::Warning => warnings += 1,
+                    _ => {}
+                }
+            }
+        }
+        for (path, diags) in &self.by_path {
+            if diags.is_empty() || shown >= PROBLEM_CAP {
+                continue;
+            }
+            let name = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned();
+            lines.push(PanelLine::new(vec![Span::new(name, "dir")]));
+            let mut sorted: Vec<&LspDiagnostic> = diags.iter().collect();
+            sorted.sort_by_key(|d| (sev_rank(d.severity), d.line));
+            for d in sorted {
+                if shown >= PROBLEM_CAP {
+                    break;
+                }
+                shown += 1;
+                lines.push(
+                    PanelLine::new(vec![
+                        Span::new(
+                            format!("  {} {:>5}: ", sev_glyph(d.severity), d.line + 1),
+                            sev_suffix(d.severity),
+                        ),
+                        Span::new(
+                            d.message
+                                .replace('\n', " ")
+                                .chars()
+                                .take(160)
+                                .collect::<String>(),
+                            "text",
+                        ),
+                    ])
+                    .payload(format!(
+                        "{}\t{}",
+                        path.to_string_lossy(),
+                        d.line
+                    )),
+                );
+            }
+        }
+        if lines.is_empty() {
+            lines.push(PanelLine::new(vec![Span::new("No problems", "dim")]));
+        } else {
+            let capped = if shown >= PROBLEM_CAP {
+                format!("  (showing the first {PROBLEM_CAP})")
+            } else {
+                String::new()
+            };
+            lines.insert(
+                0,
+                PanelLine::new(vec![Span::new(
+                    format!("{errors} error(s), {warnings} warning(s){capped}"),
+                    "title",
+                )]),
+            );
+        }
+        host.set_panel(PANEL, PanelContent { lines, selected: 0 });
+    }
+
+    /// `lsp.problems`: show or hide the problems list.
+    fn toggle_problems(&mut self, host: &mut dyn Host) {
+        self.problems_open = !self.problems_open;
+        self.publish_problems(host);
+    }
+
     /// Publish (or clear) the `"lsp.diag"` decoration layer for `doc`: an underline span per
     /// diagnostic + one gutter mark per line carrying its highest-severity glyph. Offsets are
     /// resolved fresh against the current text (via the host), so an edit remaps them.
@@ -217,6 +319,8 @@ impl Plugin for DiagnosticsPlugin {
             .command("lsp.prevDiagnostic", "Go: Previous Problem")
             .keybinding("f8", "lsp.nextDiagnostic")
             .keybinding("shift+f8", "lsp.prevDiagnostic")
+            .command("lsp.problems", "View: Problems")
+            .panel(PANEL, "Problems", PanelLocation::Bottom)
             .build()
     }
 
@@ -224,14 +328,37 @@ impl Plugin for DiagnosticsPlugin {
         match command_id {
             "lsp.nextDiagnostic" => self.navigate(host, 1),
             "lsp.prevDiagnostic" => self.navigate(host, -1),
+            "lsp.problems" => self.toggle_problems(host),
             _ => return false,
         }
         true
     }
 
+    fn on_panel_activate(&mut self, panel_id: &str, payload: &str, host: &mut dyn Host) {
+        if panel_id != PANEL {
+            return;
+        }
+        if let Some((path, line)) = payload.rsplit_once('\t') {
+            if let Ok(line) = line.parse::<usize>() {
+                host.open_path_at(Path::new(path), line);
+            }
+        }
+    }
+
     fn on_event(&mut self, event: &Event, host: &mut dyn Host) {
         match event {
-            Event::LspDiagnostics { doc, diagnostics } => {
+            Event::LspDiagnostics {
+                doc,
+                path,
+                diagnostics,
+            } => {
+                if diagnostics.is_empty() {
+                    self.by_path.remove(path);
+                } else {
+                    self.by_path.insert(path.clone(), diagnostics.clone());
+                }
+                self.publish_problems(host);
+                // The rest needs a live document: decorations and the caret status are per-buffer.
                 let Some(id) = doc else {
                     return;
                 };

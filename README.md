@@ -96,6 +96,7 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+Enter`/`Ctrl+Shift+Enter` insert line below/above · `Ctrl+/` toggle comment ·
 `Ctrl+K Ctrl+X` trim trailing whitespace · `F8`/`Shift+F8` next/prev diagnostic ·
 `Ctrl+Space` completions · `F12` go to definition · `Ctrl+F12` go to implementation ·
+*View: Problems* (palette) lists every diagnostic in the workspace ·
 `Shift+F12` find references · `Ctrl+Shift+O` document symbols · `F2` rename ·
 `Alt+J`/`Alt+K` next/prev git change · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
 `Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+K Ctrl+T` open as text ·

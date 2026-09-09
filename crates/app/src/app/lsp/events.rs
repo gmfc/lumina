@@ -15,8 +15,10 @@ impl App {
             LspEvent::Diagnostics(update) => {
                 // Translate to primitive diagnostics and broadcast to the `diagnostics` plugin,
                 // which owns the model (transport stays here).
-                let doc = crate::lsp::path_from_uri(&update.uri)
-                    .and_then(|path| self.editor.workspace.find_by_path(&path));
+                let Some(path) = crate::lsp::path_from_uri(&update.uri) else {
+                    return;
+                };
+                let doc = self.editor.workspace.find_by_path(&path);
                 let diagnostics = update
                     .diagnostics
                     .into_iter()
@@ -24,7 +26,11 @@ impl App {
                     .collect();
                 self.editor
                     .pending_events
-                    .push(editor_plugin::event::Event::LspDiagnostics { doc, diagnostics });
+                    .push(editor_plugin::event::Event::LspDiagnostics {
+                        doc,
+                        path,
+                        diagnostics,
+                    });
             }
             LspEvent::Hover(text) => {
                 // Hand the rendered hover text to the `hover` plugin, which shows the info box.
