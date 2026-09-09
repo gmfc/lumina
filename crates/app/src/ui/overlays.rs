@@ -305,7 +305,14 @@ pub(super) fn render_prompt(f: &mut Frame, app: &App, editor_area: Rect) {
 
 /// The find/replace shape: a top-right overlay (VS Code-shaped) with toggles + a count.
 fn render_prompt_top_right(f: &mut Frame, prompt: &Prompt, editor_area: Rect) {
-    let height = if prompt.fields.len() >= 2 { 4 } else { 3 };
+    // Height comes from what will actually be drawn, not from a guess. A fixed 3-or-4 rows left
+    // exactly one row of inner space for a two-row body, so the toggle/match-count row was
+    // computed, published, drawn — and then cropped off by the box, which is why find looked
+    // like it had no `Aa`/`W`/`.*` indicators and no `n/m` counter.
+    let has_toggle_row = !prompt.toggles.is_empty() || prompt.status.is_some();
+    let rows =
+        prompt.fields.len() + usize::from(has_toggle_row) + usize::from(prompt.error.is_some());
+    let height = (rows as u16).saturating_add(2); // + the block's top and bottom borders
     let width = 46u16.min(editor_area.width);
     let rect = Rect::new(
         editor_area.x + editor_area.width.saturating_sub(width),

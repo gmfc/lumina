@@ -151,3 +151,116 @@ fn alt_click_adds_cursor() {
     assert_eq!(app.editor.active_document().unwrap().selections.len(), 2);
     std::fs::remove_file(&path).ok();
 }
+
+// ---- the find widget's own chrome -----------------------------------------
+
+/// The toggle indicators and the `n/m` match counter were computed by the plugin, published on
+/// the `Prompt`, and drawn by the renderer — then cropped away, because the widget's height was a
+/// fixed 3-or-4 rows that left exactly one row of inner space for a two-row body. So find looked
+/// like it had no case/word/regex state and no match count at all.
+#[test]
+fn the_find_widget_shows_its_toggles_and_match_count() {
+    let path = temp_file("alpha beta alpha\nalpha\n");
+    let mut app = app_with(&path);
+    app.exec_id("search.find");
+    for c in "alpha".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let text = render_to_string(&mut app, 100, 24);
+    assert!(text.contains("1/3"), "the match counter is drawn: {text}");
+    assert!(text.contains("Aa"), "the case toggle is drawn");
+    assert!(text.contains(".*"), "the regex toggle is drawn");
+    std::fs::remove_file(&path).ok();
+}
+
+/// A bad pattern reported "0 result(s)" and nothing else, because the error row was cropped too.
+#[test]
+fn a_broken_regex_shows_its_error() {
+    let path = temp_file("alpha\n");
+    let mut app = app_with(&path);
+    app.exec_id("search.find");
+    app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT)); // regex on
+    for c in "a(".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let text = render_to_string(&mut app, 100, 24);
+    assert!(text.contains("err"), "the error status is drawn: {text}");
+    std::fs::remove_file(&path).ok();
+}
+
+/// F3 while the widget is open: the prompt claims every key, so the plugin's own `f3` binding
+/// never reached the keymap and next-match did nothing in the one state you would press it.
+#[test]
+fn f3_steps_while_the_find_widget_is_open() {
+    let path = temp_file("alpha\nalpha\nalpha\n");
+    let mut app = app_with(&path);
+    app.exec_id("search.find");
+    for c in "alpha".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let first = app
+        .editor
+        .active_document()
+        .unwrap()
+        .selections
+        .primary()
+        .from();
+    app.on_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+    let second = app
+        .editor
+        .active_document()
+        .unwrap()
+        .selections
+        .primary()
+        .from();
+    assert!(
+        second > first,
+        "F3 advanced to the next match ({first} -> {second})"
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::SHIFT));
+    let back = app
+        .editor
+        .active_document()
+        .unwrap()
+        .selections
+        .primary()
+        .from();
+    assert_eq!(back, first, "Shift+F3 stepped back");
+    std::fs::remove_file(&path).ok();
+}
+
+/// F3 after closing the widget: `search.findNext` was a deliberate no-op without an open widget,
+/// so the binding died the moment you pressed Esc. It now resumes the last query from the caret.
+#[test]
+fn f3_resumes_the_last_search_after_the_widget_closes() {
+    let path = temp_file("alpha\nbeta\nalpha\ngamma\nalpha\n");
+    let mut app = app_with(&path);
+    app.exec_id("search.find");
+    for c in "alpha".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.editor.prompt.is_none(), "the widget closed");
+
+    let before = app
+        .editor
+        .active_document()
+        .unwrap()
+        .selections
+        .primary()
+        .from();
+    app.on_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+    let after = app
+        .editor
+        .active_document()
+        .unwrap()
+        .selections
+        .primary()
+        .from();
+    assert!(
+        after > before,
+        "F3 with the widget closed resumed the search ({before} -> {after})"
+    );
+    std::fs::remove_file(&path).ok();
+}
