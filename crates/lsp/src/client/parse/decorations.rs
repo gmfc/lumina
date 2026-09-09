@@ -17,7 +17,10 @@ pub fn parse_semantic_tokens(result: &Value, legend: &SemanticLegend) -> Vec<Sem
     let mut out = Vec::with_capacity(data.len() / 5);
     let mut line = 0u32;
     let mut col = 0u32;
-    for chunk in data.chunks_exact(5) {
+    // `as_chunks` over `chunks_exact` so the chunk is a `[Value; 5]` — the indexing below is
+    // then bounds-checked at compile time rather than per access. `.1` (a tail shorter than 5)
+    // is dropped, which is the malformed-tail case the doc comment above describes.
+    for chunk in data.as_chunks::<5>().0 {
         let n = |v: &Value| v.as_u64().unwrap_or(0) as u32;
         let (delta_line, delta_col, length, type_idx, mod_bits) = (
             n(&chunk[0]),
