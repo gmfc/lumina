@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use editor_plugin::contribution::PanelLocation;
 use editor_plugin::event::Event;
 use editor_plugin::host::PanelContent;
-use editor_plugin::{Contributions, Host, PanelLine, Plugin, Span};
+use editor_plugin::{
+    Contributions, Host, Key, KeyCode, PanelLine, Plugin, Prompt, PromptField, PromptPlacement,
+    Span,
+};
 use ignore::WalkBuilder;
 
 const PANEL: &str = "explorer.tree";
@@ -53,6 +56,19 @@ fn dir_marker(expanded: bool, icons: bool) -> &'static str {
     }
 }
 
+/// A file operation waiting on the user to name it (or confirm it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingOp {
+    /// Create a file inside `dir`.
+    NewFile { dir: PathBuf },
+    /// Create a directory inside `dir`.
+    NewFolder { dir: PathBuf },
+    /// Rename `path` (the field starts at its current name).
+    Rename { path: PathBuf },
+    /// Delete `path` — the field is a confirmation, not a name.
+    Delete { path: PathBuf },
+}
+
 pub(crate) struct ExplorerPlugin {
     root: PathBuf,
     expanded: BTreeSet<PathBuf>,
@@ -60,6 +76,8 @@ pub(crate) struct ExplorerPlugin {
     selected: usize,
     /// Draw Nerd Font glyphs instead of ASCII `▸ ▾` markers (user config).
     icons: bool,
+    /// The file operation the prompt is collecting input for, if any.
+    pending: Option<(PendingOp, String)>,
 }
 
 impl Default for ExplorerPlugin {
@@ -70,7 +88,7 @@ impl Default for ExplorerPlugin {
 
 impl Plugin for ExplorerPlugin {
     fn id(&self) -> &str {
-        "explorer"
+        Self::ID
     }
 
     fn contributions(&self) -> Contributions {
@@ -82,6 +100,10 @@ impl Plugin for ExplorerPlugin {
             .command("explorer.activate", "Explorer: Open / Toggle")
             .command("explorer.expand", "Explorer: Expand Folder")
             .command("explorer.collapse", "Explorer: Collapse Folder")
+            .command("explorer.newFile", "Explorer: New File")
+            .command("explorer.newFolder", "Explorer: New Folder")
+            .command("explorer.rename", "Explorer: Rename")
+            .command("explorer.delete", "Explorer: Delete")
             .build()
     }
 
@@ -99,9 +121,40 @@ impl Plugin for ExplorerPlugin {
             "explorer.expand" => self.toggle_selected_dir(host, /* if_expanded */ false),
             "explorer.collapse" => self.toggle_selected_dir(host, /* if_expanded */ true),
             "explorer.revealActiveFile" => self.reveal_active_file(host),
+            "explorer.newFile" => self.begin_new(host, false),
+            "explorer.newFolder" => self.begin_new(host, true),
+            "explorer.rename" => self.begin_rename(host),
+            "explorer.delete" => self.begin_delete(host),
             _ => return false,
         }
         self.render(host);
+        true
+    }
+
+    fn on_prompt_key(&mut self, prompt_id: &str, key: Key, host: &mut dyn Host) -> bool {
+        if prompt_id != Self::PROMPT || self.pending.is_none() {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.pending = None;
+                host.dismiss_prompt();
+            }
+            KeyCode::Enter => self.commit_pending(host),
+            KeyCode::Backspace => {
+                if let Some((_, value)) = self.pending.as_mut() {
+                    value.pop();
+                }
+                self.publish_prompt(host, None);
+            }
+            KeyCode::Char(c) if !key.ctrl && !key.alt => {
+                if let Some((_, value)) = self.pending.as_mut() {
+                    value.push(c);
+                }
+                self.publish_prompt(host, None);
+            }
+            _ => {}
+        }
         true
     }
 
@@ -127,6 +180,9 @@ impl Plugin for ExplorerPlugin {
 }
 
 impl ExplorerPlugin {
+    const ID: &'static str = "explorer";
+    const PROMPT: &'static str = "explorer.fileop";
+
     /// Build an explorer, optionally rendering Nerd Font glyphs.
     pub(crate) fn new(icons: bool) -> Self {
         ExplorerPlugin {
@@ -135,6 +191,174 @@ impl ExplorerPlugin {
             visible: Vec::new(),
             selected: 0,
             icons,
+            pending: None,
+        }
+    }
+
+    // --- file operations --------------------------------------------------
+    //
+    // Each one collects a name (or a confirmation) through the generic `Prompt` port, then acts
+    // through the `Host` filesystem ports. The plugin never touches `std::fs` itself: it owns the
+    // tree model and the interaction, the app owns the IO policy (invariant #3).
+
+    /// The directory a new entry should go into: the selected folder if one is selected, else
+    /// the folder containing the selected file, else the root.
+    fn target_dir(&self) -> PathBuf {
+        match self.visible.get(self.selected) {
+            Some(row) if row.is_dir => row.path.clone(),
+            Some(row) => row
+                .path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.root.clone()),
+            None => self.root.clone(),
+        }
+    }
+
+    fn begin_new(&mut self, host: &mut dyn Host, folder: bool) {
+        let dir = self.target_dir();
+        let op = if folder {
+            PendingOp::NewFolder { dir }
+        } else {
+            PendingOp::NewFile { dir }
+        };
+        self.pending = Some((op, String::new()));
+        self.publish_prompt(host, None);
+    }
+
+    fn begin_rename(&mut self, host: &mut dyn Host) {
+        let Some(row) = self.visible.get(self.selected) else {
+            return;
+        };
+        let path = row.path.clone();
+        let current = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.pending = Some((PendingOp::Rename { path }, current));
+        self.publish_prompt(host, None);
+    }
+
+    fn begin_delete(&mut self, host: &mut dyn Host) {
+        let Some(row) = self.visible.get(self.selected) else {
+            return;
+        };
+        self.pending = Some((
+            PendingOp::Delete {
+                path: row.path.clone(),
+            },
+            String::new(),
+        ));
+        self.publish_prompt(host, None);
+    }
+
+    /// (Re)publish the prompt for the pending operation. `error` is shown emphasized so a failed
+    /// attempt says why *in the box* rather than replacing it with a status message the user has
+    /// to re-open the dialog to act on.
+    fn publish_prompt(&self, host: &mut dyn Host, error: Option<String>) {
+        let Some((op, value)) = &self.pending else {
+            return;
+        };
+        let name = |p: &Path| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.to_string_lossy().into_owned())
+        };
+        let (title, label, footer) = match op {
+            PendingOp::NewFile { dir } => (
+                format!("New file in {}", name(dir)),
+                "Name",
+                "[Enter] Create   [Esc] Cancel",
+            ),
+            PendingOp::NewFolder { dir } => (
+                format!("New folder in {}", name(dir)),
+                "Name",
+                "[Enter] Create   [Esc] Cancel",
+            ),
+            PendingOp::Rename { path } => (
+                format!("Rename {}", name(path)),
+                "Name",
+                "[Enter] Rename   [Esc] Cancel",
+            ),
+            PendingOp::Delete { path } => (
+                format!("Delete {}?", name(path)),
+                "Type the name to confirm",
+                "[Enter] Delete   [Esc] Cancel",
+            ),
+        };
+        let mut prompt = Prompt::new(Self::ID, Self::PROMPT, PromptPlacement::Center);
+        prompt.title = Some(title);
+        prompt.fields = vec![PromptField::new(label, value.clone())];
+        prompt.footer = Some(footer.to_string());
+        prompt.error = error;
+        host.set_prompt(prompt);
+    }
+
+    /// Apply the pending operation. Leaves the prompt up with an error when it fails, so the
+    /// user can fix the name rather than retype it from scratch.
+    fn commit_pending(&mut self, host: &mut dyn Host) {
+        let Some((op, value)) = self.pending.clone() else {
+            return;
+        };
+        let trimmed = value.trim().to_string();
+        let result = match &op {
+            PendingOp::NewFile { dir } | PendingOp::NewFolder { dir } => {
+                if trimmed.is_empty() {
+                    Err("Give it a name".to_string())
+                } else if trimmed.contains(['/', '\\']) {
+                    // A path separator here would silently create somewhere else entirely.
+                    Err("Names cannot contain a path separator".to_string())
+                } else {
+                    let target = dir.join(&trimmed);
+                    match op {
+                        PendingOp::NewFolder { .. } => host.create_dir(&target),
+                        _ => host
+                            .create_file(&target)
+                            .inspect(|_| host.open_path(&target)),
+                    }
+                }
+            }
+            PendingOp::Rename { path } => {
+                if trimmed.is_empty() {
+                    Err("Give it a name".to_string())
+                } else if trimmed.contains(['/', '\\']) {
+                    Err("Names cannot contain a path separator".to_string())
+                } else {
+                    let to = path
+                        .parent()
+                        .map(|p| p.join(&trimmed))
+                        .unwrap_or_else(|| PathBuf::from(&trimmed));
+                    host.rename_path(path, &to)
+                }
+            }
+            PendingOp::Delete { path } => {
+                // Deleting is the one operation with no undo, so it asks for the name back
+                // rather than a bare Enter — the same bar the editor sets elsewhere for
+                // discarding work.
+                let expected = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if trimmed != expected {
+                    Err(format!("Type \"{expected}\" to confirm"))
+                } else {
+                    host.delete_path(path)
+                }
+            }
+        };
+        match result {
+            Ok(()) => {
+                // Expand the destination, so a file created inside a collapsed folder appears
+                // instead of silently landing somewhere the user cannot see.
+                if let PendingOp::NewFile { dir } | PendingOp::NewFolder { dir } = &op {
+                    self.expanded.insert(dir.clone());
+                }
+                self.pending = None;
+                host.dismiss_prompt();
+                self.rebuild();
+                self.render(host);
+            }
+            Err(msg) => self.publish_prompt(host, Some(msg)),
         }
     }
 

@@ -46,6 +46,46 @@ impl Host for EditorState {
         self.emit(Event::DidChangeCursor(doc));
     }
 
+    fn create_file(&mut self, path: &Path) -> Result<(), String> {
+        if path.exists() {
+            // The explorer's "new file" must never land on an existing one: the user is adding,
+            // not replacing, and truncating their file here would be silent data loss.
+            return Err("already exists".into());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::File::create(path)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn create_dir(&mut self, path: &Path) -> Result<(), String> {
+        if path.exists() {
+            return Err("already exists".into());
+        }
+        std::fs::create_dir_all(path).map_err(|e| e.to_string())
+    }
+
+    fn rename_path(&mut self, from: &Path, to: &Path) -> Result<(), String> {
+        if to.exists() {
+            // `fs::rename` would clobber the destination on unix without a word.
+            return Err("a file with that name already exists".into());
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::rename(from, to).map_err(|e| e.to_string())
+    }
+
+    fn delete_path(&mut self, path: &Path) -> Result<(), String> {
+        if path.is_dir() {
+            std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+        } else {
+            std::fs::remove_file(path).map_err(|e| e.to_string())
+        }
+    }
+
     fn open_path(&mut self, path: &Path) {
         self.pending_opens.push((path.to_path_buf(), None));
     }

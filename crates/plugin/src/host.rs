@@ -130,6 +130,35 @@ pub trait Host {
     /// Drop a previously-published decoration `layer` for `doc`.
     fn clear_decorations(&mut self, _doc: DocId, _layer: &str) {}
 
+    /// Create an empty file, creating any missing parent directories. Fails if it already
+    /// exists — silently overwriting a file the user was trying to *add* is data loss.
+    ///
+    /// The filesystem-mutating ports below exist for the explorer's file operations. They are on
+    /// the native `Host` trait only: the guest runtimes reach the editor through the capability-
+    /// gated action verbs in `runtime::dispatch`, and no verb maps to these, so adding them does
+    /// not widen what a Rhai or WASM plugin can do.
+    ///
+    /// Errors come back as a message rather than an `io::Error` so a plugin can surface them
+    /// without depending on `std::io`'s taxonomy; the app formats them with path context.
+    fn create_file(&mut self, _path: &Path) -> Result<(), String> {
+        Err("this host cannot create files".into())
+    }
+
+    /// Create a directory, and any missing parents.
+    fn create_dir(&mut self, _path: &Path) -> Result<(), String> {
+        Err("this host cannot create directories".into())
+    }
+
+    /// Rename (or move) a path. Fails if the destination already exists.
+    fn rename_path(&mut self, _from: &Path, _to: &Path) -> Result<(), String> {
+        Err("this host cannot rename paths".into())
+    }
+
+    /// Delete a file, or a directory and everything under it.
+    fn delete_path(&mut self, _path: &Path) -> Result<(), String> {
+        Err("this host cannot delete paths".into())
+    }
+
     /// Show a modal input widget the app renders and forwards keys to. The owning plugin
     /// re-publishes it as its state changes; `dismiss_prompt` closes it. Default no-ops so a
     /// host that doesn't render (tests, external guests) need not implement them.
