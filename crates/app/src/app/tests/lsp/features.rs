@@ -354,3 +354,85 @@ fn format_on_save_off_leaves_the_buffer_alone() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep   me\n");
     std::fs::remove_file(&path).ok();
 }
+
+// ---- didSave -------------------------------------------------------------
+
+/// The client never sent `textDocument/didSave` and declared no
+/// `textDocument.synchronization` at all, so a server's on-save pass never ran. For
+/// rust-analyzer that pass *is* flycheck — the borrow-checker and type errors, as distinct from
+/// the analyzer's own incremental diagnostics — so the more valuable half was never requested.
+///
+/// Drives a real mock-server subprocess: the transcript demands `textDocument/didSave` after the
+/// open, so the test only passes if the notification actually goes out on the wire.
+#[cfg(unix)]
+#[test]
+fn saving_notifies_the_server() {
+    let bin = mock_server_bin();
+    if !bin.exists() {
+        eprintln!("skipping: mock_lsp_server not found at {bin:?}");
+        return;
+    }
+    let path = temp_rs_file("fn main() {}\n");
+    let transcript = r#"[
+        {"expect":"initialize"},
+        {"respond":{"capabilities":{}}},
+        {"expect":"initialized"},
+        {"expect":"textDocument/didOpen"},
+        {"expect":"textDocument/didSave"},
+        {"notify":{"method":"window/logMessage","params":{"type":3,"message":"saw didSave"}}},
+        {"exit":0}
+    ]"#;
+    let mut tpath = std::env::temp_dir();
+    tpath.push(format!("lumina_didsave_{}.json", std::process::id()));
+    std::fs::write(&tpath, transcript).unwrap();
+
+    let mut app = app_with(&path);
+    app.editor.lsp_enabled = true;
+    let servers = std::collections::HashMap::from([(
+        "rust".to_string(),
+        vec![
+            bin.to_string_lossy().into_owned(),
+            tpath.to_string_lossy().into_owned(),
+        ],
+    )]);
+    app.lsp = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), servers, "test".into());
+
+    let mut ready = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        if app.lsp.is_ready("rust") {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(ready, "the server handshake completes");
+    app.update_lsp(); // let didOpen go out
+    app.drain_workers();
+
+    app.editor.active_document_mut().unwrap().dirty = true;
+    app.save_active();
+
+    // The transcript only reaches its logMessage step if `didSave` arrived and matched; a
+    // mismatch exits(1) and nothing is ever logged.
+    let mut saw = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        if app
+            .lsp
+            .recent_logs(50)
+            .iter()
+            .any(|l: &String| l.contains("saw didSave"))
+        {
+            saw = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(saw, "the server received textDocument/didSave");
+
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&tpath).ok();
+}

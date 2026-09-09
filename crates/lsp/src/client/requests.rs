@@ -296,6 +296,15 @@ impl LspHandle {
         )
     }
 
+    /// Tell the server the document was written to disk. Carries no text: the client declares
+    /// `includeText: false`, and the server's copy is already current from `didChange`.
+    pub fn did_save(&self, uri: &str) -> io::Result<()> {
+        self.notify(
+            "textDocument/didSave",
+            json!({ "textDocument": { "uri": uri } }),
+        )
+    }
+
     pub fn did_close(&self, uri: &str) -> io::Result<()> {
         self.notify(
             "textDocument/didClose",

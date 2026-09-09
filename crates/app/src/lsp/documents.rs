@@ -41,6 +41,24 @@ impl LspManager {
         false
     }
 
+    /// Notify the server that a document was saved, so it can run whatever it does on save —
+    /// for rust-analyzer, the `cargo check` pass that produces borrow-checker and type errors.
+    ///
+    /// Only for a document this session actually opened: a `didSave` for a URI the server has
+    /// never seen is a protocol error, and the same guard `did_close` uses applies here.
+    pub fn did_save(&mut self, path: &Path, language: &str) {
+        let uri = uri_for(path);
+        let is_open = self
+            .open_docs
+            .get(language)
+            .is_some_and(|open| open.contains(&uri));
+        if is_open && self.is_ready(language) {
+            if let Some(client) = self.clients.get(language) {
+                let _ = client.did_save(&uri);
+            }
+        }
+    }
+
     /// Notify the server that a document closed (§4.1): its truth reverts to disk. Sends
     /// `didClose` only for a document this session actually opened (no stray close after a
     /// crash/restart) and drops the doc's per-server bookkeeping.
