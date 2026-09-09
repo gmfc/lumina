@@ -235,3 +235,108 @@ fn close_all_stops_at_dirty_tab_with_prompt() {
     std::fs::remove_file(&a).ok();
     std::fs::remove_file(&b).ok();
 }
+
+// ---- keymap reachability -------------------------------------------------
+
+/// Regression guard for the Shift-folding collision.
+///
+/// `Chord::parse` used to drop Shift for character keys, so `ctrl+shift+p` and `ctrl+p` were
+/// literally the same chord — and `Keymap::bind` is last-writer-wins. Four shipped commands were
+/// left with no key that could reach them (the command palette, in-file Find, Reopen Closed
+/// Editor and Signature Help), while four in-app messages went on telling the user to press
+/// `Ctrl+Shift+P`. Nothing caught it because every test drove `exec_id` rather than a chord.
+#[test]
+fn every_bound_command_keeps_a_reachable_chord() {
+    let path = temp_file("x");
+    let app = app_with(&path);
+
+    let mut wanted: Vec<String> = crate::commands::default_bindings()
+        .iter()
+        .map(|(_, id)| (*id).to_string())
+        .collect();
+    wanted.extend(
+        app.registry
+            .keybindings()
+            .iter()
+            .map(|kb| kb.command.clone()),
+    );
+    wanted.sort();
+    wanted.dedup();
+
+    let unreachable: Vec<&str> = wanted
+        .iter()
+        .filter(|id| app.keymap.binding_label(id).is_none())
+        .map(String::as_str)
+        .collect();
+    assert!(
+        unreachable.is_empty(),
+        "these commands are bound to a chord that no key can reach: {unreachable:?}\n\
+         overwritten bindings: {:?}",
+        app.keymap.conflicts()
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+/// The four commands the collision had silently disarmed, pinned to the chords the README
+/// advertises for them.
+#[test]
+fn the_advertised_chords_reach_their_commands() {
+    let path = temp_file("x");
+    let app = app_with(&path);
+    for (id, chord) in [
+        ("view.commandPalette", "Ctrl+Shift+P"),
+        ("search.find", "Ctrl+F"),
+        ("tab.reopenClosed", "Ctrl+Shift+T"),
+        ("lsp.signatureHelp", "Ctrl+Shift+Space"),
+        ("lsp.documentSymbols", "Ctrl+Shift+O"),
+        ("search.project", "Ctrl+Shift+F"),
+        ("view.quickOpen", "Ctrl+P"),
+        ("lsp.workspaceSymbols", "Ctrl+T"),
+    ] {
+        assert_eq!(
+            app.keymap.binding_label(id).as_deref(),
+            Some(chord),
+            "{id} lost its documented chord"
+        );
+    }
+    std::fs::remove_file(&path).ok();
+}
+
+/// Shipping with an overwritten binding means a command lost its key. Later tiers overriding
+/// earlier ones is the point of the stack, but the *defaults plus builtins* must not fight.
+#[test]
+fn the_shipped_keymap_has_no_overwritten_bindings() {
+    let path = temp_file("x");
+    let app = app_with(&path);
+    assert!(
+        app.keymap.conflicts().is_empty(),
+        "shipped bindings clobber each other: {:?}",
+        app.keymap.conflicts()
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// A terminal without the kitty keyboard protocol cannot report Shift on a Ctrl chord — it sends
+/// the same bytes for `Ctrl+O` and `Ctrl+Shift+O`. The unshifted chord is free, so the shifted
+/// binding still resolves rather than being dead weight on those terminals.
+#[test]
+fn a_shiftless_terminal_still_reaches_a_shifted_binding() {
+    use crate::keymap::{Chord, Keymap, Resolve};
+    let km = Keymap::from_pairs([("ctrl+shift+o", "lsp.documentSymbols"), ("ctrl+t", "taken")]);
+
+    let plain_ctrl_o = Chord::from_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert_eq!(
+        km.resolve(&[plain_ctrl_o]),
+        Resolve::Command("lsp.documentSymbols".into()),
+        "Ctrl+O should fall through to the Ctrl+Shift+O binding when Ctrl+O is unbound"
+    );
+
+    // But an exact binding always wins: Ctrl+T is claimed, so a physical Ctrl+Shift+T that
+    // arrives shiftless must not steal it.
+    let plain_ctrl_t = Chord::from_event(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(
+        km.resolve(&[plain_ctrl_t]),
+        Resolve::Command("taken".into())
+    );
+}

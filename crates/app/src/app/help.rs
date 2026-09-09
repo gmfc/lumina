@@ -37,21 +37,25 @@ const SECTIONS: &[(&str, &[&str])] = &[
 /// documented at the point of definition in `commands/tables.rs`; without this section the user
 /// discovers it by pressing the VS Code chord and watching the wrong thing happen.
 const DEVIATIONS: &[(&str, &str, &str)] = &[
-    ("file.saveAs", "Ctrl+Shift+S", "Shift folds into the letter"),
+    (
+        "file.saveAs",
+        "Ctrl+Shift+S",
+        "Ctrl+Shift+letter needs the kitty keyboard protocol",
+    ),
     (
         "edit.deleteLines",
         "Ctrl+Shift+K",
-        "Shift folds into the letter",
+        "Ctrl+Shift+letter needs the kitty keyboard protocol",
     ),
     (
         "lsp.panel.toggle",
         "Ctrl+Shift+L",
-        "Shift folds into the letter",
+        "Ctrl+Shift+letter needs the kitty keyboard protocol",
     ),
     (
         "cursor.selectAllMatches",
         "Ctrl+Shift+L",
-        "Shift folds into the letter",
+        "Ctrl+Shift+letter needs the kitty keyboard protocol",
     ),
 ];
 
@@ -145,6 +149,24 @@ impl App {
                     Span::new(format!("  {here:width$}  "), "match"),
                     Span::new(self.command_title(id), "file"),
                     Span::new(format!("  (VS Code: {vscode} — {why})"), "dim"),
+                ]));
+            }
+        }
+
+        // Bindings a later tier took over. Normally that is the point — a `[keys]` remap is
+        // *meant* to beat a default — but it is also the only way a chord goes missing, so the
+        // reference names what was displaced rather than leaving the user to notice.
+        let conflicts = self.keymap.conflicts();
+        if !conflicts.is_empty() {
+            push_heading(&mut lines, "Overridden bindings");
+            for c in conflicts {
+                lines.push(PanelLine::new(vec![
+                    Span::new(format!("  {:width$}  ", c.chord), "match"),
+                    Span::new(self.command_title(&c.winner), "file"),
+                    Span::new(
+                        format!("  (took it from {})", self.command_title(&c.replaced)),
+                        "dim",
+                    ),
                 ]));
             }
         }

@@ -428,11 +428,12 @@ fn welcome_screen_reflects_remapped_binding() {
     let path = temp_file("x");
     let mut app = app_with(&path);
     app.dispatch(Command::CloseTab);
-    // Simulate a user config that rebinds "Go to Line" to a distinctive chord.
+    // Simulate a user config that rebinds "Go to Line" to a distinctive chord. Shift survives
+    // alongside Alt (it is a modifier, not part of the character), so the label spells it out.
     app.keymap = crate::keymap::Keymap::from_pairs([("alt+shift+g", "view.gotoLine")]);
     let text = render_to_string(&mut app, 90, 24);
     assert!(
-        text.contains("Alt+G"),
+        text.contains("Alt+Shift+G"),
         "welcome screen shows the remapped key, not the default Ctrl+G"
     );
     std::fs::remove_file(&path).ok();

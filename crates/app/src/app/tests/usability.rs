@@ -484,6 +484,21 @@ fn a_remap_shows_through_to_the_keybinding_reference() {
 }
 
 #[test]
+fn an_override_names_the_binding_it_displaced() {
+    // A `[keys]` remap beating a default is the point of the stack, but it is also the only way
+    // a chord goes missing — so the reference says what lost it rather than leaving the user to
+    // wonder why Go to Line stopped working.
+    let path = temp_file("hello\n");
+    let mut app = app_with(&path);
+    app.keymap.bind("ctrl+g", "view.toggleSidebar");
+    app.exec_id("help.keybindings");
+    let text = text_view(&app);
+    assert!(text.contains("Overridden bindings"), "{text}");
+    assert!(text.contains("took it from"), "{text}");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn a_reference_tab_can_never_be_saved_over_a_file() {
     let path = temp_file("hello\n");
     let mut app = app_with(&path);

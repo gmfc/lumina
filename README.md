@@ -102,9 +102,20 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+K Ctrl+R` keyboard-shortcut reference · `Ctrl+K Ctrl+N` notifications · `Ctrl+Q` quit.
 
 You never have to keep this list: **`Ctrl+K Ctrl+R`** opens the same table generated from the
-keymap actually in use, so it includes plugin chords and your own `[keys]` overrides. The command
-palette shows each command's chord next to it and floats what you actually reach for to the top,
-and an armed prefix like `Ctrl+K` lists what may follow it in the status bar.
+keymap actually in use, so it includes plugin chords, your own `[keys]` overrides, and a section
+naming any binding an override displaced. The command palette shows each command's chord next to
+it and floats what you actually reach for to the top, and an armed prefix like `Ctrl+K` lists what
+may follow it in the status bar.
+
+**A note on `Ctrl+Shift+…` chords.** Most terminals send identical bytes for `Ctrl+P` and
+`Ctrl+Shift+P` — only the [kitty keyboard
+protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) can tell them apart, and lumina
+enables it wherever the terminal advertises support (kitty, foot, WezTerm, Ghostty, recent
+Alacritty). Elsewhere a `Ctrl+Shift+<letter>` chord arrives shiftless, and lumina falls back to the
+shifted binding when the unshifted chord is free — so `Ctrl+Shift+O` still reaches Document Symbols.
+Where both are bound the unshifted one wins, because the terminal genuinely cannot distinguish them:
+on those terminals `Ctrl+Shift+P` opens quick-open, and the command palette is one `>` away (or
+remap it under `[keys]`). `Ctrl+K Ctrl+R` always shows what is actually reachable.
 
 ## Integrated terminal
 
