@@ -577,3 +577,28 @@ fn scm_says_when_there_is_no_repository() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `Registry::status_items()` had no consumer at all, so a plugin could declare a status item,
+/// publish text to it, and have it appear nowhere — the same dead seam contributed panels had.
+#[test]
+fn the_branch_reaches_the_status_bar() {
+    let Some(dir) = temp_repo() else {
+        eprintln!("skipping: git unavailable or unconfigured");
+        return;
+    };
+    let mut app = app_with(&dir);
+    let mut found = false;
+    for _ in 0..400 {
+        app.drain_workers();
+        if render_to_string(&mut app, 140, 24).contains("main") {
+            found = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        found,
+        "the branch is published to the status bar at startup"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -309,6 +309,29 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
         right = format!("{lsp_seg}{right}");
     }
 
+    // Plugin-contributed status items. `Registry::status_items()` had no consumer at all, so a
+    // plugin could declare a `StatusItemSpec`, publish text to it, and have it appear nowhere —
+    // the same dead seam contributed panels had. The four ids the bar renders specially above
+    // (health, counts, caret diagnostic, progress) are skipped so they aren't drawn twice.
+    const SPECIAL: [&str; 4] = ["lsp.diag", "lsp.health", "lsp.diag.count", "lsp.progress"];
+    let mut specs: Vec<&editor_plugin::StatusItemSpec> =
+        app.registry.status_items().iter().collect();
+    specs.sort_by_key(|s| s.priority); // lower priority sorts further left
+    let mut contributed = String::new();
+    for spec in specs {
+        if SPECIAL.contains(&spec.id.as_str()) {
+            continue;
+        }
+        if let Some(text) = app
+            .editor
+            .status_items
+            .get(&spec.id)
+            .filter(|t| !t.is_empty())
+        {
+            contributed.push_str(&format!("{}   ", text.replace('\n', " ")));
+        }
+    }
+
     // LSP work-done progress (§1.5): an animated spinner + the active operation, shown just left
     // of the position cluster so it stays visible during indexing. Truncated to keep the bar sane.
     // The progress prefix sits *left* of the LSP segment, so its width offsets the segment's rect.
@@ -323,6 +346,11 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) -> Option<Rect
         let prefix = format!("{} {text}   ", spinner_frame());
         progress_prefix = display_len(&prefix);
         right = format!("{prefix}{right}");
+    }
+    if !contributed.is_empty() {
+        // Leftmost of the right cluster, so its width also offsets the LSP segment's rect.
+        progress_prefix += display_len(&contributed);
+        right = format!("{contributed}{right}");
     }
 
     // The left slot is free-form text; the right cluster is fixed-width state the user navigates

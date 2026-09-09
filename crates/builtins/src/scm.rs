@@ -149,6 +149,8 @@ impl ScmPlugin {
     const ID: &'static str = "scm";
     const PANEL: &'static str = "scm.changes";
     const PROMPT: &'static str = "scm.commit";
+    /// The status-bar item the branch is published under.
+    const STATUS: &'static str = "scm.branch";
 
     /// Kick off a `git status` on a worker thread.
     fn refresh(&mut self, host: &mut dyn Host) {
@@ -302,6 +304,8 @@ impl Plugin for ScmPlugin {
     fn contributions(&self) -> Contributions {
         Contributions::builder()
             .panel(Self::PANEL, "Source Control", PanelLocation::Sidebar)
+            // Left of the LSP cluster: the branch is context you glance at, not state you act on.
+            .status_item(Self::STATUS, -10)
             .command("scm.show", "Source Control: Show Changes")
             .command("scm.refresh", "Source Control: Refresh")
             .command("scm.stage", "Source Control: Stage File")
@@ -374,6 +378,12 @@ impl Plugin for ScmPlugin {
         self.render(host);
     }
 
+    fn activate(&mut self, host: &mut dyn Host) {
+        // Fetch once at startup so the status bar carries the branch even before anyone opens
+        // the panel.
+        self.refresh(host);
+    }
+
     fn on_event(&mut self, event: &Event, host: &mut dyn Host) {
         match event {
             Event::JobComplete { id, payload } => {
@@ -387,6 +397,13 @@ impl Plugin for ScmPlugin {
                     return; // a newer refresh is already in flight
                 }
                 let (branch, entries) = parse_status(payload);
+                host.set_status(
+                    Self::STATUS,
+                    branch
+                        .as_deref()
+                        .map(|b| format!("⎇ {b}"))
+                        .unwrap_or_default(),
+                );
                 self.branch = branch;
                 self.entries = entries;
                 if self.selected >= self.entries.len() {
