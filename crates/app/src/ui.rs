@@ -66,17 +66,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.page_height = main_body.height.saturating_sub(0) as usize;
     app.editor.page_height = app.page_height;
 
-    let (editor_area, sidebar_area, sidebar_inner) = if app.editor.sidebar_visible {
-        let [sidebar, editors] = Layout::horizontal([
-            Constraint::Length(app.editor.sidebar_width),
-            Constraint::Min(0),
-        ])
-        .areas(main_body);
-        let inner = render_sidebar(f, app, sidebar);
-        (editors, Some(sidebar), Some(inner))
-    } else {
-        (main_body, None, None)
-    };
+    let (editor_area, sidebar_area, sidebar_inner, sidebar_first_row) =
+        if app.editor.sidebar_visible {
+            let [sidebar, editors] = Layout::horizontal([
+                Constraint::Length(app.editor.sidebar_width),
+                Constraint::Min(0),
+            ])
+            .areas(main_body);
+            let (inner, first_row) = render_sidebar(f, app, sidebar);
+            (editors, Some(sidebar), Some(inner), first_row)
+        } else {
+            (main_body, None, None, 0)
+        };
 
     render_tabs(f, app, tabs_area);
     if app.settings_active() {
@@ -109,6 +110,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         tabs: tabs_area,
         sidebar: sidebar_area,
         sidebar_inner,
+        sidebar_first_row,
         editor: editor_area,
         panel_header,
         panel_content,
@@ -141,6 +143,9 @@ pub struct Regions {
     /// The sidebar's inner content region (panel rows), below the title. Row hit-testing
     /// maps against this, not `sidebar`, so clicks land on the row actually drawn there.
     pub sidebar_inner: Option<Rect>,
+    /// Index of the sidebar panel's first *drawn* row. The panel scrolls, so a click's row
+    /// offset within `sidebar_inner` is relative to this, not to the panel's row 0.
+    pub sidebar_first_row: usize,
     pub editor: Rect,
     /// The dock's header (tab strip) row, when the dock is open.
     pub panel_header: Option<Rect>,

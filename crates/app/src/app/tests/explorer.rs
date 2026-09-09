@@ -139,3 +139,122 @@ fn explorer_commands_navigate_toggle_and_reveal() {
 }
 
 // ---- terminal panel ------------------------------------------------------
+
+// ---- scrolling -----------------------------------------------------------
+
+/// Build a project with more files than fit in the sidebar.
+fn temp_dir_with_many_files(n: usize) -> PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "lumina_bigtree_{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..n {
+        std::fs::write(dir.join(format!("file_{i:03}.txt")), "x").unwrap();
+    }
+    dir
+}
+
+/// The panel had no scroll offset at all: rows past the sidebar height were clipped, so arrowing
+/// down a long tree moved a selection that nobody could see.
+#[test]
+fn the_explorer_scrolls_to_keep_the_selection_visible() {
+    let dir = temp_dir_with_many_files(60);
+    let mut app = app_with(&dir);
+
+    // Walk the selection well past one screenful.
+    for _ in 0..40 {
+        app.exec_id("explorer.down");
+    }
+    let text = render_to_string(&mut app, 100, 24);
+    assert!(
+        text.contains("file_040"),
+        "the selected row is on screen after scrolling: {text}"
+    );
+    assert!(
+        !text.contains("file_000"),
+        "and the top of the tree has scrolled away"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A click below the fold used to select the wrong entry, because the hit-test mapped the row
+/// against panel row 0 rather than the first *drawn* row.
+#[test]
+fn a_click_below_the_fold_selects_the_row_under_the_cursor() {
+    let dir = temp_dir_with_many_files(60);
+    let mut app = app_with(&dir);
+    for _ in 0..40 {
+        app.exec_id("explorer.down");
+    }
+    render_to_string(&mut app, 100, 24);
+
+    let inner = app.regions.sidebar_inner.expect("sidebar laid out");
+    assert!(
+        app.regions.sidebar_first_row > 0,
+        "the panel really is scrolled"
+    );
+    // Click the top drawn row and check the file it opened matches what is drawn there.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        inner.x + 2,
+        inner.y,
+    ));
+    app.drain_workers(); // `Host::open_path` queues; the app opens on the next drain
+    let opened = app
+        .editor
+        .active_document()
+        .and_then(|d| d.path.clone())
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let expected = format!("file_{:03}.txt", app.regions.sidebar_first_row);
+    assert_eq!(opened, expected, "the click landed on the row drawn there");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The wheel over the sidebar scrolled the editor pane next to it, because the sidebar was never
+/// in the wheel routing at all.
+#[test]
+fn the_wheel_scrolls_the_sidebar_not_the_editor_behind_it() {
+    let dir = temp_dir_with_many_files(60);
+    let mut app = app_with(&dir);
+    render_to_string(&mut app, 100, 24);
+    let sidebar = app.regions.sidebar.expect("sidebar laid out");
+
+    app.on_mouse(mouse(
+        MouseEventKind::ScrollDown,
+        sidebar.x + 1,
+        sidebar.y + 3,
+    ));
+    render_to_string(&mut app, 100, 24);
+    assert!(
+        app.regions.sidebar_first_row > 0,
+        "the wheel moved the tree, not the editor"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A file created outside the editor never appeared: the watcher emitted `DidChangeConfig` for a
+/// tree change and nothing consumed it. It now emits `FilesChanged`, which the explorer rebuilds on.
+#[test]
+fn a_file_created_outside_the_editor_appears_in_the_tree() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    assert!(!render_to_string(&mut app, 100, 24).contains("brand_new"));
+
+    app.registry
+        .broadcast(&editor_plugin::event::Event::FilesChanged, &mut app.editor);
+    std::fs::write(dir.join("brand_new.txt"), "hi").unwrap();
+    app.registry
+        .broadcast(&editor_plugin::event::Event::FilesChanged, &mut app.editor);
+
+    assert!(
+        render_to_string(&mut app, 100, 24).contains("brand_new"),
+        "the explorer rebuilt on the tree-change event"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -14,7 +14,7 @@ use super::util::{CLR_ACCENT, CLR_SEL};
 
 /// Render the sidebar and return its inner content region (below the title), so the mouse
 /// router can hit-test panel rows against the same geometry the rows were drawn into.
-pub(super) fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
+pub(super) fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) -> (Rect, usize) {
     let focused = app.editor.focus == Focus::Sidebar;
     let border_style = if focused {
         Style::default().fg(CLR_ACCENT)
@@ -23,8 +23,8 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
     };
     // The panel and its title both come from the contribution, not a literal: any plugin that
     // declares a `PanelLocation::Sidebar` panel gets drawn here (invariant #3).
-    let spec = app.active_sidebar_panel();
-    let title = spec
+    let title = app
+        .active_sidebar_panel()
         .map(|p| format!(" {} ", p.title.to_uppercase()))
         .unwrap_or_else(|| " EXPLORER ".to_string());
     let block = Block::default()
@@ -37,12 +37,23 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let content = spec.and_then(|p| app.editor.panels.get(&p.id));
+    // The panel scrolls: it had no offset at all, so a tree longer than the sidebar was simply
+    // clipped and the selection could walk off the bottom with nothing on screen moving.
+    let panel_id = app.active_sidebar_panel_id();
+    let (rows, selected) = panel_id
+        .as_ref()
+        .and_then(|id| app.editor.panels.get(id))
+        .map_or((0, 0), |p| (p.lines.len(), p.selected));
+    app.reconcile_sidebar_scroll(rows, selected, inner.height as usize);
+    let first_row = app.editor.sidebar_scroll;
+    let content = panel_id.as_ref().and_then(|id| app.editor.panels.get(id));
     if let Some(panel) = content {
         let lines: Vec<Line> = panel
             .lines
             .iter()
             .enumerate()
+            .skip(first_row)
+            .take(inner.height as usize)
             .map(|(i, l)| {
                 let mut spans: Vec<TSpan> = Vec::new();
                 spans.push(TSpan::raw("  ".repeat(l.depth)));
@@ -75,7 +86,7 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
         ];
         f.render_widget(Paragraph::new(hint), inner);
     }
-    inner
+    (inner, first_row)
 }
 
 /// Map a panel `Span` style key to a concrete style. Shared by the sidebar and the bottom

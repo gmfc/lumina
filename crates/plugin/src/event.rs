@@ -18,6 +18,11 @@ pub enum Event {
     ExternalReload(DocId),
     /// Configuration was reloaded.
     DidChangeConfig,
+    /// A path under the workspace root appeared, vanished, or changed, and it is not one of the
+    /// open documents. Distinct from [`Event::DidChangeConfig`], which the watcher used to
+    /// borrow for this and which nothing consumed — so a file created or deleted outside the
+    /// editor never showed up in the explorer.
+    FilesChanged,
     /// The active tab changed.
     DidChangeActive(Option<DocId>),
     /// A background job (spawned via [`crate::Host::spawn_job`]) finished. `id` is the
