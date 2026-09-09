@@ -217,6 +217,12 @@ pub enum FileKind {
     /// Not text. `label` names the format when a magic number matched, else it is the generic
     /// "Binary file" (or "Device or pipe" for a non-regular file).
     Binary { label: &'static str },
+    /// Text, but not in an encoding this editor can decode *and re-encode* — a legacy 8-bit
+    /// codepage (Latin-1, CP1252, Shift-JIS, …) rather than UTF-8 or BOM-marked UTF-16.
+    ///
+    /// Kept apart from [`FileKind::Binary`] only so the notice can say something true: these
+    /// bytes really are text, they just cannot survive the round trip.
+    UnsupportedEncoding,
 }
 
 /// What a cheap head-probe learned about a file, without reading it whole.
@@ -234,6 +240,11 @@ pub enum Refusal {
     /// The bytes aren't text. Not overridable: a NUL-bearing buffer can't round-trip through a
     /// UTF-8 rope, so "open anyway" would corrupt the file on the first save.
     Binary { label: &'static str, len: u64 },
+    /// Text in an encoding with no decoder here. Not overridable, for the same reason as
+    /// `Binary` and with more at stake: lossy decoding turns every un-decodable byte into
+    /// U+FFFD, and the first save writes those replacement characters over the original
+    /// (invariant #6 — file fidelity).
+    UnsupportedEncoding { len: u64 },
     /// Text, but over the configured ceiling. Overridable (`file.openAnyway`).
     TooLarge { len: u64, limit: u64 },
 }
@@ -243,6 +254,7 @@ impl Refusal {
     pub fn label(&self) -> &'static str {
         match self {
             Refusal::Binary { label, .. } => label,
+            Refusal::UnsupportedEncoding { .. } => "Text in an unsupported encoding",
             Refusal::TooLarge { .. } => "Large file",
         }
     }
@@ -250,7 +262,9 @@ impl Refusal {
     /// The file's size in bytes.
     pub fn len(&self) -> u64 {
         match self {
-            Refusal::Binary { len, .. } | Refusal::TooLarge { len, .. } => *len,
+            Refusal::Binary { len, .. }
+            | Refusal::UnsupportedEncoding { len }
+            | Refusal::TooLarge { len, .. } => *len,
         }
     }
 
@@ -295,6 +309,28 @@ pub enum Opened {
     /// Safe to edit. `large` is already set from the limits.
     Text(Box<Document>),
     Refused(Refusal),
+}
+
+/// Whether `bytes` are text this editor cannot faithfully round-trip: decodable only by
+/// throwing information away.
+///
+/// UTF-16 is excluded because it carries a BOM and has a real decoder *and* encoder here, so it
+/// round-trips. Everything else has to be valid UTF-8, because [`decode`] would otherwise hand
+/// the rope `U+FFFD` for each bad byte and [`encode`] would write those replacements back over
+/// the file on the first save.
+///
+/// `truncated` says the slice is a head-probe rather than the whole file. A multi-byte character
+/// cut in half by the probe boundary is not a flaw in the file, and `Utf8Error::error_len()`
+/// reports exactly that case as `None` ("unexpected end of input").
+fn is_unsupported_encoding(bytes: &[u8], truncated: bool) -> bool {
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        return false;
+    }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    match std::str::from_utf8(body) {
+        Ok(_) => false,
+        Err(e) => !(truncated && e.error_len().is_none()),
+    }
 }
 
 /// Classify `path` from its metadata and first [`SNIFF_BYTES`] bytes. O(header), never O(file):
@@ -409,6 +445,11 @@ pub fn classify(head: &[u8]) -> FileKind {
             .unwrap_or("Binary file");
         return FileKind::Binary { label };
     }
+    // Last, because it is the only check that can be wrong about the rest of the file: a head
+    // that is clean UTF-8 says nothing about byte 9000. `open` re-runs it on the whole buffer.
+    if is_unsupported_encoding(head, true) {
+        return FileKind::UnsupportedEncoding;
+    }
     FileKind::Text
 }
 
@@ -421,6 +462,11 @@ pub fn open(path: &Path, limits: &Limits) -> Result<Opened> {
     if let FileKind::Binary { label } = probe.kind {
         return Ok(Opened::Refused(Refusal::Binary {
             label,
+            len: probe.len,
+        }));
+    }
+    if probe.kind == FileKind::UnsupportedEncoding {
+        return Ok(Opened::Refused(Refusal::UnsupportedEncoding {
             len: probe.len,
         }));
     }
@@ -447,6 +493,11 @@ pub fn open(path: &Path, limits: &Limits) -> Result<Opened> {
             len,
             limit: limits.max_bytes,
         }));
+    }
+    // The probe only saw the first 8 KiB; a stray Latin-1 byte further in is just as fatal on
+    // save, and this is the last point before the bytes become an editable buffer.
+    if is_unsupported_encoding(&bytes, false) {
+        return Ok(Opened::Refused(Refusal::UnsupportedEncoding { len }));
     }
     let mut doc = document_from(path, &bytes);
     doc.large = limits.is_large(len);
@@ -744,8 +795,88 @@ mod tests {
         assert_eq!(classify(b""), FileKind::Text, "an empty file is text");
         // Shorter than the longest magic prefix — must compare on the available slice, not panic.
         assert_eq!(classify(b"%P"), FileKind::Text);
-        // Latin-1 source (invalid UTF-8, no NULs) still opens, lossily, as it always has.
-        assert_eq!(classify(b"caf\xe9 au lait"), FileKind::Text);
+        // A multi-byte character cut in half by the 8 KiB probe boundary is not a flaw in the
+        // file — only a genuinely invalid sequence is.
+        assert_eq!(classify("café au lait".as_bytes()), FileKind::Text);
+        let mut cut = "héllo wörld ".repeat(8).into_bytes();
+        cut.push(0xC3); // leading byte of a 2-byte sequence, body truncated by the probe
+        assert_eq!(classify(&cut), FileKind::Text);
+    }
+
+    /// Invariant #6, the destructive half: a Latin-1 / CP1252 / Shift-JIS file has no NULs and no
+    /// magic number, so it used to sail through as text, decode through `from_utf8_lossy`, and
+    /// come back as U+FFFD over the original on the first save. The module already refuses UTF-32
+    /// for exactly this reason ("re-encode that mojibake over the original"); legacy 8-bit was the
+    /// one gap left.
+    #[test]
+    fn text_in_an_undecodable_encoding_is_refused_rather_than_mangled() {
+        assert_eq!(
+            classify(b"caf\xe9 au lait"),
+            FileKind::UnsupportedEncoding,
+            "Latin-1"
+        );
+        assert_eq!(
+            classify(b"\x82\xa0\x82\xa2 shift-jis"),
+            FileKind::UnsupportedEncoding
+        );
+
+        // And it survives the round trip through `open`, which is what actually guards the save.
+        let path = temp_bytes("latin1.txt", b"caf\xe9 au lait\n");
+        let opened = open(&path, &Limits::from_mb(1, 1)).unwrap();
+        fs::remove_file(&path).ok();
+        assert!(matches!(
+            opened,
+            Opened::Refused(Refusal::UnsupportedEncoding { .. })
+        ));
+    }
+
+    /// The head probe only sees the first 8 KiB, so `open` has to re-check the whole buffer —
+    /// otherwise a single stray byte past the probe window reaches the rope and gets written back
+    /// as U+FFFD.
+    #[test]
+    fn a_bad_byte_past_the_probe_window_is_still_caught() {
+        let mut bytes = vec![b'a'; SNIFF_BYTES + 16];
+        bytes.push(0xE9);
+        bytes.extend_from_slice(b" tail\n");
+        assert_eq!(
+            classify(&bytes[..SNIFF_BYTES]),
+            FileKind::Text,
+            "the probe window really is clean, so only the full read can catch this"
+        );
+        let path = temp_bytes("late.txt", &bytes);
+        let opened = open(&path, &Limits::from_mb(1, 1)).unwrap();
+        fs::remove_file(&path).ok();
+        assert!(matches!(
+            opened,
+            Opened::Refused(Refusal::UnsupportedEncoding { .. })
+        ));
+    }
+
+    /// UTF-8 (with or without a BOM) and BOM-marked UTF-16 all round-trip, so none of them may be
+    /// caught by the new gate.
+    #[test]
+    fn every_encoding_with_an_encoder_still_opens() {
+        assert_eq!(classify("héllo — wörld 🎉".as_bytes()), FileKind::Text);
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend_from_slice("héllo".as_bytes());
+        assert_eq!(classify(&bom), FileKind::Text, "UTF-8 BOM");
+        assert_eq!(
+            classify(&[0xFF, 0xFE, b'h', 0, b'i', 0]),
+            FileKind::Text,
+            "UTF-16 LE"
+        );
+        assert_eq!(
+            classify(&[0xFE, 0xFF, 0, b'h', 0, b'i']),
+            FileKind::Text,
+            "UTF-16 BE"
+        );
+    }
+
+    /// The refusal is not overridable, for the same reason binary isn't: forcing it open would
+    /// stage exactly the corruption the refusal prevents.
+    #[test]
+    fn an_undecodable_encoding_cannot_be_forced_open() {
+        assert!(!Refusal::UnsupportedEncoding { len: 12 }.is_overridable());
     }
 
     #[test]

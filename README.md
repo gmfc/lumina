@@ -179,6 +179,11 @@ filesystem plus the first 8 KiB — and decides what kind of tab to give you:
   its size. Binary refusals aren't overridable — those bytes can't round-trip through a text
   buffer, so "open anyway" would corrupt the file on the first save. **`Ctrl+K Ctrl+H` opens a
   hex view** instead, which works for any file.
+- **Text in an encoding lumina can't re-encode** — a legacy 8-bit codepage (Latin-1, CP1252,
+  Shift-JIS) rather than UTF-8 or BOM-marked UTF-16 → a tab saying so. Also not overridable, and
+  for a sharper reason than binary: decoding it means turning every undecodable byte into `U+FFFD`,
+  and the first save would write those replacements over your file. Convert it (`iconv -f latin1
+  -t utf-8`) or read the bytes with `Ctrl+K Ctrl+H`.
 - **A file some plugin claims** → that plugin's viewer. `.pdf` opens in the built-in PDF
   viewer, which extracts the document's text page by page (`.csv`/`.tsv` too, if you install
   the `csvview` example). **`Ctrl+K Ctrl+T` opens it as text instead** — a viewer can claim an
