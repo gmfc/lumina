@@ -27,6 +27,7 @@ impl App {
             "help.keybindings" => self.open_keybindings_help(),
             "help.commands" => self.exec_id("view.commandPalette"),
             "view.notifications" => self.open_notification_log(),
+            "view.nextSidebarPanel" => self.cycle_sidebar_panel(),
             "view.dismissNotice" => self.editor.dismiss_status(),
             other => {
                 let palette = self.chord_for("view.commandPalette", "Ctrl+Shift+P");

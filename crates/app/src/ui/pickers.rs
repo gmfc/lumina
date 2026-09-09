@@ -134,12 +134,11 @@ fn draw_completion_rows(
 /// The bottom results dock: draws whatever `PanelContent` a plugin published to `"search.results"`
 /// (the project-search plugin's query line + grouped hits). A pure function of the panel state —
 /// no search-specific knowledge lives here.
-pub(super) fn render_bottom_panel(f: &mut Frame, app: &App, body: Rect) {
-    let Some(panel) = app.editor.panels.get("search.results") else {
-        return;
-    };
+pub(super) fn render_bottom_panel(f: &mut Frame, app: &App, body: Rect) -> Option<(Rect, usize)> {
+    let spec = app.active_bottom_panel()?;
+    let panel = app.editor.panels.get(&spec.id)?;
     if panel.lines.is_empty() {
-        return; // closed / cleared
+        return None; // closed / cleared
     }
     let height = (body.height / 2).max(6).min(body.height);
     let rect = Rect::new(body.x, body.y + body.height - height, body.width, height);
@@ -148,7 +147,7 @@ pub(super) fn render_bottom_panel(f: &mut Frame, app: &App, body: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(CLR_ACCENT))
         .title(TSpan::styled(
-            " Search ",
+            format!(" {} ", spec.title),
             Style::default().add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(Color::Rgb(28, 30, 36)));
@@ -177,6 +176,10 @@ pub(super) fn render_bottom_panel(f: &mut Frame, app: &App, body: Rect) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines), inner);
+    // Hand back the drawn region and the index of its first visible row, so the mouse router can
+    // map a click to the row under it. Without this the dock published clickable rows and then
+    // let every click fall through to the editor behind it.
+    Some((inner, start))
 }
 
 /// The fuzzy picker overlay (command palette / quick open / goto line): a centered box

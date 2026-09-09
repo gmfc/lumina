@@ -230,3 +230,139 @@ fn plugin_actions_dispatch_all_kinds() {
     assert!(app.editor.panels.contains_key("multi.panel"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- the panel contribution seam ------------------------------------------
+
+/// A plugin that contributes one sidebar panel and one bottom panel, publishes a clickable row
+/// into each, and records any activation it receives as a status item so the test can see it.
+struct PanelSpy;
+
+impl PanelSpy {
+    const SIDE: &'static str = "spy.side";
+    const BOTTOM: &'static str = "spy.bottom";
+
+    fn row(text: &str, payload: &str) -> editor_plugin::PanelLine {
+        let mut line = editor_plugin::PanelLine::new(vec![editor_plugin::Span::new(text, "file")]);
+        line.payload = Some(payload.to_string());
+        line
+    }
+}
+
+impl editor_plugin::Plugin for PanelSpy {
+    fn id(&self) -> &str {
+        "spy"
+    }
+
+    fn contributions(&self) -> editor_plugin::Contributions {
+        editor_plugin::Contributions::builder()
+            .panel(Self::SIDE, "Spy", editor_plugin::PanelLocation::Sidebar)
+            .panel(
+                Self::BOTTOM,
+                "Spy Output",
+                editor_plugin::PanelLocation::Bottom,
+            )
+            .build()
+    }
+
+    fn render_panel(&mut self, panel_id: &str, host: &mut dyn editor_plugin::Host) {
+        if panel_id == Self::SIDE {
+            host.set_panel(
+                Self::SIDE,
+                editor_plugin::PanelContent {
+                    lines: vec![Self::row("spy-sidebar-row", "side-payload")],
+                    selected: 0,
+                },
+            );
+        }
+    }
+
+    fn on_panel_activate(
+        &mut self,
+        panel_id: &str,
+        payload: &str,
+        host: &mut dyn editor_plugin::Host,
+    ) {
+        host.set_status("spy.last", format!("{panel_id}:{payload}"));
+    }
+}
+
+/// Registering a plugin with a sidebar panel used to achieve nothing: the sidebar drew the
+/// literal id `"explorer.tree"`, so the contribution existed on the producer side and stopped
+/// dead on the consumer side. It now cycles into view, is titled from the contribution, and
+/// `Plugin::render_panel` — which had no production caller at all — is what fills it.
+#[test]
+fn a_contributed_sidebar_panel_renders() {
+    let path = temp_file("a\nb\n");
+    let mut app = app_with(&path);
+    app.registry.add(Box::new(PanelSpy));
+
+    // The explorer is contributed first, so the spy needs a turn.
+    app.exec_id("view.nextSidebarPanel");
+    assert_eq!(
+        app.active_sidebar_panel().map(|p| p.id.as_str()),
+        Some(PanelSpy::SIDE)
+    );
+
+    let text = render_to_string(&mut app, 100, 24);
+    assert!(text.contains("spy-sidebar-row"), "panel content drawn");
+    assert!(text.contains("SPY"), "title comes from the contribution");
+    std::fs::remove_file(&path).ok();
+}
+
+/// And a click on one of its rows reaches the plugin — activation was hardcoded to
+/// `"explorer.tree"` too, so a contributed panel's rows were inert even once drawn.
+#[test]
+fn clicking_a_contributed_sidebar_row_reaches_its_plugin() {
+    let path = temp_file("a\nb\n");
+    let mut app = app_with(&path);
+    app.registry.add(Box::new(PanelSpy));
+    app.exec_id("view.nextSidebarPanel");
+    render_to_string(&mut app, 100, 24); // lay out, so the hit-test geometry exists
+
+    let inner = app.regions.sidebar_inner.expect("sidebar laid out");
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        inner.x,
+        inner.y,
+    ));
+    assert_eq!(
+        app.editor.status_items.get("spy.last").map(String::as_str),
+        Some("spy.side:side-payload"),
+        "the click reached the owning plugin"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// The bottom results dock had the same two faults: it drew the literal `"search.results"`, and
+/// it published clickable rows that nothing routed — every click fell through to the buffer
+/// drawn behind it.
+#[test]
+fn a_contributed_bottom_panel_renders_and_routes_clicks() {
+    let path = temp_file("a\nb\n");
+    let mut app = app_with(&path);
+    app.registry.add(Box::new(PanelSpy));
+    app.editor.panels.insert(
+        PanelSpy::BOTTOM.to_string(),
+        editor_plugin::PanelContent {
+            lines: vec![PanelSpy::row("spy-bottom-row", "bottom-payload")],
+            selected: 0,
+        },
+    );
+
+    let text = render_to_string(&mut app, 100, 24);
+    assert!(text.contains("spy-bottom-row"), "panel content drawn");
+    assert!(text.contains("Spy Output"), "title from the contribution");
+
+    let (rect, _) = app.regions.bottom_panel.expect("bottom panel laid out");
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x,
+        rect.y,
+    ));
+    assert_eq!(
+        app.editor.status_items.get("spy.last").map(String::as_str),
+        Some("spy.bottom:bottom-payload"),
+        "the click reached the owning plugin instead of the editor behind it"
+    );
+    std::fs::remove_file(&path).ok();
+}

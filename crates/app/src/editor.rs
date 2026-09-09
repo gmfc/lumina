@@ -249,6 +249,10 @@ pub(crate) struct EditorState {
     pub(crate) picker_mru: Vec<String>,
     /// Rendered panel content, keyed by panel id (set by plugins).
     pub(crate) panels: HashMap<String, PanelContent>,
+    /// Which contributed `PanelLocation::Sidebar` panel the sidebar is showing. `None` means
+    /// "the first one contributed" — the sidebar resolves it lazily so a panel contributed by a
+    /// plugin loaded after startup still gets a turn.
+    pub(crate) sidebar_panel: Option<String>,
     /// Status-bar item text, keyed by item id.
     pub(crate) status_items: HashMap<String, String>,
     /// Events queued during a dispatch, drained + broadcast by `App`.
@@ -356,6 +360,7 @@ impl EditorState {
             notice_seq: 0,
             picker_mru: Vec::new(),
             panels: HashMap::new(),
+            sidebar_panel: None,
             status_items: HashMap::new(),
             pending_events: Vec::new(),
             pending_commands: Vec::new(),

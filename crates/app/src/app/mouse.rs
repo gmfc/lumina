@@ -39,6 +39,15 @@ impl App {
             self.context_menu_click(col, row);
             return;
         }
+        // The results dock overlays the editor body, so it is hit-tested first — otherwise every
+        // click on a result row lands in the buffer drawn behind it, which is exactly what used
+        // to happen: the panel published clickable rows that nothing ever routed.
+        if let Some((rect, first_row)) = self.regions.bottom_panel {
+            if in_rect(rect, col, row) {
+                self.bottom_panel_click(row, rect, first_row);
+                return;
+            }
+        }
         if in_rect(self.regions.editor, col, row) {
             self.editor_area_click(col, row, mods);
         } else if in_rect(self.regions.tabs, col, row) {
@@ -280,11 +289,39 @@ impl App {
         }
     }
 
+    /// Activate the clicked row of the contributed bottom panel (project search's hits today, a
+    /// problems or build-output list tomorrow — the id comes from the contribution).
+    pub(super) fn bottom_panel_click(
+        &mut self,
+        row: u16,
+        rect: ratatui::layout::Rect,
+        first_row: usize,
+    ) {
+        let Some(panel_id) = self.active_bottom_panel().map(|p| p.id.clone()) else {
+            return;
+        };
+        let idx = first_row + row.saturating_sub(rect.y) as usize;
+        let payload = self
+            .editor
+            .panels
+            .get(&panel_id)
+            .and_then(|p| p.lines.get(idx))
+            .and_then(|l| l.payload.clone());
+        if let Some(payload) = payload {
+            self.registry
+                .activate_panel_row(&panel_id, &payload, &mut self.editor);
+        }
+    }
+
     pub(super) fn sidebar_click(&mut self, _col: u16, row: u16) {
-        // Route to the explorer plugin's panel row, if present (Phase 4).
-        if let Some(panel) = self.editor.panels.get("explorer.tree") {
+        // Route to whichever sidebar panel is showing — the id comes from the contribution, not
+        // a literal, so a click reaches an SCM or test panel exactly as it reaches the explorer.
+        let Some(panel_id) = self.active_sidebar_panel_id() else {
+            return;
+        };
+        if let Some(panel) = self.editor.panels.get(&panel_id) {
             // Panel rows are drawn into the sidebar block's *inner* area (below the
-            // " EXPLORER " title row), so hit-test against that content region — using the
+            // panel title row), so hit-test against that content region — using the
             // outer region's top would select the row one line below the cursor.
             let inner_top = self
                 .regions
@@ -296,7 +333,7 @@ impl App {
             if let Some(line) = panel.lines.get(idx) {
                 if let Some(payload) = line.payload.clone() {
                     self.registry
-                        .activate_panel_row("explorer.tree", &payload, &mut self.editor);
+                        .activate_panel_row(&panel_id, &payload, &mut self.editor);
                 }
             }
         }

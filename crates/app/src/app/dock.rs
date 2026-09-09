@@ -7,6 +7,86 @@ use super::*;
 use crate::editor::{DockTab, Focus};
 
 impl App {
+    /// Every contributed sidebar panel, in contribution order.
+    ///
+    /// This is what makes `PanelLocation` mean something. The sidebar used to draw the literal id
+    /// `"explorer.tree"`, so a plugin could declare a `Sidebar` panel, publish content to it, and
+    /// have nothing appear — the seam existed on the producer side and stopped dead on the
+    /// consumer side (invariant #3: no privileged back doors).
+    pub(crate) fn sidebar_panels(&self) -> Vec<&editor_plugin::PanelSpec> {
+        self.registry
+            .panels()
+            .iter()
+            .filter(|p| p.location == editor_plugin::PanelLocation::Sidebar)
+            .collect()
+    }
+
+    /// The sidebar panel to draw: the chosen one while it is still contributed, else the first.
+    pub(crate) fn active_sidebar_panel(&self) -> Option<&editor_plugin::PanelSpec> {
+        let panels = self.registry.panels();
+        self.editor
+            .sidebar_panel
+            .as_deref()
+            .and_then(|id| {
+                panels
+                    .iter()
+                    .find(|p| p.id == id && p.location == editor_plugin::PanelLocation::Sidebar)
+            })
+            .or_else(|| self.sidebar_panels().into_iter().next())
+    }
+
+    /// The active sidebar panel's id, owned so callers can use it while borrowing `self` mutably
+    /// (drawing hit-tests it, the mouse router dispatches to it).
+    pub(crate) fn active_sidebar_panel_id(&self) -> Option<String> {
+        self.active_sidebar_panel().map(|p| p.id.clone())
+    }
+
+    /// `view.nextSidebarPanel`: cycle the sidebar through the contributed sidebar panels, asking
+    /// the newly-shown one to render. A no-op with fewer than two — there is nothing to cycle.
+    pub(crate) fn cycle_sidebar_panel(&mut self) {
+        let ids: Vec<String> = self.sidebar_panels().iter().map(|p| p.id.clone()).collect();
+        if ids.len() < 2 {
+            return;
+        }
+        let current = self.active_sidebar_panel_id();
+        let next = current
+            .and_then(|id| ids.iter().position(|c| *c == id))
+            .map(|i| (i + 1) % ids.len())
+            .unwrap_or(0);
+        self.editor.sidebar_panel = Some(ids[next].clone());
+        self.refresh_sidebar_panel();
+        self.editor.focus = Focus::Sidebar;
+    }
+
+    /// Ask the owning plugin to (re)render the active sidebar panel.
+    ///
+    /// Most plugins push content when their own state changes, but `Plugin::render_panel` is the
+    /// pull half of the same contract and had no production caller at all — so a panel that only
+    /// renders on demand could never draw. Called when the sidebar switches panels.
+    pub(crate) fn refresh_sidebar_panel(&mut self) {
+        let Some(id) = self.active_sidebar_panel_id() else {
+            return;
+        };
+        self.registry.render_panel(&id, &mut self.editor);
+        // Anything the plugin queued (events, commands, opens) is picked up by the next
+        // `drain_workers` tick, like every other plugin intent.
+    }
+
+    /// The contributed `PanelLocation::Bottom` panel with content to show, if any.
+    ///
+    /// Same story as the sidebar: the results dock drew the literal id `"search.results"`, so a
+    /// contributed bottom panel (a problems list, build output) had nowhere to appear.
+    pub(crate) fn active_bottom_panel(&self) -> Option<&editor_plugin::PanelSpec> {
+        self.registry.panels().iter().find(|p| {
+            p.location == editor_plugin::PanelLocation::Bottom
+                && self
+                    .editor
+                    .panels
+                    .get(&p.id)
+                    .is_some_and(|c| !c.lines.is_empty())
+        })
+    }
+
     /// The dock tab currently displayed, clamped to an *open* tab (so a stale `dock_active` never
     /// shows an empty region). `None` = the dock is hidden.
     pub(crate) fn dock_active_tab(&self) -> Option<DockTab> {
