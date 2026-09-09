@@ -98,7 +98,7 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+Space` completions · `F12` go to definition · `Ctrl+F12` go to implementation ·
 *View: Problems* (palette) lists every diagnostic in the workspace ·
 `Shift+F12` find references · `Ctrl+Shift+O` document symbols · `F2` rename ·
-`Alt+J`/`Alt+K` next/prev git change · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
+`Alt+J`/`Alt+K` next/prev git change · *Source Control: Show Changes* (palette) · `` Ctrl+J ``/`` Ctrl+` `` toggle terminal panel ·
 `Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+K Ctrl+T` open as text ·
 `Ctrl+K Ctrl+R` keyboard-shortcut reference · `Ctrl+K Ctrl+N` notifications · `Ctrl+Q` quit.
 
@@ -132,6 +132,19 @@ goes to the shell; click the editor to return there, or use the `terminal.*` com
 header's `▾`/`▸` control minimizes and restores the dock, `×` closes a tab, and `+` opens a new
 one. Mouse-wheel over the panel scrolls its history. It is built to grow (split panes, task
 runners, and other bottom-dock contributions can hang off the same panel later).
+
+## Source control
+
+Beyond the per-line change bar in the gutter, **Source Control: Show Changes** (command palette)
+opens a sidebar panel listing everything git reports for the repository: the branch, modified and
+untracked files, and what is already staged. Rows open the file; *Stage File*, *Unstage File* and
+*Commit Staged* do what they say, and the commit box refuses an empty message rather than letting
+git reject it.
+
+Every git call runs on a worker thread — a status on a large repository takes long enough to drop
+frames — and the panel re-reads the repository after each change, so the list can't drift from
+what git actually thinks. Outside a repository (or with no `git` on `PATH`) the panel says so
+rather than showing a convincing empty list.
 
 ## Vim mode
 

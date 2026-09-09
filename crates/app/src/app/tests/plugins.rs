@@ -296,11 +296,18 @@ fn a_contributed_sidebar_panel_renders() {
     let mut app = app_with(&path);
     app.registry.add(Box::new(PanelSpy));
 
-    // The explorer is contributed first, so the spy needs a turn.
-    app.exec_id("view.nextSidebarPanel");
+    // Cycle until the spy's panel is showing — several builtins contribute sidebar panels, so
+    // its position in the rotation is not something this test should pin.
+    for _ in 0..8 {
+        if app.active_sidebar_panel().map(|p| p.id.as_str()) == Some(PanelSpy::SIDE) {
+            break;
+        }
+        app.exec_id("view.nextSidebarPanel");
+    }
     assert_eq!(
         app.active_sidebar_panel().map(|p| p.id.as_str()),
-        Some(PanelSpy::SIDE)
+        Some(PanelSpy::SIDE),
+        "the contributed panel is reachable by cycling"
     );
 
     let text = render_to_string(&mut app, 100, 24);
@@ -316,7 +323,12 @@ fn clicking_a_contributed_sidebar_row_reaches_its_plugin() {
     let path = temp_file("a\nb\n");
     let mut app = app_with(&path);
     app.registry.add(Box::new(PanelSpy));
-    app.exec_id("view.nextSidebarPanel");
+    for _ in 0..8 {
+        if app.active_sidebar_panel().map(|p| p.id.as_str()) == Some(PanelSpy::SIDE) {
+            break;
+        }
+        app.exec_id("view.nextSidebarPanel");
+    }
     render_to_string(&mut app, 100, 24); // lay out, so the hit-test geometry exists
 
     let inner = app.regions.sidebar_inner.expect("sidebar laid out");

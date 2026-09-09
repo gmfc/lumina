@@ -409,3 +409,171 @@ fn explorer_delete_requires_typing_the_name() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- source control ------------------------------------------------------
+
+fn scm_text(app: &App) -> String {
+    app.editor
+        .panels
+        .get("scm.changes")
+        .map(|p| {
+            p.lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .map(|s| s.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+fn settle_scm(app: &mut App, want: &str) -> bool {
+    for _ in 0..400 {
+        app.drain_workers();
+        if scm_text(app).contains(want) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
+/// Build a real repository, or `None` when git is unavailable / unconfigured (keeps CI green on
+/// minimal images, the same rule `crates/app/src/git.rs`'s own tests follow).
+fn temp_repo() -> Option<PathBuf> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "lumina_scm_{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&dir).ok()?;
+    let run = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+    };
+    run(&["init", "-q", "-b", "main"]).ok()?;
+    let _ = run(&["config", "user.email", "t@t"]);
+    let _ = run(&["config", "user.name", "t"]);
+    std::fs::write(dir.join("tracked.txt"), "one\n").ok()?;
+    run(&["add", "-A"]).ok()?;
+    if run(&["commit", "-qm", "init"])
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        std::fs::remove_dir_all(&dir).ok();
+        return None;
+    }
+    Some(dir)
+}
+
+/// The editor had a per-line change gutter and nothing at the repository level: no list of what
+/// changed, no branch, no staging. The panel is a plugin over `git status --porcelain -z`.
+#[test]
+fn scm_lists_changes_and_the_branch() {
+    let Some(dir) = temp_repo() else {
+        eprintln!("skipping: git unavailable or unconfigured");
+        return;
+    };
+    std::fs::write(dir.join("tracked.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(dir.join("untracked.txt"), "new\n").unwrap();
+
+    let mut app = app_with(&dir);
+    app.exec_id("scm.show");
+    assert!(settle_scm(&mut app, "tracked.txt"), "{}", scm_text(&app));
+
+    let text = scm_text(&app);
+    assert!(text.contains("on main"), "the branch is shown: {text}");
+    assert!(
+        text.contains("untracked"),
+        "untracked files are listed: {text}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Staging and committing, end to end against a real repository.
+#[test]
+fn scm_stages_and_commits() {
+    let Some(dir) = temp_repo() else {
+        eprintln!("skipping: git unavailable or unconfigured");
+        return;
+    };
+    std::fs::write(dir.join("tracked.txt"), "one\nchanged\n").unwrap();
+
+    let mut app = app_with(&dir);
+    app.exec_id("scm.show");
+    assert!(settle_scm(&mut app, "tracked.txt"));
+
+    app.exec_id("scm.stage");
+    assert!(settle_scm(&mut app, "1 staged"), "{}", scm_text(&app));
+
+    app.exec_id("scm.commit");
+    assert!(app.editor.prompt.is_some(), "the message box is up");
+    for c in "a real message".chars() {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+    assert!(
+        settle_scm(&mut app, "working tree clean"),
+        "after committing the tree is clean: {}",
+        scm_text(&app)
+    );
+
+    let log = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args(["log", "--oneline", "-1"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("a real message"),
+        "the commit really landed"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// An empty message must not produce a commit — git would reject it anyway, and silently doing
+/// nothing is worse than saying why.
+#[test]
+fn scm_refuses_an_empty_commit_message() {
+    let Some(dir) = temp_repo() else {
+        return;
+    };
+    std::fs::write(dir.join("tracked.txt"), "one\nchanged\n").unwrap();
+    let mut app = app_with(&dir);
+    app.exec_id("scm.show");
+    assert!(settle_scm(&mut app, "tracked.txt"));
+    app.exec_id("scm.stage");
+    assert!(settle_scm(&mut app, "1 staged"));
+
+    app.exec_id("scm.commit");
+    app.on_key(KeyEvent::from(KeyCode::Enter)); // empty
+    assert!(
+        app.editor
+            .prompt
+            .as_ref()
+            .and_then(|p| p.error.as_ref())
+            .is_some(),
+        "the box stays up carrying the reason"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Outside a repository the panel says so, rather than showing a convincing empty list.
+#[test]
+fn scm_says_when_there_is_no_repository() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    app.exec_id("scm.show");
+    assert!(
+        settle_scm(&mut app, "not a git repository"),
+        "{}",
+        scm_text(&app)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

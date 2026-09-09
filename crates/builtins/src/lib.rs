@@ -35,6 +35,7 @@ mod palette;
 mod pdf;
 mod project_search;
 mod rename;
+mod scm;
 mod semantic_tokens;
 mod signature_help;
 mod snippet;
@@ -66,6 +67,7 @@ pub fn all_builtins_with(icons: bool) -> Vec<Box<dyn Plugin>> {
         Box::new(palette::PalettePlugin::default()),
         Box::new(project_search::ProjectSearchPlugin::default()),
         Box::new(theme::ThemePlugin),
+        Box::new(scm::ScmPlugin::default()),
         // File viewers: they contribute `ViewerSpec`s, so a claimed extension opens a viewer
         // tab instead of a text buffer (and disabling one hands the extension back to the
         // binary-file notice).
