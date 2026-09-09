@@ -86,6 +86,48 @@ pub(crate) struct DiagnosticsPlugin {
 }
 
 impl DiagnosticsPlugin {
+    /// Errors and warnings across every file the server has reported on — the header's totals,
+    /// counted before the `PROBLEM_CAP` truncation so they say how much is really there.
+    fn severity_totals(&self) -> (usize, usize) {
+        let (mut errors, mut warnings) = (0usize, 0usize);
+        for d in self.by_path.values().flatten() {
+            match d.severity {
+                LspSeverity::Error => errors += 1,
+                LspSeverity::Warning => warnings += 1,
+                _ => {}
+            }
+        }
+        (errors, warnings)
+    }
+
+    /// Up to `budget` rows for one file's diagnostics, worst first. Each carries `path\tline` as
+    /// its payload so a click opens the file at the right place.
+    fn diagnostic_rows(path: &Path, diags: &[LspDiagnostic], budget: usize) -> Vec<PanelLine> {
+        let mut sorted: Vec<&LspDiagnostic> = diags.iter().collect();
+        sorted.sort_by_key(|d| (sev_rank(d.severity), d.line));
+        sorted
+            .into_iter()
+            .take(budget)
+            .map(|d| {
+                PanelLine::new(vec![
+                    Span::new(
+                        format!("  {} {:>5}: ", sev_glyph(d.severity), d.line + 1),
+                        sev_suffix(d.severity),
+                    ),
+                    Span::new(
+                        d.message
+                            .replace('\n', " ")
+                            .chars()
+                            .take(160)
+                            .collect::<String>(),
+                        "text",
+                    ),
+                ])
+                .payload(format!("{}\t{}", path.to_string_lossy(), d.line))
+            })
+            .collect()
+    }
+
     /// Render the workspace problems list, or clear it when the panel is closed.
     ///
     /// Grouped by file, errors before warnings before hints, each row carrying `path\tline` so a
@@ -98,56 +140,26 @@ impl DiagnosticsPlugin {
             return;
         }
         let root = host.root().to_path_buf();
+        let (errors, warnings) = self.severity_totals();
         let mut lines: Vec<PanelLine> = Vec::new();
-        let (mut errors, mut warnings, mut shown) = (0usize, 0usize, 0usize);
-        for diags in self.by_path.values() {
-            for d in diags {
-                match d.severity {
-                    LspSeverity::Error => errors += 1,
-                    LspSeverity::Warning => warnings += 1,
-                    _ => {}
-                }
-            }
-        }
+        let mut shown = 0usize;
         for (path, diags) in &self.by_path {
-            if diags.is_empty() || shown >= PROBLEM_CAP {
+            if diags.is_empty() {
                 continue;
             }
+            let budget = PROBLEM_CAP - shown;
+            if budget == 0 {
+                break;
+            }
+            let rows = Self::diagnostic_rows(path, diags, budget);
+            shown += rows.len();
             let name = path
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
                 .into_owned();
             lines.push(PanelLine::new(vec![Span::new(name, "dir")]));
-            let mut sorted: Vec<&LspDiagnostic> = diags.iter().collect();
-            sorted.sort_by_key(|d| (sev_rank(d.severity), d.line));
-            for d in sorted {
-                if shown >= PROBLEM_CAP {
-                    break;
-                }
-                shown += 1;
-                lines.push(
-                    PanelLine::new(vec![
-                        Span::new(
-                            format!("  {} {:>5}: ", sev_glyph(d.severity), d.line + 1),
-                            sev_suffix(d.severity),
-                        ),
-                        Span::new(
-                            d.message
-                                .replace('\n', " ")
-                                .chars()
-                                .take(160)
-                                .collect::<String>(),
-                            "text",
-                        ),
-                    ])
-                    .payload(format!(
-                        "{}\t{}",
-                        path.to_string_lossy(),
-                        d.line
-                    )),
-                );
-            }
+            lines.extend(rows);
         }
         if lines.is_empty() {
             lines.push(PanelLine::new(vec![Span::new("No problems", "dim")]));
