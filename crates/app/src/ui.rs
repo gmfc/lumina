@@ -98,7 +98,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Overlays draw last, on top of the body above the dock (plan §4).
     render_completion(f, app, editor_area);
     render_prompt(f, app, editor_area);
-    render_bottom_panel(f, app, main_body);
+    let bottom_panel = render_bottom_panel(f, app, main_body);
     render_picker(f, app, main_body);
     render_overlay(f, app, main_body);
     // The context menu draws last (on top) and hands back its per-item rects for click routing.
@@ -115,6 +115,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         lsp_content,
         lsp_status,
         context_menu,
+        bottom_panel,
     };
 }
 
@@ -151,6 +152,10 @@ pub struct Regions {
     pub lsp_status: Option<Rect>,
     /// The right-click context menu's per-item click rects (top to bottom), when it is open.
     pub context_menu: Option<Vec<Rect>>,
+    /// The bottom results dock's content region and the index of its first visible row, when a
+    /// contributed bottom panel is showing. Row hit-testing needs both: the panel scrolls, so the
+    /// rect alone cannot say which row a click landed on.
+    pub bottom_panel: Option<(Rect, usize)>,
 }
 
 /// Gutter width for a document (digits + one padding space). Shared with the mouse router.

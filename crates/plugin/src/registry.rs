@@ -136,7 +136,12 @@ impl Registry {
         reg
     }
 
-    fn add(&mut self, plugin: Box<dyn Plugin>) {
+    /// Register one more plugin, aggregating its contributions into this registry.
+    ///
+    /// The public half of [`Registry::with_plugins`]: a host that discovers a plugin after
+    /// startup (or a test that wants one extra) has to be able to add it without rebuilding the
+    /// registry and losing everything already registered.
+    pub fn add(&mut self, plugin: Box<dyn Plugin>) {
         let idx = self.plugins.len();
         let contrib = plugin.contributions();
         for c in contrib.commands {

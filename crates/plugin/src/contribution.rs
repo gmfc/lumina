@@ -26,12 +26,15 @@ impl CommandSpec {
     }
 }
 
-/// Where a panel lives in the chrome.
+/// Where a panel lives in the chrome. Read by the app when it lays the chrome out, so a
+/// contributed panel is placed by its declaration rather than by the app knowing its id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelLocation {
-    /// Left sidebar (explorer, search results).
+    /// Left sidebar. Contributed sidebar panels share the region; `view.nextSidebarPanel`
+    /// cycles between them and the title comes from [`PanelSpec::title`].
     Sidebar,
-    /// Bottom panel (search results, terminal-like output).
+    /// The bottom results dock (project-search hits, a problems list, build output). Shown
+    /// whenever the owning plugin has published rows to it.
     Bottom,
 }
 

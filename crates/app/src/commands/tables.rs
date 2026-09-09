@@ -50,6 +50,7 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         // `lsp`, nextDiagnostic/prevDiagnostic from `diagnostics`.
         // git.nextHunk / git.prevHunk titles come from the `git-nav` plugin via the registry
         ("view.toggleSidebar", "View: Toggle Sidebar"),
+        ("view.nextSidebarPanel", "View: Next Sidebar Panel"),
         ("view.toggleWrap", "View: Toggle Word Wrap"),
         // view.toggleTheme title comes from the `theme` plugin; terminal.* from the `terminal` plugin.
         // view.commandPalette / view.quickOpen / view.gotoLine titles come from the `palette` plugin.

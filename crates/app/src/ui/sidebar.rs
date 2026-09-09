@@ -21,18 +21,24 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    // The panel and its title both come from the contribution, not a literal: any plugin that
+    // declares a `PanelLocation::Sidebar` panel gets drawn here (invariant #3).
+    let spec = app.active_sidebar_panel();
+    let title = spec
+        .map(|p| format!(" {} ", p.title.to_uppercase()))
+        .unwrap_or_else(|| " EXPLORER ".to_string());
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(border_style)
         .title(TSpan::styled(
-            " EXPLORER ",
+            title,
             Style::default().add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Prefer a plugin-contributed panel (Phase 4+). Fall back to a root hint.
-    if let Some(panel) = app.editor.panels.get("explorer.tree") {
+    let content = spec.and_then(|p| app.editor.panels.get(&p.id));
+    if let Some(panel) = content {
         let lines: Vec<Line> = panel
             .lines
             .iter()
@@ -60,7 +66,10 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &App, area: Rect) -> Rect {
             )),
             Line::from(""),
             Line::from(TSpan::styled(
-                "explorer plugin not loaded",
+                match app.active_sidebar_panel() {
+                    Some(p) => format!("{} has published nothing yet", p.title),
+                    None => "no sidebar panel is contributed".to_string(),
+                },
                 Style::default().fg(Color::DarkGray),
             )),
         ];

@@ -304,6 +304,12 @@ Both are **deny-by-default**: a plugin declares `capabilities` (`edit`, `ui`, `f
 can only take the actions it was granted. See `plugins/` for worked examples — `shout`, `todo`,
 `inspector`, `csvview` (Rhai) and `wasm-hello` (WebAssembly).
 
+A **panel** is placed by its declaration, not by the editor recognising its id: declare
+`location = "sidebar"` and it joins the sidebar rotation (`View: Next Sidebar Panel` cycles;
+the heading is your `title`), or `location = "bottom"` and it shows in the results dock whenever
+you publish rows to it. Rows carrying a payload are clickable, and the click comes back to your
+plugin. The built-in explorer and project-search results go through exactly this path.
+
 Alongside commands, panels, keybindings, and menu items, a plugin can contribute a **file
 viewer**: a tab that renders a file the text editor can't. It declares the extensions it claims
 and publishes styled rows; the editor owns the tab, the scrolling, and the file-IO policy.
