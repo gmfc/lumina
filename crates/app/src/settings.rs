@@ -111,6 +111,17 @@ impl SettingsView {
             "Ensure the file ends with a single newline on save.",
             config.insert_final_newline,
         );
+        entries.push(Entry::Item(SettingItem {
+            key: "autosave_ms".into(),
+            label: "Autosave delay (ms)".into(),
+            description: "Save a modified file after this long without typing. 0 turns it off."
+                .into(),
+            widget: Widget::Number {
+                value: config.autosave_ms as i64,
+                min: 0,
+                max: 600_000,
+            },
+        }));
         toggle(
             &mut entries,
             "format_on_save",

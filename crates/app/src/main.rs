@@ -33,6 +33,28 @@ use crossterm::terminal::supports_keyboard_enhancement;
 
 use app::App;
 
+/// Install a SIGTERM/SIGHUP handler that flips a flag the run loop polls.
+///
+/// Without this the editor simply died where it stood: the terminal was left in the alternate
+/// screen with raw mode and mouse capture still on (so the user's shell echoed escape sequences),
+/// language servers were orphaned rather than shut down, and the session — open files, cursors,
+/// scroll — was never written, because that only happened after the loop exited normally.
+/// `set_flag` is async-signal-safe by construction; all the real work happens on the main thread
+/// once the loop notices.
+///
+/// Windows has no SIGTERM to catch, so there it is a flag nothing ever sets and the loop's check
+/// is a predictable false.
+pub(crate) fn install_termination_handler() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    #[cfg(unix)]
+    for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGHUP] {
+        // Best effort: a failure here leaves the previous (default) disposition, which is the
+        // behaviour we had before — it must not stop the editor from starting.
+        let _ = signal_hook::flag::register(sig, std::sync::Arc::clone(&flag));
+    }
+    flag
+}
+
 fn main() -> Result<()> {
     // Parse a single optional argument. Recognised subcommands/flags are handled before we
     // touch the terminal; anything else is treated as a path (a file or directory) to open.

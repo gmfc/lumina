@@ -47,6 +47,14 @@ pub struct App {
     pub keymap: crate::keymap::Keymap,
     /// Pending chord prefix (for multi-key chords like Ctrl+K Ctrl+S).
     pub pending: Vec<crate::keymap::Chord>,
+    /// Autosave bookkeeping: the dirty-buffer fingerprint at the last tick, and the instant the
+    /// idle window expires. The fingerprint is what distinguishes "still typing" (reset the
+    /// window) from "stopped" (save), without needing an edit hook in `editor-core`.
+    pub(crate) autosave_mark: Option<(u64, std::time::Instant)>,
+    /// Set from a signal handler when the process is asked to terminate (SIGTERM/SIGHUP), so the
+    /// run loop can exit through its normal path — restoring the terminal, tearing down language
+    /// servers, and writing the session — instead of dying where it stands.
+    pub(crate) terminate: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// User configuration.
     pub config: crate::config::Config,
     /// Char offset where the current drag began (selection anchor).

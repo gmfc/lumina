@@ -351,6 +351,15 @@ impl App {
             }
             ("insert_final_newline", SettingValue::Bool(b)) => self.config.insert_final_newline = b,
             ("format_on_save", SettingValue::Bool(b)) => self.config.format_on_save = b,
+            ("autosave_ms", SettingValue::Int(n)) => {
+                // Mirror the config loader's floor: below 200ms it fires between keystrokes.
+                self.config.autosave_ms = if n <= 0 {
+                    0
+                } else {
+                    n.clamp(200, 600_000) as u64
+                };
+                self.autosave_mark = None;
+            }
             ("git_gutter", SettingValue::Bool(b)) => self.config.git_gutter = b,
             ("icons", SettingValue::Bool(b)) => self.config.icons = b,
             ("vim", SettingValue::Bool(b)) => {

@@ -270,6 +270,7 @@ auto_indent = true          # copy indent on newline (brace-aware); dedent on a 
 trim_trailing_whitespace = false  # on save, strip trailing spaces/tabs from every line
 insert_final_newline = false      # on save, ensure the file ends with a single newline
 format_on_save = false      # on save, run the language server's formatter before writing
+autosave_ms = 0             # save a modified file after this long without typing (0 = off)
 git_gutter = true           # per-line add/modify/delete change bar in the gutter (vs HEAD)
 line_wrap = false           # soft-wrap long lines at word boundaries (Alt+Z toggles live)
 max_file_size_mb = 64       # above this a file opens as a notice tab (0 = no limit)
