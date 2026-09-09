@@ -14,15 +14,24 @@ pub struct Chord {
 }
 
 impl Chord {
-    /// Normalize a crossterm key event into a chord. Character shift is folded into the
-    /// char itself (crossterm already uppercases), so we only track shift for named keys.
+    /// Normalize a crossterm key event into a chord.
+    ///
+    /// For a bare character, shift *is* the character (`p` vs `P`) and crossterm has already
+    /// applied it, so folding it away is correct — otherwise every capital letter would need its
+    /// own binding. Once Ctrl or Alt is held the keystroke is a chord rather than text, and shift
+    /// is a real modifier: `ctrl+shift+p` must stay distinct from `ctrl+p`, or one of them
+    /// silently overwrites the other in the keymap (see [`Keymap::bind`]).
+    ///
+    /// Terminals without the kitty keyboard protocol cannot *report* that distinction — they send
+    /// the same bytes for both — so shift simply arrives unset there and
+    /// [`Keymap::resolve`] falls back to the shifted binding when the unshifted one is free.
     pub fn from_event(key: KeyEvent) -> Chord {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let mut shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let code = match key.code {
             KeyCode::Char(c) => {
-                shift = false;
+                shift &= ctrl || alt;
                 KeyCode::Char(c.to_ascii_lowercase())
             }
             other => other,
@@ -50,9 +59,11 @@ impl Chord {
             }
         }
         let code = code?;
-        // For a single character binding, fold shift into the char.
+        // Mirror `from_event`: shift is the character itself for plain typing, and a real
+        // modifier only alongside Ctrl/Alt. Keeping the two in step is what makes
+        // `ctrl+shift+p` a different binding from `ctrl+p` instead of a silent overwrite.
         let shift = if matches!(code, KeyCode::Char(_)) {
-            false
+            shift && (ctrl || alt)
         } else {
             shift
         };
@@ -143,12 +154,28 @@ pub enum Resolve {
 /// Chord-sequence → command-id bindings.
 pub struct Keymap {
     bindings: Vec<(Vec<Chord>, String)>,
+    conflicts: Vec<Conflict>,
+}
+
+/// A binding that was overwritten by a later one for the same chord sequence. Later tiers are
+/// *meant* to win (a user remap beats a plugin beats a default), so this is a record rather than
+/// an error — but a default clobbering another default means a command shipped with no way to
+/// reach it, which is what [`Keymap::conflicts`] exists to catch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conflict {
+    /// The contested chord sequence, formatted the way the reference spells it.
+    pub chord: String,
+    /// The id that lost the chord.
+    pub replaced: String,
+    /// The id that now owns it.
+    pub winner: String,
 }
 
 impl Keymap {
     pub fn new() -> Keymap {
         Keymap {
             bindings: Vec::new(),
+            conflicts: Vec::new(),
         }
     }
 
@@ -162,20 +189,36 @@ impl Keymap {
     }
 
     /// Bind a (possibly multi-chord) sequence to an id. A later bind for the same sequence
-    /// overrides an earlier one (so config wins over defaults).
+    /// overrides an earlier one (so config wins over plugin contributions wins over defaults),
+    /// and the displaced id is recorded in [`Keymap::conflicts`] so an accidental clobber inside
+    /// one tier is visible instead of silent.
+    ///
+    /// A sequence whose chords don't parse binds nothing — a typo in `[keys]` leaves the previous
+    /// binding alone rather than stealing the chord.
     pub fn bind(&mut self, chord_seq: &str, id: &str) {
-        let seq: Vec<Chord> = chord_seq
-            .split_whitespace()
-            .filter_map(Chord::parse)
-            .collect();
-        if seq.is_empty() {
+        let parts: Vec<&str> = chord_seq.split_whitespace().collect();
+        let seq: Vec<Chord> = parts.iter().filter_map(|c| Chord::parse(c)).collect();
+        // `filter_map` would otherwise silently shorten `ctrl+k ctrl+shft+s` to `ctrl+k`, binding
+        // a *prefix* of what was asked for and swallowing every chord under it.
+        if seq.is_empty() || seq.len() != parts.len() {
             return;
         }
         if let Some(existing) = self.bindings.iter_mut().find(|(s, _)| *s == seq) {
-            existing.1 = id.to_string();
+            if existing.1 != id {
+                self.conflicts.push(Conflict {
+                    chord: seq.iter().map(chord_label).collect::<Vec<_>>().join(" "),
+                    replaced: std::mem::replace(&mut existing.1, id.to_string()),
+                    winner: id.to_string(),
+                });
+            }
         } else {
             self.bindings.push((seq, id.to_string()));
         }
+    }
+
+    /// Bindings that were overwritten, oldest first. See [`Conflict`].
+    pub fn conflicts(&self) -> &[Conflict] {
+        &self.conflicts
     }
 
     /// The first bound chord sequence for `id`, formatted for display (e.g. `"Ctrl+K Ctrl+S"`),
@@ -211,7 +254,30 @@ impl Keymap {
     }
 
     /// Resolve a pending chord sequence.
+    ///
+    /// Tried exactly first, then — for terminals that cannot report Shift on a Ctrl/Alt chord,
+    /// which is most of them without the kitty keyboard protocol — again with Shift set. So
+    /// `Ctrl+Shift+O` arrives as `Ctrl+O` on a plain xterm and still reaches Document Symbols,
+    /// provided nothing claims `Ctrl+O` outright. Where both are bound the exact match wins and
+    /// the shifted binding is simply unreachable there, which is the honest outcome: the terminal
+    /// genuinely sends the same bytes for both.
     pub fn resolve(&self, seq: &[Chord]) -> Resolve {
+        let exact = self.resolve_exact(seq);
+        if let Resolve::Command(_) = exact {
+            return exact;
+        }
+        let shifted = shift_variant(seq);
+        if shifted.as_slice() != seq {
+            match (self.resolve_exact(&shifted), &exact) {
+                (cmd @ Resolve::Command(_), _) => return cmd,
+                (Resolve::Pending, Resolve::None) => return Resolve::Pending,
+                _ => {}
+            }
+        }
+        exact
+    }
+
+    fn resolve_exact(&self, seq: &[Chord]) -> Resolve {
         let mut partial = false;
         for (chords, id) in &self.bindings {
             if chords.as_slice() == seq {
@@ -227,6 +293,20 @@ impl Keymap {
             Resolve::None
         }
     }
+}
+
+/// The same sequence with Shift set on every Ctrl/Alt character chord — the binding a terminal
+/// without the kitty keyboard protocol *would* have sent if it could express it.
+fn shift_variant(seq: &[Chord]) -> Vec<Chord> {
+    seq.iter()
+        .map(|c| {
+            let shiftable = matches!(c.code, KeyCode::Char(_)) && (c.ctrl || c.alt) && !c.shift;
+            Chord {
+                shift: c.shift || shiftable,
+                ..c.clone()
+            }
+        })
+        .collect()
 }
 
 impl Default for Keymap {
