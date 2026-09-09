@@ -113,6 +113,13 @@ impl SettingsView {
         );
         toggle(
             &mut entries,
+            "format_on_save",
+            "Format on save",
+            "Run the language server's formatter before writing. Needs a server for the file's language.",
+            config.format_on_save,
+        );
+        toggle(
+            &mut entries,
             "follow_mode",
             "Follow external edits",
             "Auto-scroll to the first externally-changed line on reload.",

@@ -350,6 +350,7 @@ impl App {
                 self.config.trim_trailing_whitespace = b
             }
             ("insert_final_newline", SettingValue::Bool(b)) => self.config.insert_final_newline = b,
+            ("format_on_save", SettingValue::Bool(b)) => self.config.format_on_save = b,
             ("git_gutter", SettingValue::Bool(b)) => self.config.git_gutter = b,
             ("icons", SettingValue::Bool(b)) => self.config.icons = b,
             ("vim", SettingValue::Bool(b)) => {

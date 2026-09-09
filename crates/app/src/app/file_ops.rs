@@ -730,13 +730,24 @@ impl App {
             return;
         }
         let save_as = self.chord_for("file.saveAs", "Ctrl+K Ctrl+S");
-        let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
-            return;
-        };
-        let Some(path) = doc.path.clone() else {
+        let path = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .and_then(|d| d.path.clone());
+        let Some(path) = path else {
             self.editor.notify_warn(format!(
                 "This buffer has no file yet — {save_as} to name one"
             ));
+            return;
+        };
+        // The formatter runs before the hygiene pass, so trim/final-newline get the last word on
+        // whatever it produced, and both land in the buffer before the single write below.
+        if self.config.format_on_save {
+            self.format_before_save(id, &path);
+        }
+        let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
             return;
         };
         // On-save hygiene runs as an undoable Transaction before the write (plan §1.4).
@@ -767,7 +778,60 @@ impl App {
         // Refresh the git gutter against the just-written file (plan §4.1).
         self.request_git_status(id);
     }
+
+    /// Run the language server's document formatter and apply the result, so the write below
+    /// sees formatted text.
+    ///
+    /// This is the one place the editor deliberately blocks on the language server. Formatting
+    /// is an async round-trip, but `save_active` is synchronous and its callers depend on that:
+    /// `save_all` counts what actually reached the disk, and `save_all_and_quit` refuses to quit
+    /// while anything is still dirty. Deferring the write until the response arrived would break
+    /// both. So we pump the LSP channel until the response for *this* file lands or
+    /// [`FORMAT_ON_SAVE_TIMEOUT`] passes — the same bounded-wait bargain VS Code makes — and
+    /// dispatch every event we see on the way, so nothing that arrives meanwhile is dropped.
+    ///
+    /// A file with no server, no formatting capability, or a server still starting costs nothing:
+    /// `request_formatting` reports that it sent nothing and the save proceeds immediately.
+    fn format_before_save(&mut self, id: editor_core::DocId, path: &std::path::Path) {
+        let Some(lang) = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .and_then(|d| d.language.clone())
+        else {
+            return;
+        };
+        let tab_size = self.config.tab_width as u32;
+        if !self.lsp.request_formatting(path, &lang, tab_size, true) {
+            return;
+        }
+        let deadline = std::time::Instant::now() + FORMAT_ON_SAVE_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            let mut arrived = false;
+            for event in self.lsp.poll() {
+                if let crate::lsp::LspEvent::Formatting { uri, .. } = &event {
+                    arrived |= crate::lsp::path_from_uri(uri).as_deref() == Some(path);
+                }
+                self.handle_lsp_event(event);
+            }
+            if arrived {
+                return;
+            }
+            std::thread::sleep(FORMAT_ON_SAVE_POLL);
+        }
+        self.editor
+            .notify_warn("Formatter did not answer in time — saved unformatted");
+    }
 }
+
+/// How long a save waits for the formatter before writing the buffer as it stands. Long enough
+/// for a warm server on a real file, short enough that a wedged one costs a noticeable pause
+/// rather than a hang.
+const FORMAT_ON_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(750);
+/// How often that wait re-checks the LSP channel. `poll` is non-blocking, so this trades a little
+/// latency for not spinning a core while we wait.
+const FORMAT_ON_SAVE_POLL: std::time::Duration = std::time::Duration::from_millis(4);
 
 /// The file name of `path` for a user-facing message, falling back to the whole path.
 pub(super) fn display_name(path: &std::path::Path) -> String {
