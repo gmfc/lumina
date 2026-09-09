@@ -730,6 +730,12 @@ impl App {
             return;
         }
         let save_as = self.chord_for("file.saveAs", "Ctrl+K Ctrl+S");
+        let language = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .and_then(|d| d.language.clone());
         let path = self
             .editor
             .workspace
@@ -764,6 +770,13 @@ impl App {
                 doc.history.break_group();
                 self.editor.notify_info(format!("Saved {}", path.display()));
                 self.editor.emit(editor_plugin::event::Event::DidSave(id));
+                // Only after a successful write: `didSave` means "the file on disk changed", and
+                // it is what makes a server run its on-save check pass (rust-analyzer's flycheck,
+                // i.e. the borrow-checker and type errors that never come from the analyzer's own
+                // incremental pass).
+                if let Some(lang) = &language {
+                    self.lsp.did_save(&path, lang);
+                }
             }
             Err(e) => {
                 // A failed save leaves the work only in the buffer, so the message has to carry

@@ -28,6 +28,17 @@ pub(crate) fn initialize_params(root_uri: &str, client_version: &str) -> Value {
             "general": { "positionEncodings": ["utf-16"] },
             "window": { "workDoneProgress": true },
             "textDocument": {
+                // `didSave` is what drives a server's on-save check pass — rust-analyzer's
+                // flycheck (i.e. `cargo check`) reports borrow and type errors *only* from here,
+                // so without this the most valuable half of Rust diagnostics is never requested.
+                // `includeText: false` because the server already has the buffer from didChange;
+                // resending it on every save would double the bytes for nothing.
+                "synchronization": {
+                    "dynamicRegistration": false,
+                    "willSave": false,
+                    "willSaveWaitUntil": false,
+                    "didSave": true
+                },
                 "publishDiagnostics": { "relatedInformation": false },
                 "hover": { "contentFormat": ["plaintext"] },
                 "signatureHelp": { "signatureInformation": { "parameterInformation": { "labelOffsetSupport": true }, "activeParameterSupport": true } },
