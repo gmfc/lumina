@@ -20,6 +20,10 @@ const FIND_LAYER: &str = "find.match";
 #[derive(Default)]
 pub(crate) struct FindReplacePlugin {
     state: Option<FindState>,
+    /// The last widget's query and toggles, kept after it closes so `search.findNext` /
+    /// `search.findPrev` can resume the search. Without it F3 stopped working the moment you
+    /// pressed Esc, which is not what F3 means anywhere else.
+    last: Option<FindState>,
 }
 
 impl FindReplacePlugin {
@@ -42,9 +46,10 @@ impl FindReplacePlugin {
         self.refresh(host);
     }
 
-    /// Close the widget: drop the state, dismiss the prompt, and clear the match highlight.
+    /// Close the widget: retire the state (kept for [`Self::resume`]), dismiss the prompt, and
+    /// clear the match highlight.
     fn close(&mut self, host: &mut dyn Host) {
-        self.state = None;
+        self.last = self.state.take();
         host.dismiss_prompt();
         if let Some(id) = host.active_doc() {
             host.clear_decorations(id, FIND_LAYER);
@@ -128,6 +133,45 @@ impl FindReplacePlugin {
         }
         self.focus(host, id);
         self.publish(host, id);
+    }
+
+    /// Step the last search with the widget closed.
+    ///
+    /// `search.findNext` / `search.findPrev` used to be a deliberate no-op unless the widget was
+    /// open, so `F3` did nothing the moment you pressed Esc. Reopens with the previous query and
+    /// toggles, anchored at the caret rather than at the old origin, then steps from there.
+    /// Returns false when there is no previous query to resume.
+    fn resume(&mut self, host: &mut dyn Host, forward: bool) -> bool {
+        let Some(mut prev) = self.last.take() else {
+            return false;
+        };
+        if prev.query.is_empty() {
+            return false;
+        }
+        let caret = host.active_doc().and_then(|id| {
+            host.workspace()
+                .documents
+                .get(id)
+                .map(|d| d.selections.primary().from())
+        });
+        let Some(caret) = caret else {
+            return false;
+        };
+        prev.origin = caret;
+        self.state = Some(prev);
+        // `refresh` lands on the nearest match at or after the caret. When the caret is already
+        // sitting on one — the usual case, since closing the widget leaves it on the last hit —
+        // that is where we started, so step off it.
+        self.refresh(host);
+        let on_a_match = self
+            .state
+            .as_ref()
+            .and_then(|s| s.current_match())
+            .is_some_and(|(start, _)| start <= caret);
+        if !forward || on_a_match {
+            self.navigate(host, forward);
+        }
+        true
     }
 
     /// Replace the current match with the (capture-expanded) replacement.
@@ -237,8 +281,13 @@ impl Plugin for FindReplacePlugin {
             "search.findNext" if self.state.is_some() => self.navigate(host, true),
             "search.findPrev" if self.state.is_some() => self.navigate(host, false),
             "search.replaceAll" => self.replace_all(host),
-            // Still ours (next/prev with no open widget is a no-op), so claim it.
-            "search.findNext" | "search.findPrev" => {}
+            // No widget open: resume the last search rather than swallowing the key.
+            "search.findNext" => {
+                self.resume(host, true);
+            }
+            "search.findPrev" => {
+                self.resume(host, false);
+            }
             _ => return false,
         }
         true
@@ -261,6 +310,11 @@ impl Plugin for FindReplacePlugin {
             KeyCode::Char('r' | 'R') if key.alt => {
                 self.mutate_and_refresh(host, |s| s.regex = !s.regex)
             }
+            // The prompt claims every key while it is open, so without these F3 and Shift+F3
+            // never reached the keymap and the bindings the plugin itself contributes were dead
+            // in exactly the state a user would press them.
+            KeyCode::F(3) if key.shift => self.navigate(host, false),
+            KeyCode::F(3) => self.navigate(host, true),
             KeyCode::Up => self.navigate(host, false),
             KeyCode::Enter if key.shift => self.navigate(host, false),
             KeyCode::Enter | KeyCode::Down => self.navigate(host, true),
