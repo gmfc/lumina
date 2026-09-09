@@ -25,9 +25,6 @@ editor-lsp = { path = "../lsp" }
 editor-plugin = { path = "../plugin" }
 editor-builtins = { path = "../builtins" }
 crossterm.workspace = true
-
-[target.'cfg(unix)'.dependencies]
-signal-hook.workspace = true
 ratatui.workspace = true
 portable-pty.workspace = true
 vt100.workspace = true
@@ -46,3 +43,8 @@ notify.workspace = true
 notify-debouncer-full.workspace = true
 imara-diff.workspace = true
 arboard.workspace = true
+
+# Termination signals (SIGTERM/SIGHUP) so a killed session still flushes dirty buffers. Unix-only
+# by nature: Windows has no equivalent to hook, and the autosave tick covers it there.
+[target.'cfg(unix)'.dependencies]
+signal-hook.workspace = true
