@@ -38,6 +38,9 @@ unicode-segmentation = "1.11"
 slotmap = "1.0"
 # terminal / ui
 crossterm = "0.28"
+# Already in the tree via crossterm; declared directly so the app can install its own
+# SIGTERM/SIGHUP handler (a killed editor must still restore the terminal and save the session).
+signal-hook = { version = "0.3", default-features = false }
 ratatui = "0.29"
 portable-pty = "0.9"
 # vt100 0.15.x depends on unicode-width 0.1, which coexists with ratatui 0.29's pinned

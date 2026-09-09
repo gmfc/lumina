@@ -127,6 +127,8 @@ impl App {
             theme,
             keymap,
             pending: Vec::new(),
+            autosave_mark: None,
+            terminate: crate::install_termination_handler(),
             config,
             drag_anchor: None,
             tab_drag: None,
@@ -181,6 +183,95 @@ impl App {
     }
 
     /// Persist the open files + cursor/scroll for this project root (plan §6).
+    /// Save every dirty buffer once the user has been idle for `autosave_ms`, then persist the
+    /// session.
+    ///
+    /// The idle window is measured against a fingerprint of the dirty buffers rather than an edit
+    /// callback: any change to a document's revision (or to *which* documents are dirty) restarts
+    /// the window, so this fires when typing stops, not on a fixed interval mid-keystroke.
+    /// `editor-core` therefore needs no clock and no hook — it stays the headless model
+    /// (invariant #5).
+    ///
+    /// The session write rides along because it is the same trigger and costs a few hundred
+    /// bytes: until now it happened *only* after the run loop exited normally, so a panic, a
+    /// SIGTERM, or a `terminal.draw` error lost the whole thing.
+    pub(super) fn autosave_tick(&mut self) {
+        let delay = self.config.autosave_ms;
+        if delay == 0 {
+            self.autosave_mark = None;
+            return;
+        }
+        let Some(fingerprint) = self.dirty_fingerprint() else {
+            // Nothing dirty — no window to run, and nothing to write.
+            self.autosave_mark = None;
+            return;
+        };
+        let now = std::time::Instant::now();
+        match self.autosave_mark {
+            // Something changed since the last tick: restart the idle window.
+            Some((mark, _)) if mark != fingerprint => {
+                self.autosave_mark = Some((fingerprint, now + Duration::from_millis(delay)));
+            }
+            Some((_, deadline)) if now >= deadline => {
+                self.autosave_mark = None;
+                self.save_all_dirty_quietly();
+                self.save_session();
+            }
+            Some(_) => {}
+            None => {
+                self.autosave_mark = Some((fingerprint, now + Duration::from_millis(delay)));
+            }
+        }
+    }
+
+    /// A cheap fingerprint of "what is dirty and at which revision". `None` when nothing is.
+    fn dirty_fingerprint(&self) -> Option<u64> {
+        let mut acc: u64 = 0;
+        let mut any = false;
+        for (id, doc) in self.editor.workspace.documents.iter() {
+            if !doc.dirty || doc.path.is_none() || self.editor.is_tab_view(id) {
+                continue;
+            }
+            any = true;
+            // Mix the slot key and the revision so both "a different doc is dirty" and "the same
+            // doc changed" restart the window.
+            acc = acc
+                .rotate_left(7)
+                .wrapping_add(doc.revision)
+                .wrapping_add(format!("{id:?}").len() as u64);
+        }
+        any.then_some(acc)
+    }
+
+    /// Save every dirty, path-bearing buffer without the per-file "Saved …" notice — an autosave
+    /// the user did not ask for should not narrate itself over whatever message is on screen.
+    fn save_all_dirty_quietly(&mut self) {
+        let restore = self.editor.workspace.active_tab;
+        let count = self.editor.workspace.tabs.len();
+        let mut saved = 0;
+        for i in 0..count {
+            self.editor.workspace.focus_tab(i);
+            let eligible = self
+                .editor
+                .workspace
+                .active_doc()
+                .is_some_and(|id| !self.editor.is_tab_view(id))
+                && self
+                    .editor
+                    .active_document()
+                    .is_some_and(|d| d.dirty && d.path.is_some());
+            if eligible {
+                self.save_active();
+                saved += 1;
+            }
+        }
+        self.editor.workspace.focus_tab(restore);
+        if saved > 0 {
+            self.editor
+                .notify_info(format!("Autosaved {saved} file(s)"));
+        }
+    }
+
     pub(super) fn save_session(&self) {
         let ws = &self.editor.workspace;
         // Untitled buffers can't be restored, so only path-backed tabs are saved. `active` must

@@ -14,6 +14,12 @@ impl App {
         // Prime the git gutter for any files restored at startup (plan §4.1).
         self.refresh_git_all();
         while !self.quit {
+            // A termination signal exits through the same path as `Ctrl+Q`, so the terminal is
+            // restored, servers are shut down, and the session is written.
+            if self.terminate.load(std::sync::atomic::Ordering::Relaxed) {
+                self.quit = true;
+                break;
+            }
             // Idle-frame gate (v0.5.1): rebuild the frame + re-run the caret/LSP recomputes only when
             // something actually changed since the last frame. `force_redraw` is set by input and by
             // async worker/LSP work; `is_animating` keeps the LSP spinner ticking; the editor-pane
@@ -45,6 +51,9 @@ impl App {
                 self.force_redraw = true;
             }
             self.refresh_viewport();
+            // Autosave + the periodic session write. Cheap when idle: it compares one integer
+            // unless something is actually dirty.
+            self.autosave_tick();
         }
         // Graceful LSP teardown on quit: shutdown→exit→wait per server, bounded so a hung
         // server can't delay exit beyond the deadline (§3.8).

@@ -180,3 +180,97 @@ fn session_active_index_accounts_for_dropped_untitled_tabs() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- autosave ------------------------------------------------------------
+
+/// Autosave did not exist at all — no setting, no timer, no hook. It fires once typing stops,
+/// not on a fixed interval, so the idle window has to restart on every change.
+#[test]
+fn autosave_writes_a_dirty_buffer_once_typing_stops() {
+    let path = temp_file("start\n");
+    let mut app = app_with(&path);
+    app.config.autosave_ms = 200;
+
+    app.on_key(KeyEvent::from(KeyCode::Char('X')));
+    assert!(app.editor.active_document().unwrap().dirty);
+
+    // First tick arms the window; nothing is written yet.
+    app.autosave_tick();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "start\n",
+        "the window is still open, so nothing has been written"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(220));
+    app.autosave_tick();
+    assert!(
+        std::fs::read_to_string(&path).unwrap().starts_with('X'),
+        "the buffer reached disk once the idle window elapsed"
+    );
+    assert!(!app.editor.active_document().unwrap().dirty);
+    std::fs::remove_file(&path).ok();
+}
+
+/// Typing again inside the window restarts it — otherwise autosave would fire mid-word.
+#[test]
+fn typing_restarts_the_autosave_window() {
+    let path = temp_file("start\n");
+    let mut app = app_with(&path);
+    app.config.autosave_ms = 200;
+
+    app.on_key(KeyEvent::from(KeyCode::Char('a')));
+    app.autosave_tick();
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    app.on_key(KeyEvent::from(KeyCode::Char('b'))); // still typing
+    app.autosave_tick();
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    app.autosave_tick();
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "start\n",
+        "270ms have passed but the window restarted at 150ms, so it has not elapsed"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// Off by default, and `0` really means off — an editor that writes your file unasked is a
+/// surprise, and the on-save hooks would then run unprompted too.
+#[test]
+fn autosave_is_off_by_default() {
+    let path = temp_file("start\n");
+    let mut app = app_with(&path);
+    assert_eq!(app.config.autosave_ms, 0);
+
+    app.on_key(KeyEvent::from(KeyCode::Char('X')));
+    app.autosave_tick();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    app.autosave_tick();
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "start\n");
+    assert!(app.editor.active_document().unwrap().dirty);
+    std::fs::remove_file(&path).ok();
+}
+
+/// An untitled buffer has nowhere to go, so autosave must skip it rather than prompting or
+/// picking a filename on the user's behalf.
+#[test]
+fn autosave_leaves_a_pathless_buffer_alone() {
+    let path = temp_file("start\n");
+    let mut app = app_with(&path);
+    app.config.autosave_ms = 200;
+    app.exec_id("file.new");
+    app.on_key(KeyEvent::from(KeyCode::Char('X')));
+
+    app.autosave_tick();
+    std::thread::sleep(std::time::Duration::from_millis(220));
+    app.autosave_tick();
+
+    assert!(
+        app.editor.active_document().unwrap().dirty,
+        "the untitled buffer stays dirty; there is no file to write it to"
+    );
+    std::fs::remove_file(&path).ok();
+}

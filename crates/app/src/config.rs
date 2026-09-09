@@ -26,6 +26,10 @@ pub struct Config {
     pub trim_trailing_whitespace: bool,
     /// On save, ensure the file ends with a single newline (plan §1.4). Off by default.
     pub insert_final_newline: bool,
+    /// Idle milliseconds after which a dirty buffer with a path saves itself. `0` disables it.
+    /// Off by default: an editor that writes your file without being asked is a surprise, and
+    /// the on-save hooks (formatting, trim, final newline) would then run unprompted too.
+    pub autosave_ms: u64,
     /// On save, run the language server's document formatter before writing. Off by default,
     /// like the other on-save rewrites: a formatter that disagrees with the project's style
     /// would otherwise silently churn every file the user touches.
@@ -74,6 +78,7 @@ impl Default for Config {
             auto_indent: true,
             trim_trailing_whitespace: false,
             insert_final_newline: false,
+            autosave_ms: 0,
             format_on_save: false,
             git_gutter: true,
             line_wrap: false,
@@ -218,7 +223,7 @@ impl Config {
             .unwrap_or_default();
 
         let mut settings = toml::Table::new();
-        let entries: [(&str, toml::Value); 16] = [
+        let entries: [(&str, toml::Value); 17] = [
             ("tab_width", (self.tab_width as i64).into()),
             ("sidebar_width", (self.sidebar_width as i64).into()),
             ("follow_mode", self.follow_mode.into()),
@@ -230,6 +235,7 @@ impl Config {
                 self.trim_trailing_whitespace.into(),
             ),
             ("insert_final_newline", self.insert_final_newline.into()),
+            ("autosave_ms", (self.autosave_ms as i64).into()),
             ("format_on_save", self.format_on_save.into()),
             ("git_gutter", self.git_gutter.into()),
             ("line_wrap", self.line_wrap.into()),
@@ -320,6 +326,15 @@ impl Config {
         }
         if let Some(n) = int("large_file_mb") {
             self.large_file_mb = n.clamp(1, 4096) as u64;
+        }
+        if let Some(n) = int("autosave_ms") {
+            // 0 disables. Otherwise floor at 200ms: anything shorter saves mid-keystroke, which
+            // is what makes autosave feel like the editor fighting you.
+            self.autosave_ms = if n <= 0 {
+                0
+            } else {
+                n.clamp(200, 600_000) as u64
+            };
         }
         if let Some(n) = int("terminal_height") {
             self.terminal_height = n.clamp(3, 60) as u16;
