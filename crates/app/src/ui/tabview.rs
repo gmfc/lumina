@@ -130,6 +130,12 @@ fn reason(refusal: &files::Refusal) -> String {
              here would corrupt the file."
                 .into()
         }
+        files::Refusal::UnsupportedEncoding { .. } => {
+            "This is text, but not in UTF-8 or UTF-16 — lumina can't re-encode it, so opening it \
+             here would replace every undecodable byte the first time you saved. Convert it \
+             first (iconv -f latin1 -t utf-8), or view the bytes as hex."
+                .into()
+        }
         files::Refusal::TooLarge { limit, .. } => format!(
             "Larger than the {} open limit (settings: max_file_size_mb).",
             files::human_bytes(*limit)
