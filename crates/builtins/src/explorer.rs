@@ -19,6 +19,19 @@ use ignore::WalkBuilder;
 
 const PANEL: &str = "explorer.tree";
 
+/// Reject a name that would not name a single entry in the target directory. A path separator is
+/// the one that matters: without this check, typing `../x` in the new-file prompt would silently
+/// create the file somewhere other than where the user is looking.
+fn leaf_name(trimmed: &str) -> Result<(), String> {
+    if trimmed.is_empty() {
+        Err("Give it a name".to_string())
+    } else if trimmed.contains(['/', '\\']) {
+        Err("Names cannot contain a path separator".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// One visible row of the flattened tree (plan §6: keep a flat `Vec` for O(1) hit-testing).
 struct Row {
     path: PathBuf,
@@ -301,35 +314,28 @@ impl ExplorerPlugin {
             return;
         };
         let trimmed = value.trim().to_string();
-        let result = match &op {
+        // Create and rename both take a bare leaf name, so they share one check; delete takes the
+        // existing name back as a confirmation and validates it against the file itself.
+        let named = match &op {
+            PendingOp::Delete { .. } => Ok(()),
+            _ => leaf_name(&trimmed),
+        };
+        let result = named.and_then(|()| match &op {
             PendingOp::NewFile { dir } | PendingOp::NewFolder { dir } => {
-                if trimmed.is_empty() {
-                    Err("Give it a name".to_string())
-                } else if trimmed.contains(['/', '\\']) {
-                    // A path separator here would silently create somewhere else entirely.
-                    Err("Names cannot contain a path separator".to_string())
-                } else {
-                    let target = dir.join(&trimmed);
-                    match op {
-                        PendingOp::NewFolder { .. } => host.create_dir(&target),
-                        _ => host
-                            .create_file(&target)
-                            .inspect(|_| host.open_path(&target)),
-                    }
+                let target = dir.join(&trimmed);
+                match op {
+                    PendingOp::NewFolder { .. } => host.create_dir(&target),
+                    _ => host
+                        .create_file(&target)
+                        .inspect(|_| host.open_path(&target)),
                 }
             }
             PendingOp::Rename { path } => {
-                if trimmed.is_empty() {
-                    Err("Give it a name".to_string())
-                } else if trimmed.contains(['/', '\\']) {
-                    Err("Names cannot contain a path separator".to_string())
-                } else {
-                    let to = path
-                        .parent()
-                        .map(|p| p.join(&trimmed))
-                        .unwrap_or_else(|| PathBuf::from(&trimmed));
-                    host.rename_path(path, &to)
-                }
+                let to = path
+                    .parent()
+                    .map(|p| p.join(&trimmed))
+                    .unwrap_or_else(|| PathBuf::from(&trimmed));
+                host.rename_path(path, &to)
             }
             PendingOp::Delete { path } => {
                 // Deleting is the one operation with no undo, so it asks for the name back
@@ -345,7 +351,7 @@ impl ExplorerPlugin {
                     host.delete_path(path)
                 }
             }
-        };
+        });
         match result {
             Ok(()) => {
                 // Expand the destination, so a file created inside a collapsed folder appears
