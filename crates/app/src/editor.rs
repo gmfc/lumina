@@ -249,6 +249,13 @@ pub(crate) struct EditorState {
     pub(crate) picker_mru: Vec<String>,
     /// Rendered panel content, keyed by panel id (set by plugins).
     pub(crate) panels: HashMap<String, PanelContent>,
+    /// First row the sidebar panel shows. Moved by the wheel, and by the selection leaving the
+    /// viewport — but *only* when the selection actually moves, so a wheel scroll away from the
+    /// selection isn't yanked straight back.
+    pub(crate) sidebar_scroll: usize,
+    /// The panel selection the scroll offset was last reconciled against, so a selection change
+    /// can be told apart from a re-render at the same selection.
+    pub(crate) sidebar_last_selected: usize,
     /// Which contributed `PanelLocation::Sidebar` panel the sidebar is showing. `None` means
     /// "the first one contributed" — the sidebar resolves it lazily so a panel contributed by a
     /// plugin loaded after startup still gets a turn.
@@ -360,6 +367,8 @@ impl EditorState {
             notice_seq: 0,
             picker_mru: Vec::new(),
             panels: HashMap::new(),
+            sidebar_scroll: 0,
+            sidebar_last_selected: 0,
             sidebar_panel: None,
             status_items: HashMap::new(),
             pending_events: Vec::new(),

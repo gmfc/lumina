@@ -58,6 +58,32 @@ impl App {
         self.editor.focus = Focus::Sidebar;
     }
 
+    /// Bring the sidebar's scroll offset in line with the panel it is showing.
+    ///
+    /// Two rules, and the order matters. The offset follows the *selection* only when the
+    /// selection actually moved — otherwise a wheel scroll away from the selected row would be
+    /// yanked straight back on the next frame, which is what "scrolling is broken" feels like.
+    /// It is then clamped to the end, so a short tail fills the pane instead of leaving blanks.
+    pub(crate) fn reconcile_sidebar_scroll(
+        &mut self,
+        rows: usize,
+        selected: usize,
+        visible: usize,
+    ) {
+        if visible == 0 {
+            return;
+        }
+        if selected != self.editor.sidebar_last_selected {
+            self.editor.sidebar_last_selected = selected;
+            if selected < self.editor.sidebar_scroll {
+                self.editor.sidebar_scroll = selected;
+            } else if selected >= self.editor.sidebar_scroll + visible {
+                self.editor.sidebar_scroll = selected + 1 - visible;
+            }
+        }
+        self.editor.sidebar_scroll = self.editor.sidebar_scroll.min(rows.saturating_sub(visible));
+    }
+
     /// Ask the owning plugin to (re)render the active sidebar panel.
     ///
     /// Most plugins push content when their own state changes, but `Plugin::render_panel` is the

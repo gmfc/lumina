@@ -329,7 +329,9 @@ impl App {
                 .or(self.regions.sidebar)
                 .map(|r| r.y)
                 .unwrap_or(0);
-            let idx = row.saturating_sub(inner_top) as usize;
+            // The panel scrolls, so the row under the cursor is offset by the first drawn row —
+            // without this every click below the fold selected the wrong entry.
+            let idx = self.regions.sidebar_first_row + row.saturating_sub(inner_top) as usize;
             if let Some(line) = panel.lines.get(idx) {
                 if let Some(payload) = line.payload.clone() {
                     self.registry
@@ -356,6 +358,15 @@ impl App {
     /// Route a wheel scroll: the terminal's scrollback when over the terminal tab, the LSP list
     /// when over the LSP tab, else the editor.
     pub(super) fn scroll_at(&mut self, col: u16, row: u16, delta: isize) {
+        // The sidebar takes the wheel first: it is drawn over its own region, and without this
+        // a wheel over the file tree scrolled the editor pane next to it instead.
+        if self.regions.sidebar.is_some_and(|r| in_rect(r, col, row)) {
+            // Continue from the row actually drawn, so the offset never jumps after the renderer
+            // snapped it to keep the selection visible.
+            let base = self.regions.sidebar_first_row as isize;
+            self.editor.sidebar_scroll = base.saturating_add(delta).max(0) as usize;
+            return;
+        }
         if self
             .regions
             .panel_content

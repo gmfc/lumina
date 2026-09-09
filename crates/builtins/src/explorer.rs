@@ -115,9 +115,11 @@ impl Plugin for ExplorerPlugin {
     }
 
     fn on_event(&mut self, event: &Event, host: &mut dyn Host) {
-        // Refresh when the filesystem-backed tree may have changed under us (Phase 8),
-        // or when a file opens (so the selection can follow if revealed).
-        if let Event::ExternalReload(_) = event {
+        // Rebuild whenever the tree may have moved under us: a reload of an open document, or a
+        // path appearing/vanishing anywhere under the root. The latter is what makes a file
+        // created or deleted outside the editor actually show up — the watcher used to emit
+        // `DidChangeConfig` for it, which nothing consumed.
+        if matches!(event, Event::ExternalReload(_) | Event::FilesChanged) {
             self.rebuild();
             self.render(host);
         }

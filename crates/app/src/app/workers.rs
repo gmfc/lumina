@@ -211,12 +211,11 @@ impl App {
             }
         }
 
-        // Not one of our open docs → refresh the tree and move on.
+        // Not one of our open docs → tell whoever models the tree, and move on.
         let Some(id) = self.editor.workspace.find_by_path(path) else {
             self.editor
                 .pending_events
-                .push(editor_plugin::event::Event::DidChangeConfig);
-            // Also nudge the explorer to rescan on any tree change.
+                .push(editor_plugin::event::Event::FilesChanged);
             return;
         };
 
