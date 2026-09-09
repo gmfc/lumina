@@ -26,6 +26,10 @@ pub struct Config {
     pub trim_trailing_whitespace: bool,
     /// On save, ensure the file ends with a single newline (plan §1.4). Off by default.
     pub insert_final_newline: bool,
+    /// On save, run the language server's document formatter before writing. Off by default,
+    /// like the other on-save rewrites: a formatter that disagrees with the project's style
+    /// would otherwise silently churn every file the user touches.
+    pub format_on_save: bool,
     /// Show a per-line git change bar in the gutter (plan §4.1).
     pub git_gutter: bool,
     /// Start with soft word-wrap on (toggle at runtime with Alt+Z / `view.toggleWrap`).
@@ -70,6 +74,7 @@ impl Default for Config {
             auto_indent: true,
             trim_trailing_whitespace: false,
             insert_final_newline: false,
+            format_on_save: false,
             git_gutter: true,
             line_wrap: false,
             max_file_size_mb: 64,
@@ -213,7 +218,7 @@ impl Config {
             .unwrap_or_default();
 
         let mut settings = toml::Table::new();
-        let entries: [(&str, toml::Value); 15] = [
+        let entries: [(&str, toml::Value); 16] = [
             ("tab_width", (self.tab_width as i64).into()),
             ("sidebar_width", (self.sidebar_width as i64).into()),
             ("follow_mode", self.follow_mode.into()),
@@ -225,6 +230,7 @@ impl Config {
                 self.trim_trailing_whitespace.into(),
             ),
             ("insert_final_newline", self.insert_final_newline.into()),
+            ("format_on_save", self.format_on_save.into()),
             ("git_gutter", self.git_gutter.into()),
             ("line_wrap", self.line_wrap.into()),
             ("max_file_size_mb", (self.max_file_size_mb as i64).into()),
@@ -276,7 +282,7 @@ impl Config {
 
     /// The plain on/off settings.
     fn apply_bool_settings(&mut self, settings: &toml::Table) {
-        let flags: [(&str, &mut bool); 10] = [
+        let flags: [(&str, &mut bool); 11] = [
             ("follow_mode", &mut self.follow_mode),
             ("poll_watch", &mut self.poll_watch),
             ("auto_pairs", &mut self.auto_pairs),
@@ -286,6 +292,7 @@ impl Config {
                 &mut self.trim_trailing_whitespace,
             ),
             ("insert_final_newline", &mut self.insert_final_newline),
+            ("format_on_save", &mut self.format_on_save),
             ("git_gutter", &mut self.git_gutter),
             ("line_wrap", &mut self.line_wrap),
             ("icons", &mut self.icons),

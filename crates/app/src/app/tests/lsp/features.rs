@@ -244,3 +244,113 @@ fn progress_event_sets_and_clears_the_status_item() {
     assert!(!app.editor.status_items.contains_key("lsp.progress"));
     std::fs::remove_file(&path).ok();
 }
+
+// ---- format on save ------------------------------------------------------
+
+/// `format_on_save` must not cost anything when no server can format the file. The save path
+/// blocks on the formatter, so a file with no language server (or a server that never declared
+/// `documentFormattingProvider`) has to fall straight through to the write rather than stalling
+/// for the whole timeout on every Ctrl+S.
+#[test]
+fn format_on_save_does_not_stall_without_a_server() {
+    let path = temp_file("a  \nb\n");
+    let mut app = app_with(&path);
+    app.config.format_on_save = true;
+    app.editor.active_document_mut().unwrap().dirty = true;
+
+    let started = std::time::Instant::now();
+    app.save_active();
+    let took = started.elapsed();
+
+    assert!(
+        took < std::time::Duration::from_millis(200),
+        "no formatter applies, so the save should not wait for one (took {took:?})"
+    );
+    assert!(
+        !app.editor.active_document().unwrap().dirty,
+        "it still saved"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// The formatter's edits reach the *file*, not just the buffer — i.e. formatting really does
+/// happen before the write rather than racing it. Drives a real mock-server subprocess so the
+/// bounded wait in `format_before_save` is exercised end to end.
+#[cfg(unix)]
+#[test]
+fn format_on_save_writes_the_formatted_text() {
+    let bin = mock_server_bin();
+    if !bin.exists() {
+        eprintln!("skipping: mock_lsp_server not found at {bin:?}");
+        return;
+    }
+    let path = temp_rs_file("fn  main(){}\n");
+    let transcript = r#"[
+        {"expect":"initialize"},
+        {"respond":{"capabilities":{"documentFormattingProvider":true}}},
+        {"expect":"initialized"},
+        {"expect":"textDocument/didOpen"},
+        {"expect":"textDocument/formatting"},
+        {"respond":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":12}},"newText":"fn main() {}"}]},
+        {"exit":0}
+    ]"#;
+    let mut tpath = std::env::temp_dir();
+    tpath.push(format!("lumina_fmtsave_{}.json", std::process::id()));
+    std::fs::write(&tpath, transcript).unwrap();
+
+    let mut app = app_with(&path);
+    app.editor.lsp_enabled = true;
+    app.config.format_on_save = true;
+    let servers = std::collections::HashMap::from([(
+        "rust".to_string(),
+        vec![
+            bin.to_string_lossy().into_owned(),
+            tpath.to_string_lossy().into_owned(),
+        ],
+    )]);
+    app.lsp = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), servers, "test".into());
+
+    let mut ready = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        if app.lsp.is_ready("rust") {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(ready, "the server handshake completes");
+    // Let didOpen go out, as production does on the tick after the server is ready.
+    app.update_lsp();
+    app.drain_workers();
+
+    // Dirty the buffer so `save_active` has something to write, then save.
+    app.editor.active_document_mut().unwrap().set_caret(0);
+    app.save_active();
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, "fn main() {}\n",
+        "the formatter's edit should be in the file, not just the buffer"
+    );
+    assert_eq!(
+        app.editor.active_document().unwrap().to_string(),
+        "fn main() {}\n"
+    );
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&tpath).ok();
+}
+
+/// With the setting off (the default) the formatter is never asked, so a buffer saves byte for
+/// byte as the user left it — the "never silently rewrite" rule the other on-save options follow.
+#[test]
+fn format_on_save_off_leaves_the_buffer_alone() {
+    let path = temp_file("keep   me\n");
+    let mut app = app_with(&path);
+    assert!(!app.config.format_on_save, "off by default");
+    app.editor.active_document_mut().unwrap().dirty = true;
+    app.save_active();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep   me\n");
+    std::fs::remove_file(&path).ok();
+}
