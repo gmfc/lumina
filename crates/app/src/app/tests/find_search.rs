@@ -264,3 +264,114 @@ fn f3_resumes_the_last_search_after_the_widget_closes() {
     );
     std::fs::remove_file(&path).ok();
 }
+
+// ---- project-wide replace ------------------------------------------------
+
+/// Drain the worker channel until the results panel settles (no in-flight job).
+fn settle(app: &mut App) {
+    for _ in 0..400 {
+        app.drain_workers();
+        let text = search_panel_text(app);
+        if !text.contains("searching") && !text.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Project-wide replace was the one Tier-0 capability flatly missing — the search half existed
+/// and there was no command, state or UI for replacing. Files that aren't open are rewritten on
+/// a worker thread.
+#[test]
+fn project_replace_rewrites_closed_files_on_disk() {
+    let dir = temp_dir_with_files();
+    std::fs::write(dir.join("a.txt"), "alpha beta\nalpha again\n").unwrap();
+    std::fs::write(dir.join("c.txt"), "alpha once\n").unwrap();
+    let mut app = app_with(&dir);
+
+    app.exec_id("search.project");
+    for c in "alpha".chars() {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+    settle(&mut app);
+
+    // Tab to the replacement field, type, then Alt+A.
+    app.on_key(KeyEvent::from(KeyCode::Tab));
+    for c in "OMEGA".chars() {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+    for _ in 0..400 {
+        app.drain_workers();
+        if std::fs::read_to_string(dir.join("c.txt"))
+            .unwrap()
+            .contains("OMEGA")
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+        "OMEGA beta\nOMEGA again\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("c.txt")).unwrap(),
+        "OMEGA once\n"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A file that is *open* is edited through a `Transaction` rather than written underneath the
+/// buffer — so the change is undoable, and the next save can't clobber it.
+#[test]
+fn project_replace_edits_an_open_buffer_undoably() {
+    let dir = temp_dir_with_files();
+    let target = dir.join("a.txt");
+    std::fs::write(&target, "alpha beta\n").unwrap();
+    let mut app = app_with(&target);
+
+    app.exec_id("search.project");
+    for c in "alpha".chars() {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+    settle(&mut app);
+
+    app.on_key(KeyEvent::from(KeyCode::Tab));
+    for c in "OMEGA".chars() {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+    app.drain_workers();
+
+    fn doc_text(app: &App, target: &std::path::Path) -> String {
+        app.editor
+            .workspace
+            .documents
+            .iter()
+            .find(|(_, d)| d.path.as_deref() == Some(target))
+            .map(|(_, d)| d.to_string())
+            .unwrap_or_default()
+    }
+    assert_eq!(
+        doc_text(&app, &target),
+        "OMEGA beta\n",
+        "the open buffer was edited"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "alpha beta\n",
+        "the file on disk is left to the buffer's next save, not written underneath it"
+    );
+
+    app.dispatch(Command::Undo);
+    assert_eq!(
+        doc_text(&app, &target),
+        "alpha beta\n",
+        "and it is undoable"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
