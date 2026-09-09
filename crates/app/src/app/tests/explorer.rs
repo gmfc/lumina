@@ -258,3 +258,154 @@ fn a_file_created_outside_the_editor_appears_in_the_tree() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- file operations -----------------------------------------------------
+
+/// Type into the explorer's file-op prompt and confirm.
+fn type_and_enter(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+}
+
+/// The explorer was strictly read-only — no create, rename or delete at all.
+#[test]
+fn explorer_creates_a_file_and_opens_it() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    app.exec_id("explorer.newFile");
+    assert!(app.editor.prompt.is_some(), "the name prompt is up");
+
+    type_and_enter(&mut app, "created.txt");
+    app.drain_workers();
+
+    // A new entry goes into the selected folder — on a fresh tree that is the first directory.
+    let created = dir.join("sub").join("created.txt");
+    assert!(
+        created.exists(),
+        "the file was created in the selected folder"
+    );
+    assert!(app.editor.prompt.is_none(), "and the prompt closed");
+    assert!(
+        render_to_string(&mut app, 100, 24).contains("created.txt"),
+        "the tree rebuilt to show it"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn explorer_creates_a_folder() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    app.exec_id("explorer.newFolder");
+    type_and_enter(&mut app, "newdir");
+    assert!(dir.join("sub").join("newdir").is_dir());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Creating over an existing file would be silent data loss — the user is adding, not replacing.
+#[test]
+fn explorer_refuses_to_create_over_an_existing_file() {
+    let dir = temp_dir_with_files();
+    std::fs::write(dir.join("sub").join("taken.txt"), "important").unwrap();
+    let mut app = app_with(&dir);
+    app.exec_id("explorer.newFile");
+    type_and_enter(&mut app, "taken.txt");
+
+    assert!(
+        app.editor
+            .prompt
+            .as_ref()
+            .and_then(|p| p.error.as_ref())
+            .is_some(),
+        "the prompt stays up carrying the reason, so the name can be fixed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("sub").join("taken.txt")).unwrap(),
+        "important",
+        "the existing file is untouched"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A name with a path separator would silently create somewhere other than where the user is
+/// looking.
+#[test]
+fn explorer_rejects_a_name_containing_a_separator() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    app.exec_id("explorer.newFile");
+    type_and_enter(&mut app, "sub/evil.txt");
+    assert!(app
+        .editor
+        .prompt
+        .as_ref()
+        .and_then(|p| p.error.as_ref())
+        .is_some());
+    assert!(!dir.join("sub").join("evil.txt").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn explorer_renames_the_selected_entry() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    app.exec_id("explorer.down"); // select a real row
+    let before = app
+        .editor
+        .panels
+        .get("explorer.tree")
+        .map(|p| p.selected)
+        .unwrap_or(0);
+    let _ = before;
+    app.exec_id("explorer.rename");
+    // The field starts at the current name, so clear it first.
+    for _ in 0..40 {
+        app.on_key(KeyEvent::from(KeyCode::Backspace));
+    }
+    type_and_enter(&mut app, "renamed.txt");
+    assert!(dir.join("renamed.txt").exists() || dir.join("sub").join("renamed.txt").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Deletion has no undo, so it asks for the name back rather than a bare Enter — the same bar
+/// the editor sets elsewhere before discarding work.
+#[test]
+fn explorer_delete_requires_typing_the_name() {
+    let dir = temp_dir_with_files();
+    std::fs::write(dir.join("doomed.txt"), "bye").unwrap();
+    let mut app = app_with(&dir);
+    // Walk to doomed.txt.
+    for _ in 0..12 {
+        let sel = app
+            .editor
+            .panels
+            .get("explorer.tree")
+            .and_then(|p| p.lines.get(p.selected))
+            .map(|l| l.payload.clone().unwrap_or_default())
+            .unwrap_or_default();
+        if sel.ends_with("doomed.txt") {
+            break;
+        }
+        app.exec_id("explorer.down");
+    }
+
+    app.exec_id("explorer.delete");
+    type_and_enter(&mut app, "wrong-name");
+    assert!(
+        dir.join("doomed.txt").exists(),
+        "a mistyped confirmation must not delete anything"
+    );
+    assert!(app.editor.prompt.is_some(), "and the prompt stays up");
+
+    for _ in 0..20 {
+        app.on_key(KeyEvent::from(KeyCode::Backspace));
+    }
+    type_and_enter(&mut app, "doomed.txt");
+    assert!(
+        !dir.join("doomed.txt").exists(),
+        "the right name deletes it"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

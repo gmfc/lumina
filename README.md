@@ -101,6 +101,10 @@ cargo run -p lumina -- <path>     # or: cargo run --bin lmn -- <path>
 `Ctrl+PageUp`/`Ctrl+PageDown` prev/next terminal · `Ctrl+K Ctrl+H` view file as hex · `Ctrl+K Ctrl+T` open as text ·
 `Ctrl+K Ctrl+R` keyboard-shortcut reference · `Ctrl+K Ctrl+N` notifications · `Ctrl+Q` quit.
 
+The explorer's file operations live in the command palette: *Explorer: New File / New Folder /
+Rename / Delete*. A new entry goes into the selected folder, and delete asks you to type the name
+back — it is the one operation with no undo.
+
 You never have to keep this list: **`Ctrl+K Ctrl+R`** opens the same table generated from the
 keymap actually in use, so it includes plugin chords, your own `[keys]` overrides, and a section
 naming any binding an override displaced. The command palette shows each command's chord next to
