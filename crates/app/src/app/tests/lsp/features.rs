@@ -436,3 +436,104 @@ fn saving_notifies_the_server() {
     std::fs::remove_file(&path).ok();
     std::fs::remove_file(&tpath).ok();
 }
+
+// ---- problems panel ------------------------------------------------------
+
+fn problems_text(app: &App) -> String {
+    app.editor
+        .panels
+        .get("lsp.problems")
+        .map(|p| {
+            p.lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .map(|s| s.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// There was no workspace-wide diagnostics view at all — F8/Shift+F8 walked only the active
+/// document. The panel is a plain `Bottom` contribution on the plugin that already owns the model.
+#[test]
+fn the_problems_panel_lists_diagnostics_and_toggles() {
+    let path = temp_file("line one\nline two\n");
+    let mut app = app_with(&path);
+    let id = app.editor.workspace.active_doc().unwrap();
+    feed_diagnostics(&mut app, id, vec![diag(1, 0, 1, 4, "something is wrong")]);
+
+    assert!(problems_text(&app).is_empty(), "closed until asked for");
+
+    app.exec_id("lsp.problems");
+    let text = problems_text(&app);
+    assert!(text.contains("something is wrong"), "{text}");
+    assert!(text.contains("error(s)"), "carries a summary line: {text}");
+
+    app.exec_id("lsp.problems");
+    assert!(problems_text(&app).is_empty(), "toggles back off");
+    std::fs::remove_file(&path).ok();
+}
+
+/// The event carried only a `DocId`, so diagnostics for a file with no open document could only
+/// be dropped — which is most of a workspace during a project-wide check, and exactly the
+/// diagnostics a problems list exists to show. The event now carries the path too.
+#[test]
+fn the_problems_panel_lists_files_that_are_not_open() {
+    let dir = temp_dir_with_files();
+    let mut app = app_with(&dir);
+    app.exec_id("lsp.problems");
+
+    let unopened = dir.join("nowhere-near-open.rs");
+    app.editor
+        .pending_events
+        .push(editor_plugin::event::Event::LspDiagnostics {
+            doc: None,
+            path: unopened.clone(),
+            diagnostics: vec![diag(3, 0, 3, 5, "unopened file problem")],
+        });
+    app.drain_workers();
+
+    let text = problems_text(&app);
+    assert!(
+        text.contains("unopened file problem"),
+        "a diagnostic for a file with no open document is listed: {text}"
+    );
+    assert!(text.contains("nowhere-near-open.rs"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Clicking a row jumps to the file and line — the panel is only useful if it navigates.
+#[test]
+fn clicking_a_problem_opens_it_at_the_line() {
+    let dir = temp_dir_with_files();
+    let target = dir.join("a.txt");
+    std::fs::write(&target, "one\ntwo\nthree\nfour\n").unwrap();
+    let mut app = app_with(&dir);
+    app.exec_id("lsp.problems");
+    app.editor
+        .pending_events
+        .push(editor_plugin::event::Event::LspDiagnostics {
+            doc: None,
+            path: target.clone(),
+            diagnostics: vec![diag(2, 0, 2, 3, "on line three")],
+        });
+    app.drain_workers();
+    render_to_string(&mut app, 120, 30);
+
+    let (rect, _) = app.regions.bottom_panel.expect("the panel is laid out");
+    // Row 0 is the summary, row 1 the file heading, row 2 the first problem.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 2,
+        rect.y + 2,
+    ));
+    app.drain_workers();
+
+    assert_eq!(
+        app.editor.active_document().and_then(|d| d.path.clone()),
+        Some(target),
+        "the click opened the file the row names"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

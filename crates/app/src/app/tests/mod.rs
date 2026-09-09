@@ -115,10 +115,18 @@ fn feed_diagnostics(
     doc: editor_core::DocId,
     diags: Vec<editor_plugin::LspDiagnostic>,
 ) {
+    let path = app
+        .editor
+        .workspace
+        .documents
+        .get(doc)
+        .and_then(|d| d.path.clone())
+        .unwrap_or_default();
     app.editor
         .pending_events
         .push(editor_plugin::event::Event::LspDiagnostics {
             doc: Some(doc),
+            path,
             diagnostics: diags,
         });
     app.drain_workers();
