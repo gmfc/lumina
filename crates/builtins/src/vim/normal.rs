@@ -216,10 +216,9 @@ impl VimPlugin {
                     let is_jump = matches!(code, KeyCode::Char('G') | KeyCode::Char('%'));
                     if is_jump {
                         let from = Self::primary_head(host);
-                        let same_line = Self::read(host, |d| {
-                            d.char_to_line(from) == d.char_to_line(target)
-                        })
-                        .unwrap_or(false);
+                        let same_line =
+                            Self::read(host, |d| d.char_to_line(from) == d.char_to_line(target))
+                                .unwrap_or(false);
                         self.sm().push_jump(from, target, same_line);
                     }
                     self.caret_move(target, host);

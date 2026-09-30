@@ -44,7 +44,10 @@ impl App {
     pub(super) fn focus_split_at(&mut self, x: u16, y: u16) {
         let panes = self.regions.editor_panes.clone();
         if let Some((path, _)) = panes.into_iter().find(|(_, r)| {
-            x >= r.x && x < r.x.saturating_add(r.width) && y >= r.y && y < r.y.saturating_add(r.height)
+            x >= r.x
+                && x < r.x.saturating_add(r.width)
+                && y >= r.y
+                && y < r.y.saturating_add(r.height)
         }) {
             if path != self.editor.split_focus {
                 self.editor.store_focused_pane_view();

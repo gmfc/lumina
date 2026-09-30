@@ -214,8 +214,8 @@ pub fn char_to_screen(doc: &Document, geo: &PaneGeometry, char_idx: usize) -> Op
             .skip(vr.start)
             .take(col_chars - vr.start)
             .collect();
-        let col_in_row = vr.indent_cells
-            + char_to_display_col(&prefix, prefix.chars().count(), geo.tab_width);
+        let col_in_row =
+            vr.indent_cells + char_to_display_col(&prefix, prefix.chars().count(), geo.tab_width);
         let x = geo
             .origin_x
             .saturating_add(geo.gutter)

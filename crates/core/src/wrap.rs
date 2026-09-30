@@ -105,7 +105,11 @@ pub fn wrap_segments(line: &str, width: usize, tab_width: usize) -> Vec<WrapSegm
 /// The `[start, end)` char range of the visual row containing char offset `char_in_line`, where
 /// `segments` is [`wrap_segments`] output for the line and `line_len` is its char count (excluding
 /// the newline). `end` is the next segment start, or `line_len` for the last row.
-pub fn segment_of(segments: &[WrapSegment], line_len: usize, char_in_line: usize) -> (usize, usize) {
+pub fn segment_of(
+    segments: &[WrapSegment],
+    line_len: usize,
+    char_in_line: usize,
+) -> (usize, usize) {
     // Last segment whose start is `<= char_in_line`.
     let idx = segments
         .partition_point(|s| s.start <= char_in_line)
