@@ -109,6 +109,77 @@ fn update_lsp_syncs_and_requests_passive_features_end_to_end() {
 }
 
 #[test]
+fn incremental_did_change_round_trips_when_server_advertises_it() {
+    // Server advertises TextDocumentSyncKind::Incremental (2). After didOpen, an edit must
+    // produce a ranged didChange (via sync_document + lsp_last_text), not hang the mock.
+    let bin = mock_server_bin();
+    if !bin.exists() {
+        eprintln!("skipping: mock_lsp_server not found at {bin:?}");
+        return;
+    }
+    let transcript = r#"[
+        {"expect": "initialize"},
+        {"respond": {"capabilities": { "textDocumentSync": 2 }}},
+        {"expect": "initialized"},
+        {"expect": "textDocument/didOpen"},
+        {"expect": "textDocument/didChange"},
+        {"exit": 0}
+    ]"#;
+    let mut tpath = std::env::temp_dir();
+    tpath.push(format!("lumina_incr_sync_{}.json", std::process::id()));
+    std::fs::write(&tpath, transcript).unwrap();
+
+    let path = temp_rs_file("fn x() {}\n");
+    let mut app = app_with(&path);
+    let servers = std::collections::HashMap::from([(
+        "rust".to_string(),
+        vec![
+            bin.to_string_lossy().into_owned(),
+            tpath.to_string_lossy().into_owned(),
+        ],
+    )]);
+    app.lsp = crate::lsp::LspManager::new(std::path::Path::new("/tmp"), servers, "test".into());
+
+    let mut opened = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        if app
+            .lsp_last_text
+            .contains_key(&app.editor.workspace.active_doc().unwrap())
+        {
+            opened = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(opened, "didOpen should populate lsp_last_text");
+
+    app.dispatch(Command::InsertChar('Z'));
+    let mut changed = false;
+    for _ in 0..400 {
+        app.update_lsp();
+        app.drain_workers();
+        if app
+            .lsp_last_text
+            .get(&app.editor.workspace.active_doc().unwrap())
+            .is_some_and(|t| t.contains('Z'))
+        {
+            changed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        changed,
+        "incremental didChange should refresh lsp_last_text after edit"
+    );
+
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&tpath).ok();
+}
+
+#[test]
 fn refresh_events_reissue_requests_without_panicking() {
     // The refresh arms collect the language's open docs and re-request; with no server the
     // requests are inert, but the collection + per-doc dispatch loops run (a `.rs` doc so the
