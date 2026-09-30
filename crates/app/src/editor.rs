@@ -206,6 +206,9 @@ pub(crate) enum Overlay {
     /// Discarding the active buffer for the on-disk copy (`file.reloadFromDisk`). The reload
     /// replaces the text and drops undo history, so it is never done silently on a dirty buffer.
     ConfirmReload,
+    /// Saving a buffer that was opened with a lossy decode (U+FFFD injected). Writing it back
+    /// would permanently replace the undecodable bytes — confirm before destroying them.
+    ConfirmLossySave,
     /// A dismissable information popup (e.g. LSP hover).
     Info(String),
     /// Save As prompt: type a path for the active document (plan §1.5). `error` reports a bad

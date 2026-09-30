@@ -223,10 +223,25 @@ back to the binary notice; nothing in `lumina` knows what a PDF is.
 Every path that can throw a buffer away asks first, and every path that fails says what to do
 about it.
 
+- **Crash-recovery drafts.** While a buffer is dirty, Lumina periodically snapshots its text
+  under the per-user data directory (`…/lumina/drafts/`). On the next launch in that project the
+  draft is restored over the on-disk copy and the tab is marked dirty, so a panic, SIGKILL, or
+  power loss does not silently drop unsaved work. Successful saves and intentional discard-quit
+  clear the matching drafts. (Session restore still only persists paths/cursors/scroll; drafts
+  are the companion that persist **text**.)
 - **Quitting with unsaved changes** (`Ctrl+Q`, `:qa`, the palette's *Quit*) opens a confirmation
-  naming the files at risk: *save all & quit*, *discard & quit*, or cancel. Sessions restore
-  paths, cursors, and scroll — not buffer contents — so nothing else would have brought that work
-  back. `:qa!` still force-quits, because that is what the bang means.
+  naming the files at risk: *save all & quit*, *discard & quit*, or cancel. `:qa!` still
+  force-quits, because that is what the bang means.
+- **Lossy-decode save guard.** If a buffer had to inject `U+FFFD` while opening (rare unpaired
+  UTF-16 surrogates, or a force-open of undecodable bytes), Save opens a confirmation before
+  writing those replacements over the original file.
+- **Atomic, durable saves.** Saves write a same-directory temp, `fsync` the file, rename, then
+  best-effort `fsync` the parent directory. A failed rename removes the temp so it cannot orphan.
+  **Symlink policy:** saving to a path that is a symlink **replaces the symlink** with a regular
+  file (the link is not followed), so the rename stays on one filesystem and remains atomic.
+- **Line endings.** LF, CRLF, and classic Mac CR are modeled. Mixed-newline files are flagged
+  (`MIXED/…` in the status bar) and **normalized to the dominant style on save** — they do not
+  round-trip byte-for-byte.
 - **Save As over an existing file** asks before overwriting, shows the absolute path the name
   resolves to as you type it, and reports a missing directory in the box instead of failing after
   the fact.

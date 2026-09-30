@@ -7,6 +7,19 @@
 //! never slurped into a rope: turning arbitrary bytes into a text buffer costs four full passes
 //! (read → lossy-decode → CRLF-normalize → rope build) plus an O(n) hash, all on the UI thread,
 //! and yields a buffer of replacement characters that would corrupt the file if saved.
+//!
+//! # Save durability & symlink policy
+//!
+//! [`save`] writes `<name>.lumina.tmp` in the same directory, `sync_all`s the temp file, renames
+//! it onto the destination, then best-effort `fsync`s the **parent directory** so the rename is
+//! durable across a crash. On any failure after the temp exists, the temp is removed so a failed
+//! rename cannot leave orphans.
+//!
+//! **Symlinks:** the rename target is the path the user asked to save — if that path is a
+//! symlink, the symlink inode is **replaced** by a regular file (the link is not followed). This
+//! matches the historical behavior and avoids writing through a link whose target may live on
+//! another filesystem (where rename would not be atomic). Callers that need follow-symlink
+//! semantics should canonicalize before calling [`save`].
 
 use std::fs;
 use std::io::{BufReader, Read, Write};
@@ -100,23 +113,39 @@ pub fn project_root(start: &Path) -> PathBuf {
 }
 
 /// Decode raw file bytes into text, detecting a UTF-8 BOM or UTF-16 LE/BE by BOM.
-/// Falls back to lossy UTF-8 so we never fail to open a file (plan §3, encoding).
-pub fn decode(bytes: &[u8]) -> (String, Encoding) {
+///
+/// Returns `(text, encoding, lossy)`. `lossy` is true when the decoder had to inject U+FFFD
+/// (unpaired UTF-16 surrogates, or a caller that bypassed the unsupported-encoding gate). Saves
+/// must refuse or warn before writing such a buffer back (industry-readiness §3).
+pub fn decode(bytes: &[u8]) -> (String, Encoding, bool) {
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        (
-            String::from_utf8_lossy(rest).into_owned(),
-            Encoding::Utf8Bom,
-        )
+        match std::str::from_utf8(rest) {
+            Ok(s) => (s.to_owned(), Encoding::Utf8Bom, false),
+            Err(_) => (
+                String::from_utf8_lossy(rest).into_owned(),
+                Encoding::Utf8Bom,
+                true,
+            ),
+        }
     } else if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        (decode_utf16(rest, false), Encoding::Utf16Le)
+        let (text, lossy) = decode_utf16(rest, false);
+        (text, Encoding::Utf16Le, lossy)
     } else if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
-        (decode_utf16(rest, true), Encoding::Utf16Be)
+        let (text, lossy) = decode_utf16(rest, true);
+        (text, Encoding::Utf16Be, lossy)
     } else {
-        (String::from_utf8_lossy(bytes).into_owned(), Encoding::Utf8)
+        match std::str::from_utf8(bytes) {
+            Ok(s) => (s.to_owned(), Encoding::Utf8, false),
+            Err(_) => (
+                String::from_utf8_lossy(bytes).into_owned(),
+                Encoding::Utf8,
+                true,
+            ),
+        }
     }
 }
 
-fn decode_utf16(bytes: &[u8], be: bool) -> String {
+fn decode_utf16(bytes: &[u8], be: bool) -> (String, bool) {
     let units: Vec<u16> = bytes
         .as_chunks::<2>()
         .0
@@ -129,7 +158,10 @@ fn decode_utf16(bytes: &[u8], be: bool) -> String {
             }
         })
         .collect();
-    String::from_utf16_lossy(&units)
+    match String::from_utf16(&units) {
+        Ok(s) => (s, false),
+        Err(_) => (String::from_utf16_lossy(&units), true),
+    }
 }
 
 /// Make a path absolute without touching the filesystem. Every open document's path is stored
@@ -529,7 +561,7 @@ fn is_utf8_streamable(path: &Path, kind: FileKind) -> bool {
         || head.starts_with(&[0x00, 0x00, 0xFE, 0xFF]))
 }
 
-/// Stream a large UTF-8 file into a rope via [`RopeBuilder`], normalizing CRLF as chunks arrive.
+/// Stream a large UTF-8 file into a rope via [`RopeBuilder`], normalizing newlines as chunks arrive.
 fn open_streaming_utf8(path: &Path, limits: &Limits, expected_len: u64) -> Result<Opened> {
     let file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -537,7 +569,9 @@ fn open_streaming_utf8(path: &Path, limits: &Limits, expected_len: u64) -> Resul
     let mut buf = [0u8; 64 * 1024];
     let mut leftover = Vec::new();
     let mut total = 0u64;
-    let mut saw_crlf = false;
+    let mut crlf = 0usize;
+    let mut lf = 0usize;
+    let mut cr = 0usize;
     let mut hasher: u64 = 0xcbf29ce484222325;
     loop {
         let n = reader.read(&mut buf)?;
@@ -558,18 +592,16 @@ fn open_streaming_utf8(path: &Path, limits: &Limits, expected_len: u64) -> Resul
         leftover.extend_from_slice(&buf[..n]);
         match std::str::from_utf8(&leftover) {
             Ok(s) => {
-                saw_crlf |= s.contains("\r\n");
-                let normalized = s.replace("\r\n", "\n");
-                builder.append(&normalized);
+                count_line_endings(s, &mut crlf, &mut lf, &mut cr);
+                builder.append(&editor_core::normalize_to_lf(s));
                 leftover.clear();
             }
             Err(err) if err.error_len().is_none() => {
                 let valid = err.valid_up_to();
                 if valid > 0 {
                     let s = std::str::from_utf8(&leftover[..valid]).expect("valid_up_to");
-                    saw_crlf |= s.contains("\r\n");
-                    let normalized = s.replace("\r\n", "\n");
-                    builder.append(&normalized);
+                    count_line_endings(s, &mut crlf, &mut lf, &mut cr);
+                    builder.append(&editor_core::normalize_to_lf(s));
                     leftover.drain(..valid);
                 }
             }
@@ -585,12 +617,9 @@ fn open_streaming_utf8(path: &Path, limits: &Limits, expected_len: u64) -> Resul
             len: expected_len.max(total),
         }));
     }
-    let line_ending = if saw_crlf {
-        LineEnding::Crlf
-    } else {
-        LineEnding::Lf
-    };
-    let mut doc = Document::from_rope(builder.finish(), line_ending);
+    let info = line_ending_from_counts(crlf, lf, cr);
+    let mut doc = Document::from_rope(builder.finish(), info.style);
+    doc.mixed_line_endings = info.mixed;
     doc.path = Some(absolute_path(path));
     doc.language = language_for(path);
     doc.encoding = Encoding::Utf8;
@@ -600,6 +629,41 @@ fn open_streaming_utf8(path: &Path, limits: &Limits, expected_len: u64) -> Resul
     };
     doc.large = limits.is_large(total);
     Ok(Opened::Text(Box::new(doc)))
+}
+
+fn count_line_endings(s: &str, crlf: &mut usize, lf: &mut usize, cr: &mut usize) {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\r' if bytes.get(i + 1) == Some(&b'\n') => {
+                *crlf += 1;
+                i += 2;
+            }
+            b'\r' => {
+                *cr += 1;
+                i += 1;
+            }
+            b'\n' => {
+                *lf += 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+fn line_ending_from_counts(crlf: usize, lf: usize, cr: usize) -> editor_core::LineEndingInfo {
+    let kinds = usize::from(crlf > 0) + usize::from(lf > 0) + usize::from(cr > 0);
+    let mixed = kinds > 1;
+    let style = if crlf >= lf && crlf >= cr && crlf > 0 {
+        LineEnding::Crlf
+    } else if cr > lf && cr > 0 {
+        LineEnding::Cr
+    } else {
+        LineEnding::Lf
+    };
+    editor_core::LineEndingInfo { style, mixed }
 }
 
 /// Load `path` past the size ceiling (the `file.openAnyway` escape hatch).
@@ -668,12 +732,13 @@ pub fn load(path: &Path) -> Result<Document> {
 /// own read without duplicating the decode.
 fn document_from(path: &Path, bytes: &[u8]) -> Document {
     let fp = fingerprint(bytes);
-    let (text, encoding) = decode(bytes);
+    let (text, encoding, lossy) = decode(bytes);
     let mut doc = Document::from_str(&text);
     doc.path = Some(absolute_path(path));
     doc.language = language_for(path);
     doc.encoding = encoding;
     doc.disk = fp;
+    doc.lossy_decode = lossy;
     doc
 }
 
@@ -720,25 +785,42 @@ fn encode_utf16(text: &str, be: bool) -> Vec<u8> {
 
 /// Atomically write `doc` to `path`: write a temp file in the same directory, then rename.
 /// Returns the fingerprint of the bytes written (for save-echo suppression).
+///
+/// Durability: the temp file is `sync_all`'d before rename; the parent directory is fsync'd after
+/// a successful rename (best-effort). On any error after the temp is created, the temp is removed.
+/// See the module docs for the symlink policy.
 pub fn save(doc: &Document, path: &Path) -> Result<DiskFingerprint> {
     let bytes = encode(doc);
     let fp = fingerprint(&bytes);
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let tmp = temp_path(path);
-    {
-        let mut f =
-            fs::File::create(&tmp).with_context(|| format!("creating temp {}", tmp.display()))?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
+    let result = (|| -> Result<DiskFingerprint> {
+        {
+            let mut f = fs::File::create(&tmp)
+                .with_context(|| format!("creating temp {}", tmp.display()))?;
+            f.write_all(&bytes)?;
+            f.sync_all()?;
+        }
+        // Preserve the original file's permissions across the temp+rename: a fresh temp file gets
+        // default umask perms, which would otherwise silently strip e.g. a script's executable bit.
+        preserve_mode(path, &tmp);
+        // Rename is atomic on the same filesystem.
+        fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
+        fsync_dir(dir);
+        Ok(fp)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    // Preserve the original file's permissions across the temp+rename: a fresh temp file gets
-    // default umask perms, which would otherwise silently strip e.g. a script's executable bit.
-    preserve_mode(path, &tmp);
-    // Rename is atomic on the same filesystem.
-    fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
-    let _ = dir; // dir kept for clarity; rename target already includes it.
-    Ok(fp)
+    result
+}
+
+/// Best-effort fsync of a directory so a preceding rename is durable across power loss.
+fn fsync_dir(dir: &Path) {
+    if let Ok(d) = fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
 }
 
 /// Copy `src`'s permission bits onto `dst` when `src` already exists (a resave). Best-effort:
@@ -1140,16 +1222,27 @@ mod tests {
 
     #[test]
     fn detects_encodings_by_bom() {
-        assert_eq!(decode(b"hello"), ("hello".into(), Encoding::Utf8));
+        assert_eq!(decode(b"hello"), ("hello".into(), Encoding::Utf8, false));
 
         let mut bom = vec![0xEF, 0xBB, 0xBF];
         bom.extend_from_slice("hi".as_bytes());
-        assert_eq!(decode(&bom), ("hi".into(), Encoding::Utf8Bom));
+        assert_eq!(decode(&bom), ("hi".into(), Encoding::Utf8Bom, false));
 
         let le = encode_utf16("héllo", false);
-        assert_eq!(decode(&le), ("héllo".into(), Encoding::Utf16Le));
+        assert_eq!(decode(&le), ("héllo".into(), Encoding::Utf16Le, false));
         let be = encode_utf16("héllo", true);
-        assert_eq!(decode(&be), ("héllo".into(), Encoding::Utf16Be));
+        assert_eq!(decode(&be), ("héllo".into(), Encoding::Utf16Be, false));
+    }
+
+    #[test]
+    fn unpaired_utf16_surrogate_is_flagged_lossy() {
+        // High surrogate without a low pair → U+FFFD via lossy decode.
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend_from_slice(&0xD800u16.to_le_bytes());
+        let (text, enc, lossy) = decode(&bytes);
+        assert_eq!(enc, Encoding::Utf16Le);
+        assert!(lossy);
+        assert_eq!(text, "\u{FFFD}");
     }
 
     #[test]
@@ -1163,10 +1256,43 @@ mod tests {
             let mut doc = Document::from_str("line1\nldiné2");
             doc.encoding = enc;
             let bytes = encode(&doc);
-            let (text, detected) = decode(&bytes);
+            let (text, detected, lossy) = decode(&bytes);
             assert_eq!(detected, enc, "encoding preserved for {enc:?}");
+            assert!(!lossy, "round-trip must not be lossy for {enc:?}");
             assert_eq!(text, "line1\nldiné2", "text preserved for {enc:?}");
         }
+    }
+
+    #[test]
+    fn cr_reencoded_on_save() {
+        let doc = Document::from_str("a\rb");
+        assert_eq!(doc.line_ending, LineEnding::Cr);
+        let bytes = encode(&doc);
+        assert_eq!(bytes, b"a\rb");
+    }
+
+    #[test]
+    fn save_cleans_up_temp_when_rename_target_is_unusable() {
+        // Rename onto a directory fails; the `.lumina.tmp` must not be left behind.
+        let dir = std::env::temp_dir().join(format!(
+            "lumina_save_dir_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let doc = Document::from_str("x\n");
+        let err = save(&doc, &dir).unwrap_err();
+        let _ = err;
+        let tmp = temp_path(&dir);
+        assert!(
+            !tmp.exists(),
+            "failed rename must remove the orphan temp {}",
+            tmp.display()
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

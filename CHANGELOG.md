@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Crash-recovery drafts** — dirty buffers are snapshotted under the user data dir and restored
+  on the next launch; successful saves and discard-quit clear them.
+- **Lossy-decode save guard** — saving a buffer that injected U+FFFD on open asks before writing.
+- **Durable atomic saves** — parent-directory fsync after rename; temp cleanup on failed rename;
+  documented symlink-replace policy.
+- **CR / mixed line endings** — classic Mac CR is modeled; mixed files show `MIXED/…` and
+  normalize to the dominant style on save.
+- **Chaos tests** — mid-save rename failure, mid-LSP crash storm, watcher storm harnesses.
 - **Snippet tabstop sessions** — accepting an LSP snippet starts a Tab / Shift-Tab session with
   mirrored same-number placeholders (Esc cancels).
 - **Editor split panes** — `Ctrl+K \` / `Ctrl+K Ctrl+\` split right/down; `Ctrl+K W` closes;

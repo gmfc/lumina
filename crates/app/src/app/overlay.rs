@@ -94,6 +94,7 @@ impl App {
             Overlay::ConfirmClose { tab } => self.confirm_close_key(key, tab),
             Overlay::ConfirmQuit { .. } => self.confirm_quit_key(key),
             Overlay::ConfirmReload => self.confirm_reload_key(key),
+            Overlay::ConfirmLossySave => self.confirm_lossy_save_key(key),
             Overlay::Info(_) => self.info_key(key),
             Overlay::SaveAsInput {
                 buffer,
@@ -121,6 +122,17 @@ impl App {
                 self.editor.overlay = None;
             }
             KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('y') => {
+                if let Some(&id) = self.editor.workspace.tabs.get(tab) {
+                    if let Some(path) = self
+                        .editor
+                        .workspace
+                        .documents
+                        .get(id)
+                        .and_then(|d| d.path.clone())
+                    {
+                        self.clear_path_draft(&path);
+                    }
+                }
                 self.remember_closed(tab);
                 self.close_and_forget(tab);
                 self.editor.overlay = None;
@@ -141,6 +153,7 @@ impl App {
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 self.editor.overlay = None;
+                self.clear_all_drafts();
                 self.quit = true;
             }
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('c') => self.editor.overlay = None,
@@ -155,6 +168,23 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.editor.overlay = None;
                 self.reload_from_disk_now();
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('c') => self.editor.overlay = None,
+            _ => {}
+        }
+    }
+
+    /// Saving a lossy-decoded buffer: confirm before permanently writing U+FFFD over the file.
+    fn confirm_lossy_save_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Char('y') => {
+                self.editor.overlay = None;
+                // Clear the flag so the recursive save path proceeds.
+                if let Some(doc) = self.editor.active_document_mut() {
+                    doc.lossy_decode = false;
+                }
+                self.save_active();
             }
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('c') => self.editor.overlay = None,
             _ => {}

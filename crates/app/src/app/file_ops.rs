@@ -92,8 +92,9 @@ impl App {
     }
 
     /// `app.quit`: the same guard `tab.close` and `tab.closeAll` already apply, on the one path
-    /// that used to skip it. Session restore persists paths, cursors, and scroll — not buffer
-    /// contents — so quitting past a dirty buffer loses the work outright.
+    /// that used to skip it. Session restore persists paths, cursors, and scroll; crash-recovery
+    /// drafts persist buffer contents — quitting past a dirty buffer without saving still needs
+    /// confirmation so the user is not surprised.
     pub(super) fn request_quit(&mut self) {
         let dirty = self.dirty_tabs();
         if dirty.is_empty() {
@@ -749,6 +750,18 @@ impl App {
             ));
             return;
         };
+        // Lossy-decode guard (industry-readiness §3): refuse a silent write of U+FFFD over the
+        // original bytes. The confirm overlay clears the flag and re-enters this path.
+        if self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .is_some_and(|d| d.lossy_decode)
+        {
+            self.editor.overlay = Some(crate::editor::Overlay::ConfirmLossySave);
+            return;
+        }
         // The formatter runs before the hygiene pass, so trim/final-newline get the last word on
         // whatever it produced, and both land in the buffer before the single write below.
         if self.config.format_on_save {
@@ -769,6 +782,7 @@ impl App {
                 self.pending_self_writes.insert(path.clone(), fp.hash);
                 doc.disk = fp;
                 doc.history.break_group();
+                self.clear_path_draft(&path);
                 self.editor.notify_info(format!("Saved {}", path.display()));
                 self.editor.emit(editor_plugin::event::Event::DidSave(id));
                 // Only after a successful write: `didSave` means "the file on disk changed", and

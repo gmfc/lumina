@@ -51,6 +51,11 @@ pub struct App {
     /// idle window expires. The fingerprint is what distinguishes "still typing" (reset the
     /// window) from "stopped" (save), without needing an edit hook in `editor-core`.
     pub(crate) autosave_mark: Option<(u64, std::time::Instant)>,
+    /// Crash-draft bookkeeping: dirty fingerprint + next flush deadline. Independent of
+    /// [`Self::autosave_mark`] — drafts run even when autosave is off.
+    pub(crate) draft_mark: Option<(u64, std::time::Instant)>,
+    /// Override for the drafts data directory (tests). `None` → platform data dir.
+    pub(crate) drafts_root_override: Option<PathBuf>,
     /// Set from a signal handler when the process is asked to terminate (SIGTERM/SIGHUP), so the
     /// run loop can exit through its normal path — restoring the terminal, tearing down language
     /// servers, and writing the session — instead of dying where it stands.

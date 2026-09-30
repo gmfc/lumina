@@ -346,7 +346,7 @@ impl App {
         bytes: &[u8],
         fp: editor_core::document::DiskFingerprint,
     ) {
-        let (new_text, encoding) = crate::files::decode(bytes);
+        let (new_text, encoding, lossy) = crate::files::decode(bytes);
         let Some(doc) = self.editor.workspace.documents.get_mut(id) else {
             return;
         };
@@ -362,6 +362,7 @@ impl App {
         // transactions were recorded against the old offsets — see Document::reload_from_str).
         doc.reload_from_str(&new_text);
         doc.encoding = encoding;
+        doc.lossy_decode = lossy;
         let clamped: Vec<editor_core::Selection> = mapped
             .iter()
             .map(|&m| editor_core::Selection::caret(doc.clamp(m)))

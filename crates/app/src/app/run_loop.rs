@@ -51,13 +51,17 @@ impl App {
                 self.force_redraw = true;
             }
             self.refresh_viewport();
-            // Autosave + the periodic session write. Cheap when idle: it compares one integer
-            // unless something is actually dirty.
+            // Autosave + crash drafts + the periodic session write. Cheap when idle: each
+            // compares one integer unless something is actually dirty.
             self.autosave_tick();
+            self.draft_tick();
         }
         // Graceful LSP teardown on quit: shutdown→exit→wait per server, bounded so a hung
         // server can't delay exit beyond the deadline (§3.8).
         self.lsp.stop_all(Duration::from_secs(3));
+        // One last draft flush before the process goes away (SIGTERM / normal quit with dirty
+        // buffers that the user chose to keep via discard still get a chance — discard clears).
+        self.flush_crash_drafts();
         self.save_session();
         Ok(())
     }
