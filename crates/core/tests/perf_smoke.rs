@@ -59,13 +59,12 @@ fn measure_scroll(doc: &mut Document, steps: usize) -> Duration {
 
 fn measure_keystroke(doc: &mut Document, strokes: usize) -> Duration {
     // Insert near the middle so the rope pays for a realistic split, not append-only.
-    let mut at = doc.len_chars() / 2;
+    let start = doc.len_chars() / 2;
     let t0 = Instant::now();
-    for i in 0..strokes {
+    for (at, i) in (start..).zip(0..strokes) {
         let ch = if i % 40 == 39 { "\n" } else { "x" };
         let txn = Transaction::insert(doc, at, ch);
         let _inv = txn.apply(doc);
-        at += 1;
         black_box(doc.revision);
     }
     t0.elapsed()
