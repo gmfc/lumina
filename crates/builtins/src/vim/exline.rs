@@ -97,7 +97,7 @@ impl VimPlugin {
         }
     }
 
-fn substitute_ex(&mut self, cmd: &str, host: &mut dyn Host) {
+    fn substitute_ex(&mut self, cmd: &str, host: &mut dyn Host) {
         let whole = cmd.starts_with('%');
         let body = cmd.trim_start_matches('%');
         let body = body.strip_prefix('s').unwrap_or(body);

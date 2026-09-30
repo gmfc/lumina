@@ -94,10 +94,7 @@ impl SnippetSession {
     /// Primary (first recorded) range for the active tabstop number.
     pub(crate) fn primary_range(&self) -> Option<(usize, usize)> {
         let n = self.active_number()?;
-        self.stops
-            .iter()
-            .find(|t| t.number == n)
-            .map(|t| t.range)
+        self.stops.iter().find(|t| t.number == n).map(|t| t.range)
     }
 
     /// All absolute ranges sharing the active tabstop number (primary first).

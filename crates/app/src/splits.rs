@@ -129,7 +129,11 @@ impl SplitTree {
                 *node = f(old);
             }
             SplitTree::Branch { first, second, .. } => {
-                let child = if path[0] { second.as_mut() } else { first.as_mut() };
+                let child = if path[0] {
+                    second.as_mut()
+                } else {
+                    first.as_mut()
+                };
                 Self::replace_at(child, &path[1..], f);
             }
         }
@@ -161,9 +165,7 @@ impl SplitTree {
         }
         match node {
             SplitTree::Leaf(_) => false,
-            SplitTree::Branch {
-                first, second, ..
-            } => {
+            SplitTree::Branch { first, second, .. } => {
                 if path.len() == 1 {
                     let sibling = if path[0] {
                         // Remove second → keep first.
@@ -187,7 +189,11 @@ impl SplitTree {
                     *node = sibling;
                     true
                 } else {
-                    let child = if path[0] { second.as_mut() } else { first.as_mut() };
+                    let child = if path[0] {
+                        second.as_mut()
+                    } else {
+                        first.as_mut()
+                    };
                     Self::collapse_at(child, &path[1..])
                 }
             }

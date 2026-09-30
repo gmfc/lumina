@@ -721,10 +721,7 @@ impl EditorState {
     /// Pull the document's view back into the focused pane (after motions/scroll).
     pub(crate) fn store_focused_pane_view(&mut self) {
         let focus = self.split_focus.clone();
-        let doc_id = self
-            .splits
-            .as_ref()
-            .map(|t| t.focused_pane(&focus).doc);
+        let doc_id = self.splits.as_ref().map(|t| t.focused_pane(&focus).doc);
         let Some(doc_id) = doc_id else {
             return;
         };

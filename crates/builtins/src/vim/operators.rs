@@ -296,7 +296,10 @@ impl VimPlugin {
                     };
                     let t = d.line_text(l);
                     let body = t.trim_end_matches(['\n', '\r']);
-                    let have: String = body.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+                    let have: String = body
+                        .chars()
+                        .take_while(|c| *c == ' ' || *c == '\t')
+                        .collect();
                     if have == want {
                         continue;
                     }

@@ -50,10 +50,7 @@ pub fn load_user_queries(dirs: &[PathBuf]) -> HashMap<String, String> {
 ///
 /// Grammar crates are decoupled from the tree-sitter runtime version (they only provide a
 /// `LanguageFn` + query text), so new languages are a table entry, not a version bump.
-pub fn lang_config(
-    id: &str,
-    user_queries: &HashMap<String, String>,
-) -> Option<(Language, String)> {
+pub fn lang_config(id: &str, user_queries: &HashMap<String, String>) -> Option<(Language, String)> {
     let (lang, builtin): (Language, String) = match id {
         "rust" => (
             tree_sitter_rust::LANGUAGE.into(),
@@ -134,10 +131,7 @@ pub fn lang_config(
         ),
         _ => return None,
     };
-    let query = user_queries
-        .get(id)
-        .cloned()
-        .unwrap_or(builtin);
+    let query = user_queries.get(id).cloned().unwrap_or(builtin);
     Some((lang, query))
 }
 

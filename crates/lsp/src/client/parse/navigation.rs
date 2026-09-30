@@ -235,7 +235,9 @@ fn push_symbol(v: &Value, depth: usize, out: &mut Vec<DocumentSymbol>) {
             .and_then(|r| r.get("end"))
             .map(|e| {
                 (
-                    e.get("line").and_then(|l| l.as_u64()).unwrap_or(line as u64) as u32,
+                    e.get("line")
+                        .and_then(|l| l.as_u64())
+                        .unwrap_or(line as u64) as u32,
                     e.get("character")
                         .and_then(|c| c.as_u64())
                         .unwrap_or(character as u64) as u32,

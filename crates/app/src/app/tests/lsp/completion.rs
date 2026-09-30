@@ -74,7 +74,13 @@ fn snippet_tab_cycles_tabstops_then_exits() {
     assert_eq!(&doc.to_string()[sel.span()], "iter");
     // Tab → $0 (end of body)
     app.on_key(KeyEvent::from(KeyCode::Tab));
-    let head = app.editor.active_document().unwrap().selections.primary().head;
+    let head = app
+        .editor
+        .active_document()
+        .unwrap()
+        .selections
+        .primary()
+        .head;
     assert_eq!(
         &app.editor.active_document().unwrap().to_string()[head..],
         "}"

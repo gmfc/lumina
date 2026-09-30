@@ -17,6 +17,7 @@ use editor_core::Document;
 
 use crate::app::App;
 
+mod breadcrumb;
 mod chrome;
 mod editor;
 mod overlays;
@@ -26,7 +27,6 @@ mod settings;
 mod sidebar;
 mod tabview;
 mod util;
-mod breadcrumb;
 
 #[cfg(test)]
 pub(crate) use chrome::fit_left;
@@ -128,7 +128,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             // Mirror this pane's doc+view for rendering.
             if let Some(tree) = &app.editor.splits {
                 let pane = tree.focused_pane(path);
-                if let Some(idx) = app.editor.workspace.tabs.iter().position(|&t| t == pane.doc) {
+                if let Some(idx) = app
+                    .editor
+                    .workspace
+                    .tabs
+                    .iter()
+                    .position(|&t| t == pane.doc)
+                {
                     // Temporarily point active tab at this pane's doc for render helpers that
                     // read `active_document`. Restored after the loop via apply_focused_pane_view.
                     app.editor.workspace.active_tab = idx;
