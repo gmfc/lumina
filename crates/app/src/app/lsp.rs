@@ -95,12 +95,14 @@ impl App {
         else {
             return false;
         };
+        let previous = self.lsp_last_text.get(&id).map(String::as_str);
         let sent_ok = match sent {
             None => self.lsp.did_open(path, lang, &text),
-            Some(_) => self.lsp.did_change(path, lang, &text),
+            Some(_) => self.lsp.did_change(path, lang, &text, previous),
         };
         if sent_ok {
             self.lsp_sent_revision.insert(id, rev);
+            self.lsp_last_text.insert(id, text);
         }
         sent_ok
     }

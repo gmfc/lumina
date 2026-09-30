@@ -22,9 +22,9 @@ use editor_lsp::client::{
     parse_text_edits, parse_workspace_edit, parse_workspace_symbols,
 };
 use editor_lsp::{
-    Cap, CodeAction, CodeLens, CompletionList, DiagnosticsUpdate, DocumentHighlight,
-    DocumentSymbol, Incoming, Location, LspClient, LspHandle, PullReport, ResponseError,
-    ServerCaps, SignatureHelp, TextEdit, WorkspaceEdit,
+    incremental_change, Cap, CodeAction, CodeLens, CompletionList, DiagnosticsUpdate,
+    DocumentHighlight, DocumentSymbol, Incoming, Location, LspClient, LspHandle, PullReport,
+    ResponseError, ServerCaps, SignatureHelp, SyncKind, TextEdit, WorkspaceEdit,
 };
 
 mod diagnostics;

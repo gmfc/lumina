@@ -14,6 +14,7 @@ impl App {
         // The `diagnostics` plugin prunes its own model on tab change (DidChangeActive).
         self.editor.git_hunks.remove(&id);
         self.lsp_sent_revision.remove(&id);
+        self.lsp_last_text.remove(&id);
         self.lsp_pulled_revision.remove(&id);
         self.lsp_pull_deadline.remove(&id);
     }

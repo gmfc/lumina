@@ -84,6 +84,9 @@ pub struct App {
     lsp: crate::lsp::LspManager,
     /// Last document revision sent to the LSP, per DocId (change debounce).
     lsp_sent_revision: std::collections::HashMap<editor_core::DocId, u64>,
+    /// Last text snapshot successfully synced to the LSP, per DocId — the baseline for
+    /// incremental `didChange` when the server advertises `SyncKind::Incremental`.
+    lsp_last_text: std::collections::HashMap<editor_core::DocId, String>,
     /// Last document revision a diagnostics pull was issued for, per DocId (§5.1). Avoids
     /// re-pulling an unchanged buffer every tick.
     lsp_pulled_revision: std::collections::HashMap<editor_core::DocId, u64>,

@@ -916,6 +916,7 @@ dependencies = [
  "portable-pty",
  "ratatui",
  "regex",
+ "ropey",
  "serde",
  "serde_json",
  "signal-hook",

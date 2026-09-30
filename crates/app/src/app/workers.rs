@@ -105,6 +105,9 @@ impl App {
             if events[..i].contains(&events[i]) {
                 continue;
             }
+            if matches!(events[i], editor_plugin::event::Event::FilesChanged) {
+                self.editor.project_files_index = None;
+            }
             self.registry.broadcast(&events[i], &mut self.editor);
         }
     }
@@ -232,13 +235,28 @@ impl App {
             }
             return;
         };
-        // A file that grew across the degraded-mode threshold while open must pick that up, or
-        // it keeps its highlighter and language server while being reloaded at any size.
+        // Entering LARGE drops expensive per-doc work; leaving LARGE clears the flag so the
+        // next highlight / LSP / git tick can re-attach (symmetric with grow→LARGE).
+        let was_large = self
+            .editor
+            .workspace
+            .documents
+            .get(id)
+            .map(|d| d.large)
+            .unwrap_or(false);
+        let now_large = limits.is_large(bytes.len() as u64);
         if let Some(doc) = self.editor.workspace.documents.get_mut(id) {
-            doc.large = limits.is_large(bytes.len() as u64);
-            if doc.large {
-                self.editor.highlighters.remove(&id);
-            }
+            doc.large = now_large;
+        }
+        if now_large {
+            self.editor.highlighters.remove(&id);
+        } else if was_large {
+            // Force a fresh didOpen once LSP is eligible again.
+            self.lsp_sent_revision.remove(&id);
+            self.lsp_last_text.remove(&id);
+            self.editor.notify_info(
+                "left large-file mode — syntax highlighting, git gutter, and LSP can resume",
+            );
         }
         let fp = crate::files::fingerprint(&bytes);
 

@@ -64,8 +64,13 @@ impl Document {
         let line_ending = LineEnding::detect(s);
         // Store text normalized to LF internally; re-emit line_ending on save.
         let normalized = s.replace("\r\n", "\n");
+        Document::from_rope(Rope::from_str(&normalized), line_ending)
+    }
+
+    /// Build a document from an already-normalized LF rope (used by streaming open).
+    pub fn from_rope(text: Rope, line_ending: LineEnding) -> Document {
         Document {
-            text: Rope::from_str(&normalized),
+            text,
             path: None,
             selections: Selections::default(),
             history: History::default(),
