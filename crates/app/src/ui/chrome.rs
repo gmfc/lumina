@@ -230,8 +230,27 @@ fn document_segments(app: &App) -> (String, String) {
         .unwrap_or_else(|| "untitled".into());
     let left = format!(" {name}{}", if doc.dirty { " ●" } else { "" });
     let le = match doc.line_ending {
-        editor_core::LineEnding::Lf => "LF",
-        editor_core::LineEnding::Crlf => "CRLF",
+        editor_core::LineEnding::Lf => {
+            if doc.mixed_line_endings {
+                "MIXED/LF"
+            } else {
+                "LF"
+            }
+        }
+        editor_core::LineEnding::Crlf => {
+            if doc.mixed_line_endings {
+                "MIXED/CRLF"
+            } else {
+                "CRLF"
+            }
+        }
+        editor_core::LineEnding::Cr => {
+            if doc.mixed_line_endings {
+                "MIXED/CR"
+            } else {
+                "CR"
+            }
+        }
     };
     let enc = match doc.encoding {
         editor_core::Encoding::Utf8 => "UTF-8",

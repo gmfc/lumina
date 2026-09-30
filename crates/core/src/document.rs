@@ -15,7 +15,9 @@ use crate::view::ViewState;
 mod mutate;
 mod types;
 
-pub use types::{DiskFingerprint, Encoding, LineEnding, SyntaxEdit};
+pub use types::{
+    normalize_to_lf, DiskFingerprint, Encoding, LineEnding, LineEndingInfo, SyntaxEdit,
+};
 
 /// An open buffer.
 pub struct Document {
@@ -32,6 +34,10 @@ pub struct Document {
     pub language: Option<String>,
     pub encoding: Encoding,
     pub line_ending: LineEnding,
+    /// True when the source mixed LF / CRLF / CR; save re-emits the dominant [`line_ending`] only.
+    pub mixed_line_endings: bool,
+    /// True when open used a lossy decode (U+FFFD injected). Save must warn/refuse before writing.
+    pub lossy_decode: bool,
     pub tab_width: usize,
     /// Monotonic counter bumped on every text mutation (drives syntax re-parse caching).
     pub revision: u64,
@@ -61,10 +67,11 @@ impl Document {
     /// so this deliberately does not implement the fallible `std::str::FromStr`.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Document {
-        let line_ending = LineEnding::detect(s);
+        let info = LineEnding::detect_info(s);
         // Store text normalized to LF internally; re-emit line_ending on save.
-        let normalized = s.replace("\r\n", "\n");
-        Document::from_rope(Rope::from_str(&normalized), line_ending)
+        let mut doc = Document::from_rope(Rope::from_str(&normalize_to_lf(s)), info.style);
+        doc.mixed_line_endings = info.mixed;
+        doc
     }
 
     /// Build a document from an already-normalized LF rope (used by streaming open).
@@ -79,6 +86,8 @@ impl Document {
             language: None,
             encoding: Encoding::default(),
             line_ending,
+            mixed_line_endings: false,
+            lossy_decode: false,
             tab_width: 4,
             revision: 0,
             disk: DiskFingerprint::default(),

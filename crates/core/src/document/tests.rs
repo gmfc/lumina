@@ -18,6 +18,23 @@ fn crlf_detected_and_normalized() {
 }
 
 #[test]
+fn cr_only_detected_and_normalized() {
+    let d = Document::from_str("a\rb\r");
+    assert_eq!(d.line_ending, LineEnding::Cr);
+    assert_eq!(d.to_string(), "a\nb\n");
+    assert!(!d.mixed_line_endings);
+}
+
+#[test]
+fn mixed_line_endings_flagged_with_dominant_style() {
+    let d = Document::from_str("a\r\nb\nc\r");
+    assert!(d.mixed_line_endings);
+    // Equal-ish mix: CRLF wins ties with LF when present; here each appears once — CRLF ≥ LF ≥ CR.
+    assert_eq!(d.line_ending, LineEnding::Crlf);
+    assert_eq!(d.to_string(), "a\nb\nc\n");
+}
+
+#[test]
 fn line_len_excludes_newline() {
     let d = Document::from_str("abc\nde");
     assert_eq!(d.line_len_chars(0), 3);
