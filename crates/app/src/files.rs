@@ -678,11 +678,15 @@ fn document_from(path: &Path, bytes: &[u8]) -> Document {
 }
 
 /// Serialize a document's text back to the file's original line-ending style.
+///
+/// Mixed-newline files are normalized to the dominant [`Document::line_ending`] — they do not
+/// round-trip byte-for-byte (documented with invariant #6).
 pub fn serialize(doc: &Document) -> String {
     let text = doc.to_string();
     match doc.line_ending {
         LineEnding::Lf => text,
         LineEnding::Crlf => text.replace('\n', "\r\n"),
+        LineEnding::Cr => text.replace('\n', "\r"),
     }
 }
 

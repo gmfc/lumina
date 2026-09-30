@@ -17,7 +17,9 @@ pub mod vim;
 pub mod workspace;
 pub mod wrap;
 
-pub use document::{Document, Encoding, LineEnding, SyntaxEdit};
+pub use document::{
+    normalize_to_lf, Document, Encoding, LineEnding, LineEndingInfo, SyntaxEdit,
+};
 pub use history::{GroupBreak, History};
 pub use motion::Motion;
 pub use pairs::{PairTable, DEFAULT_PAIRS};
