@@ -732,7 +732,7 @@ mod tests {
     fn cmap_from(entries: &[(u16, &str)]) -> CMap {
         let mut src = String::from("1 beginbfchar\n");
         for (code, text) in entries {
-            let utf16: String = text.encode_utf16().map(|u| format!("{:04X}", u)).collect();
+            let utf16: String = text.encode_utf16().map(|u| format!("{u:04X}")).collect();
             src.push_str(&format!("<{code:04X}> <{utf16}>\n"));
         }
         src.push_str("endbfchar\n");

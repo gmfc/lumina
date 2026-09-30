@@ -91,8 +91,9 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+shift+t", "tab.reopenClosed"),
         ("ctrl+b", "view.toggleSidebar"),
         ("alt+z", "view.toggleWrap"),
-        // VS Code-ish splits: Ctrl+\ split right; Ctrl+K Ctrl+\ split down.
-        ("ctrl+\\", "view.splitRight"),
+        // Editor splits. `ctrl+\` is already Jump to Bracket, so split-right lives on the
+        // Ctrl+K prefix (`ctrl+k \` / `ctrl+k ctrl+\`) — same family as close/focus.
+        ("ctrl+k \\", "view.splitRight"),
         ("ctrl+k ctrl+\\", "view.splitDown"),
         ("ctrl+k w", "view.closeSplit"),
         ("ctrl+k ctrl+right", "view.focusNextSplit"),
