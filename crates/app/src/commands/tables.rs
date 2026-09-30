@@ -52,6 +52,11 @@ pub fn palette_entries() -> &'static [(&'static str, &'static str)] {
         ("view.toggleSidebar", "View: Toggle Sidebar"),
         ("view.nextSidebarPanel", "View: Next Sidebar Panel"),
         ("view.toggleWrap", "View: Toggle Word Wrap"),
+        ("view.splitRight", "View: Split Editor Right"),
+        ("view.splitDown", "View: Split Editor Down"),
+        ("view.closeSplit", "View: Close Editor Split"),
+        ("view.focusNextSplit", "View: Focus Next Split"),
+        ("view.focusPrevSplit", "View: Focus Previous Split"),
         // view.toggleTheme title comes from the `theme` plugin; terminal.* from the `terminal` plugin.
         // view.commandPalette / view.quickOpen / view.gotoLine titles come from the `palette` plugin.
         ("view.settings", "Preferences: Open Settings"),
@@ -86,6 +91,12 @@ pub fn default_bindings() -> &'static [(&'static str, &'static str)] {
         ("ctrl+shift+t", "tab.reopenClosed"),
         ("ctrl+b", "view.toggleSidebar"),
         ("alt+z", "view.toggleWrap"),
+        // VS Code-ish splits: Ctrl+\ split right; Ctrl+K Ctrl+\ split down.
+        ("ctrl+\\", "view.splitRight"),
+        ("ctrl+k ctrl+\\", "view.splitDown"),
+        ("ctrl+k w", "view.closeSplit"),
+        ("ctrl+k ctrl+right", "view.focusNextSplit"),
+        ("ctrl+k ctrl+left", "view.focusPrevSplit"),
         // ctrl+j / ctrl+` (toggle) + ctrl+pagedown/pageup (next/prev) are contributed by the
         // `terminal` plugin.
         ("ctrl+z", "edit.undo"),

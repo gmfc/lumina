@@ -85,13 +85,15 @@ pub struct PaneGeometry {
 
 /// One visible screen row under soft-wrap: the logical line it belongs to and the `[start, end)`
 /// char range (within that line) it displays. `first` marks the line's initial row (the one that
-/// shows the line number; continuations blank the gutter).
+/// shows the line number; continuations blank the gutter). `indent_cells` is the virtual leading
+/// indent continuation rows inherit from the logical line's leading whitespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VisualRow {
     pub line: usize,
     pub start: usize,
     pub end: usize,
     pub first: bool,
+    pub indent_cells: usize,
 }
 
 /// Lay out up to `height` visible screen rows for soft-wrap, starting at visual row `scroll_sub`
@@ -116,13 +118,14 @@ pub fn visual_rows(
         // A stale `scroll_sub` (line changed length) is clamped into range.
         let mut s = seg.min(segs.len().saturating_sub(1));
         while s < segs.len() && rows.len() < height {
-            let start = segs[s];
-            let end = segs.get(s + 1).copied().unwrap_or(len);
+            let start = segs[s].start;
+            let end = segs.get(s + 1).map(|x| x.start).unwrap_or(len);
             rows.push(VisualRow {
                 line,
                 start,
                 end,
                 first: s == 0,
+                indent_cells: segs[s].indent_cells,
             });
             s += 1;
         }
@@ -160,7 +163,9 @@ pub fn screen_to_char(doc: &Document, geo: &PaneGeometry, col: u16, row: u16) ->
             .skip(vr.start)
             .take(vr.end - vr.start)
             .collect();
-        let off = display_col_to_char(&seg_text, x as usize, geo.tab_width);
+        // Clicks inside the virtual continuation indent land at the segment's first char.
+        let text_col = (x as usize).saturating_sub(vr.indent_cells);
+        let off = display_col_to_char(&seg_text, text_col, geo.tab_width);
         let char_in_line = (vr.start + off).min(vr.end);
         return Some(doc.line_to_char(vr.line) + char_in_line);
     }
@@ -209,7 +214,8 @@ pub fn char_to_screen(doc: &Document, geo: &PaneGeometry, char_idx: usize) -> Op
             .skip(vr.start)
             .take(col_chars - vr.start)
             .collect();
-        let col_in_row = char_to_display_col(&prefix, prefix.chars().count(), geo.tab_width);
+        let col_in_row = vr.indent_cells
+            + char_to_display_col(&prefix, prefix.chars().count(), geo.tab_width);
         let x = geo
             .origin_x
             .saturating_add(geo.gutter)
@@ -312,8 +318,10 @@ pub fn wrapped_scroll_anchor(
     // The caret's visual row, identified by its segment's start offset within its line.
     let (cline, cchar) = doc.char_to_line_col(caret);
     let csegs = crate::wrap::wrap_segments(&line_body(doc, cline), width, tab);
-    let ci = csegs.partition_point(|&s| s <= cchar).saturating_sub(1);
-    let cseg_start = csegs[ci];
+    let ci = csegs
+        .partition_point(|s| s.start <= cchar)
+        .saturating_sub(1);
+    let cseg_start = csegs[ci].start;
 
     // Look a full window (plus margin) down from the anchor to locate the caret.
     let rows = visual_rows(

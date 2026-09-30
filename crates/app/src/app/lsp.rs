@@ -128,6 +128,9 @@ impl App {
         if self.lsp.supports_folding(lang) {
             self.lsp.request_folding_ranges(path, lang);
         }
+        // Breadcrumb symbols: refresh on sync without opening the picker.
+        self.editor.symbols_picker_pending = false;
+        let _ = self.lsp.request_document_symbols(path, lang);
     }
 
     /// Debounced diagnostics pull (§5.1): only for pull servers, and only after the buffer has been

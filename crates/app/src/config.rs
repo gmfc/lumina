@@ -9,6 +9,13 @@
 
 use std::path::{Path, PathBuf};
 
+/// Default grammar override directories: `~/.config/lumina/grammars` when resolvable.
+fn default_grammar_dirs() -> Vec<PathBuf> {
+    directories::ProjectDirs::from("", "", "lumina")
+        .map(|d| vec![d.config_dir().join("grammars")])
+        .unwrap_or_default()
+}
+
 /// Parsed configuration with sensible defaults.
 pub struct Config {
     /// `(chord, command-id)` overrides layered on top of the defaults.
@@ -38,6 +45,12 @@ pub struct Config {
     pub git_gutter: bool,
     /// Start with soft word-wrap on (toggle at runtime with Alt+Z / `view.toggleWrap`).
     pub line_wrap: bool,
+    /// Optional soft-wrap column. `0` means wrap at the pane width only; when `> 0`, the effective
+    /// wrap width is `min(pane_width, wrap_column)`.
+    pub wrap_column: usize,
+    /// Extra directories scanned for user highlight-query overrides (`<dir>/<lang_id>/highlights.scm`).
+    /// Defaults to `~/.config/lumina/grammars` when a config dir is resolvable.
+    pub grammar_dirs: Vec<PathBuf>,
     /// Refuse to open text files larger than this many megabytes, showing an explanatory tab
     /// with an "Open Anyway" escape hatch instead of stalling the UI on a multi-gigabyte read.
     /// `0` disables the ceiling entirely.
@@ -82,6 +95,8 @@ impl Default for Config {
             format_on_save: false,
             git_gutter: true,
             line_wrap: false,
+            wrap_column: 0,
+            grammar_dirs: default_grammar_dirs(),
             max_file_size_mb: 64,
             large_file_mb: 8,
             icons: false,
@@ -223,7 +238,7 @@ impl Config {
             .unwrap_or_default();
 
         let mut settings = toml::Table::new();
-        let entries: [(&str, toml::Value); 17] = [
+        let entries: [(&str, toml::Value); 18] = [
             ("tab_width", (self.tab_width as i64).into()),
             ("sidebar_width", (self.sidebar_width as i64).into()),
             ("follow_mode", self.follow_mode.into()),
@@ -239,6 +254,7 @@ impl Config {
             ("format_on_save", self.format_on_save.into()),
             ("git_gutter", self.git_gutter.into()),
             ("line_wrap", self.line_wrap.into()),
+            ("wrap_column", (self.wrap_column as i64).into()),
             ("max_file_size_mb", (self.max_file_size_mb as i64).into()),
             ("large_file_mb", (self.large_file_mb as i64).into()),
             ("icons", self.icons.into()),
@@ -250,6 +266,14 @@ impl Config {
         }
         if let Some(shell) = &self.terminal_shell {
             settings.insert("terminal_shell".to_string(), shell.clone().into());
+        }
+        if !self.grammar_dirs.is_empty() {
+            let dirs: Vec<toml::Value> = self
+                .grammar_dirs
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned().into())
+                .collect();
+            settings.insert("grammar_dirs".to_string(), dirs.into());
         }
         root.insert("settings".to_string(), settings.into());
 
@@ -282,6 +306,26 @@ impl Config {
             let s = s.trim();
             if !s.is_empty() {
                 self.terminal_shell = Some(s.to_string());
+            }
+        }
+        if let Some(arr) = settings.get("grammar_dirs").and_then(|v| v.as_array()) {
+            let dirs: Vec<PathBuf> = arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| {
+                    let s = s.trim();
+                    if let Some(rest) = s.strip_prefix("~/") {
+                        directories::BaseDirs::new()
+                            .map(|b| b.home_dir().join(rest))
+                            .unwrap_or_else(|| PathBuf::from(s))
+                    } else {
+                        PathBuf::from(s)
+                    }
+                })
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect();
+            if !dirs.is_empty() {
+                self.grammar_dirs = dirs;
             }
         }
     }
@@ -339,6 +383,14 @@ impl Config {
         if let Some(n) = int("terminal_height") {
             self.terminal_height = n.clamp(3, 60) as u16;
         }
+        if let Some(n) = int("wrap_column") {
+            // 0 = pane width only; otherwise a fixed column ceiling (capped to something sane).
+            self.wrap_column = if n <= 0 {
+                0
+            } else {
+                n.clamp(1, 10_000) as usize
+            };
+        }
     }
 
     /// Merge the `[keys]` table of `chord -> command-id` overrides.
@@ -360,6 +412,15 @@ impl Config {
                 }
             }
         }
+    }
+}
+
+/// Effective soft-wrap width: pane width alone when `wrap_column == 0`, else `min(pane, wrap_column)`.
+pub fn effective_wrap_width(pane_width: usize, wrap_column: usize) -> usize {
+    if wrap_column == 0 {
+        pane_width
+    } else {
+        pane_width.min(wrap_column)
     }
 }
 
@@ -480,5 +541,18 @@ mod tests {
             .unwrap();
         assert_eq!(cfg.terminal_height, 60);
         assert_eq!(cfg.terminal_shell, None);
+    }
+
+    #[test]
+    fn wrap_column_caps_effective_width() {
+        assert_eq!(effective_wrap_width(120, 0), 120);
+        assert_eq!(effective_wrap_width(120, 80), 80);
+        assert_eq!(effective_wrap_width(60, 80), 60);
+    }
+
+    #[test]
+    fn parses_wrap_column_setting() {
+        let cfg = Config::from_toml_str("[settings]\nwrap_column = 100\n").unwrap();
+        assert_eq!(cfg.wrap_column, 100);
     }
 }

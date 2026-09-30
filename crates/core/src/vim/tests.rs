@@ -225,3 +225,13 @@ fn missing_pair_returns_none() {
         None
     );
 }
+
+#[test]
+fn tag_object_inner_and_around() {
+    let d = doc("<div>hello</div>");
+    // Cursor on 'e' of hello (index 5).
+    let inner = text_object(&d, 5, TextObject::Tag, false);
+    assert_eq!(inner, Some((5, 10))); // "hello"
+    let around = text_object(&d, 5, TextObject::Tag, true);
+    assert_eq!(around, Some((0, 16))); // whole <div>…</div>
+}

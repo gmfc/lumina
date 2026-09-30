@@ -7,11 +7,16 @@
 //! [`Plugin::on_popup_key`]; other keys edit the buffer and the plugin re-syncs on `DidChange`.
 //! Accepting an item edits through [`Host::apply_transaction`] (multi-cursor aware) — the LSP
 //! transport + the on-screen popup geometry stay app-side.
+//!
+//! After a snippet accept, a [`SnippetSession`] owns Tab / Shift-Tab cycling and mirrored
+//! placeholder sync until the user finishes the last stop or presses Esc.
 
 use editor_plugin::{
     Contributions, Event, Host, Key, KeyCode, LspCompletionItem, LspRequestKind, LspTextEdit,
     LspWorkspaceEdit, Plugin, Popup, PopupRow,
 };
+
+use crate::snippet::SnippetSession;
 
 mod state;
 use state::*;
@@ -28,11 +33,23 @@ fn is_trigger(prev: char, prev2: Option<char>) -> bool {
     prev == '.' || (prev == ':' && prev2 == Some(':'))
 }
 
+fn add_delta(pos: usize, delta: isize) -> usize {
+    if delta >= 0 {
+        pos.saturating_add(delta as usize)
+    } else {
+        pos.saturating_sub((-delta) as usize)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct CompletionPlugin {
     state: Option<CompletionState>,
     /// The server truncated the list — re-request on each keystroke instead of filtering locally.
     is_incomplete: bool,
+    /// Active multi-tabstop session after accepting a snippet (Tab / Shift-Tab / mirrors).
+    snippet: Option<SnippetSession>,
+    /// Suppress mirror sync for the DidChange we ourselves produce while mirroring.
+    mirroring: bool,
 }
 
 impl CompletionPlugin {
@@ -135,7 +152,7 @@ impl CompletionPlugin {
             return;
         };
         if item.is_snippet {
-            Self::accept_snippet(host, id, &item.insert_text);
+            self.accept_snippet(host, id, &item.insert_text);
         } else {
             Self::accept_text(host, id, &item.insert_text);
         }
@@ -185,9 +202,10 @@ impl CompletionPlugin {
     }
 
     /// Expand and insert a snippet at the primary cursor, replacing the typed prefix and placing
-    /// the caret at the first tabstop (selecting its placeholder). Multi-cursor snippet accepts
-    /// collapse to the primary cursor; full tabstop cycling is a follow-up.
-    fn accept_snippet(host: &mut dyn Host, id: editor_core::DocId, raw: &str) {
+    /// the caret at the first tabstop (selecting its placeholder). Starts a [`SnippetSession`] so
+    /// Tab / Shift-Tab cycle remaining stops and mirrored placeholders stay in sync. Multi-cursor
+    /// snippet accepts collapse to the primary cursor.
+    fn accept_snippet(&mut self, host: &mut dyn Host, id: editor_core::DocId, raw: &str) {
         let snip = crate::snippet::expand(raw);
         let Some((start, removed)) = host.workspace().documents.get(id).map(|doc| {
             let head = doc.selections.primary().head;
@@ -205,11 +223,196 @@ impl CompletionPlugin {
             inserted: snip.text.clone(),
         }]);
         host.apply_transaction(id, txn);
-        let sel = match snip.first_stop() {
-            Some(t) => editor_core::Selection::new(start + t.range.0, start + t.range.1),
-            None => editor_core::Selection::caret(start + snip.text.chars().count()),
+        self.snippet = SnippetSession::from_snippet(id, start, &snip);
+        if self.snippet.is_some() {
+            self.select_active_stop(host);
+        } else {
+            let end = start + snip.text.chars().count();
+            host.set_selections(
+                id,
+                editor_core::Selections::single(editor_core::Selection::caret(end)),
+            );
+        }
+    }
+
+    /// Select the primary range of the active tabstop group (placeholder selected).
+    fn select_active_stop(&mut self, host: &mut dyn Host) {
+        let Some(session) = self.snippet.as_ref() else {
+            return;
         };
-        host.set_selections(id, editor_core::Selections::single(sel));
+        let Some((a, b)) = session.primary_range() else {
+            self.snippet = None;
+            return;
+        };
+        let id = session.doc;
+        host.set_selections(
+            id,
+            editor_core::Selections::single(editor_core::Selection::new(a, b)),
+        );
+    }
+
+    /// Tab → next stop (ends the session after the last); Shift-Tab → previous.
+    fn snippet_tab(&mut self, forward: bool, host: &mut dyn Host) -> bool {
+        let Some(session) = self.snippet.as_mut() else {
+            return false;
+        };
+        if forward {
+            if !session.next() {
+                if let Some((_, b)) = session.primary_range() {
+                    let id = session.doc;
+                    host.set_selections(
+                        id,
+                        editor_core::Selections::single(editor_core::Selection::caret(b)),
+                    );
+                }
+                self.snippet = None;
+                return true;
+            }
+        } else {
+            session.prev();
+        }
+        self.select_active_stop(host);
+        true
+    }
+
+    /// Infer the new primary range from the live selection, then copy its text onto mirrors.
+    fn sync_mirrors(&mut self, host: &mut dyn Host) {
+        if self.mirroring {
+            return;
+        }
+        // 1. Resync primary range from the caret/selection after the user's edit.
+        let (id, number, old_primary, new_primary) = {
+            let Some(session) = self.snippet.as_ref() else {
+                return;
+            };
+            let id = session.doc;
+            let Some(number) = session.active_number() else {
+                return;
+            };
+            let Some(old_primary) = session.primary_range() else {
+                return;
+            };
+            let Some(doc) = host.workspace().documents.get(id) else {
+                return;
+            };
+            let sel = doc.selections.primary();
+            let (old_a, _) = old_primary;
+            let new_primary = if sel.anchor != sel.head {
+                // Typed over a selected placeholder (or re-selected).
+                (sel.span().start, sel.span().end)
+            } else if sel.head >= old_a {
+                // Caret after an insert/delete inside the stop — range is [old_a, head].
+                (old_a, sel.head)
+            } else {
+                // Caret left the stop — end the session.
+                return;
+            };
+            (id, number, old_primary, new_primary)
+        };
+
+        let (new_a, new_b) = new_primary;
+        let (old_a, old_b) = old_primary;
+        let primary_delta = (new_b as isize - old_b as isize) - (new_a as isize - old_a as isize);
+
+        // Update primary + shift later non-mirror stops by the primary's length change.
+        if let Some(session) = self.snippet.as_mut() {
+            let mirrors: Vec<_> = session
+                .stops
+                .iter()
+                .filter(|t| t.number == number)
+                .map(|t| t.range)
+                .collect();
+            let mut updated = vec![new_primary];
+            for &(a, b) in mirrors.iter().skip(1) {
+                let a = add_delta(a, primary_delta); // only primary edit applied so far
+                let b = add_delta(b, primary_delta);
+                // length will be rewritten to match primary below; keep start for now
+                updated.push((a, b));
+            }
+            // Shift stops that aren't this number and sit at/after the old primary end.
+            for t in &mut session.stops {
+                if t.number != number && t.range.0 >= old_b {
+                    t.range.0 = add_delta(t.range.0, primary_delta);
+                    t.range.1 = add_delta(t.range.1, primary_delta);
+                }
+            }
+            session.set_ranges_for(number, &updated);
+        }
+
+        let mirrors = self
+            .snippet
+            .as_ref()
+            .map(|s| s.active_mirrors())
+            .unwrap_or_default();
+        if mirrors.len() < 2 {
+            return;
+        }
+
+        let Some(doc) = host.workspace().documents.get(id) else {
+            return;
+        };
+        let (pa, pb) = mirrors[0];
+        let pb = pb.min(doc.len_chars());
+        let pa = pa.min(pb);
+        let text = doc.rope().slice(pa..pb).to_string();
+        let text_len = text.chars().count();
+
+        let mut changes = Vec::new();
+        let mut shift: isize = 0;
+        let mut new_ranges = vec![(pa, pa + text_len)];
+        for &(a, b) in mirrors.iter().skip(1) {
+            let a = add_delta(a, shift);
+            let b = add_delta(b, shift);
+            let old_len = b.saturating_sub(a) as isize;
+            let removed = host
+                .workspace()
+                .documents
+                .get(id)
+                .map(|d| {
+                    let end = b.min(d.len_chars());
+                    let start = a.min(end);
+                    d.rope().slice(start..end).to_string()
+                })
+                .unwrap_or_default();
+            if removed != text {
+                changes.push(editor_core::Change {
+                    at: a,
+                    removed,
+                    inserted: text.clone(),
+                });
+            }
+            new_ranges.push((a, a + text_len));
+            shift += text_len as isize - old_len;
+        }
+
+        if let Some(session) = self.snippet.as_mut() {
+            // Apply cumulative mirror length shifts to later stops.
+            if shift != 0 {
+                let last_mirror_start = mirrors.last().map(|r| r.0).unwrap_or(0);
+                for t in &mut session.stops {
+                    if t.number != number && t.range.0 >= last_mirror_start {
+                        t.range.0 = add_delta(t.range.0, shift);
+                        t.range.1 = add_delta(t.range.1, shift);
+                    }
+                }
+            }
+            session.set_ranges_for(number, &new_ranges);
+        }
+
+        if !changes.is_empty() {
+            self.mirroring = true;
+            host.apply_transaction(id, editor_core::Transaction::from_changes(changes));
+            self.mirroring = false;
+            // Restore caret at end of (resized) primary so the user keeps typing there.
+            if let Some(session) = self.snippet.as_ref() {
+                if let Some((a, b)) = session.primary_range() {
+                    host.set_selections(
+                        id,
+                        editor_core::Selections::single(editor_core::Selection::caret(b.max(a))),
+                    );
+                }
+            }
+        }
     }
 
     /// Apply a completion's `additionalTextEdits` (auto-import edits) to the active document via
@@ -253,6 +456,10 @@ impl CompletionPlugin {
         self.state = None;
         host.set_popup(None);
     }
+
+    fn end_snippet(&mut self) {
+        self.snippet = None;
+    }
 }
 
 impl Plugin for CompletionPlugin {
@@ -275,6 +482,22 @@ impl Plugin for CompletionPlugin {
             return true;
         }
         false
+    }
+
+    fn capture_key(&mut self, key: Key, host: &mut dyn Host) -> bool {
+        // Snippet session owns Tab / Shift-Tab / Esc while active (popup already handled Tab).
+        if self.snippet.is_none() || self.state.is_some() {
+            return false;
+        }
+        match key.code {
+            KeyCode::Tab if !key.ctrl && !key.alt => self.snippet_tab(true, host),
+            KeyCode::BackTab if !key.ctrl && !key.alt => self.snippet_tab(false, host),
+            KeyCode::Esc if !key.ctrl && !key.alt => {
+                self.end_snippet();
+                true
+            }
+            _ => false,
+        }
     }
 
     fn on_popup_key(&mut self, key: Key, host: &mut dyn Host) -> bool {
@@ -316,6 +539,9 @@ impl Plugin for CompletionPlugin {
                 is_incomplete,
             } => self.open(items.clone(), *is_incomplete, host),
             Event::DidChange(id) if host.active_doc() == Some(*id) => {
+                if self.snippet.as_ref().is_some_and(|s| s.doc == *id) && !self.mirroring {
+                    self.sync_mirrors(host);
+                }
                 // Typing a trigger char (`.`/`::`) auto-requests member/path completions; while a
                 // popup is open, an `isIncomplete` list is re-requested (server re-filters), an
                 // exhaustive one is filtered locally.
@@ -333,9 +559,34 @@ impl Plugin for CompletionPlugin {
                 if self.state.is_some() {
                     self.refresh(host);
                 }
+                // Leaving the active tabstop via mouse/arrows ends the session.
+                if let Some(session) = self.snippet.as_ref() {
+                    if session.doc == *id {
+                        let head = host
+                            .workspace()
+                            .documents
+                            .get(*id)
+                            .map(|d| d.selections.primary().head);
+                        if let Some(head) = head {
+                            if !session.caret_in_active(head) {
+                                // Allow the selection we just set ourselves (placeholder span).
+                                let in_any = session
+                                    .active_mirrors()
+                                    .iter()
+                                    .any(|&(a, b)| head >= a && head <= b);
+                                if !in_any {
+                                    self.end_snippet();
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            Event::DidChangeActive(_) | Event::ExternalReload(_) if self.state.is_some() => {
-                self.dismiss(host)
+            Event::DidChangeActive(_) | Event::ExternalReload(_) => {
+                if self.state.is_some() {
+                    self.dismiss(host);
+                }
+                self.end_snippet();
             }
             _ => {}
         }

@@ -118,7 +118,7 @@ fn command_hint_rows(
             TSpan::styled(keys.clone(), accent),
             TSpan::raw(format!("{kpad}  ")),
             TSpan::styled(
-                format!("{label:<w$}", w = label_col),
+                format!("{label:<label_col$}"),
                 Style::default().fg(Color::Gray),
             ),
         ]

@@ -15,6 +15,8 @@ fn double_key(op: Operator) -> char {
         Operator::Yank => 'y',
         Operator::Indent => '>',
         Operator::Outdent => '<',
+        Operator::Reindent => '=',
+        Operator::Format => 'q', // gq doubled as gqq → line format
         Operator::Lower => 'u',
         Operator::Upper => 'U',
         Operator::ToggleCase => '~',
@@ -50,6 +52,7 @@ fn object_from_key(code: KeyCode) -> Option<TextObject> {
         '\'' => TextObject::Quote { quote: '\'' },
         '`' => TextObject::Quote { quote: '`' },
         'p' => TextObject::Paragraph,
+        't' => TextObject::Tag,
         _ => return None,
     })
 }
@@ -98,6 +101,19 @@ impl VimPlugin {
                 }
                 KeyCode::Char('b') => {
                     self.scroll(false, false, host);
+                    true
+                }
+                KeyCode::Char('o') => {
+                    let cur = Self::primary_head(host);
+                    if let Some(t) = self.sm().jump_older(cur) {
+                        Self::caret(host, t);
+                    }
+                    true
+                }
+                KeyCode::Char('i') => {
+                    if let Some(t) = self.sm().jump_newer() {
+                        Self::caret(host, t);
+                    }
                     true
                 }
                 _ => false,
@@ -166,20 +182,49 @@ impl VimPlugin {
             KeyCode::Char('*') => self.search_word(true, host),
             KeyCode::Char('#') => self.search_word(false, host),
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Enter => {
+                // Bare j/k: logical lines (#54). Visual-row motion is gj/gk.
                 let n = self.s().effective_count() as isize;
-                self.move_lines(n, false, host);
+                self.move_logical_lines(n, false, host);
                 self.sm().count = None;
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let n = self.s().effective_count() as isize;
-                self.move_lines(-n, false, host);
+                self.move_logical_lines(-n, false, host);
                 self.sm().count = None;
             }
+            KeyCode::Char('m') => self.sm().prefix = Some(Prefix::MarkSet),
+            KeyCode::Char('`') => self.sm().prefix = Some(Prefix::MarkJumpExact),
+            KeyCode::Char('\'') => self.sm().prefix = Some(Prefix::MarkJumpLine),
+            KeyCode::Char('q') => {
+                if self.s().macro_recording.is_some() {
+                    // Stop recording.
+                    if let Some((reg, keys)) = self.sm().macro_recording.take() {
+                        self.sm().macros.insert(reg, keys);
+                    }
+                } else if !self.s().macro_replaying {
+                    self.sm().prefix = Some(Prefix::MacroRecord);
+                }
+            }
+            KeyCode::Char('@') if !self.s().macro_replaying => {
+                self.sm().prefix = Some(Prefix::MacroPlay);
+            }
+            KeyCode::Char('=') => self.sm().operator = Some(Operator::Reindent),
             _ => {
                 let count_opt = self.count_opt();
-                if let Some((target, _kind)) = self.motion(code, count_opt, host) {
+                if let Some((target, kind)) = self.motion(code, count_opt, host) {
+                    // Jump-list entries for G / %.
+                    let is_jump = matches!(code, KeyCode::Char('G') | KeyCode::Char('%'));
+                    if is_jump {
+                        let from = Self::primary_head(host);
+                        let same_line = Self::read(host, |d| {
+                            d.char_to_line(from) == d.char_to_line(target)
+                        })
+                        .unwrap_or(false);
+                        self.sm().push_jump(from, target, same_line);
+                    }
                     self.caret_move(target, host);
                     self.sm().count = None;
+                    let _ = kind;
                 } else {
                     self.sm().clear_pending();
                 }
@@ -293,7 +338,71 @@ impl VimPlugin {
                 self.z_prefix(key, host);
                 true
             }
+            Prefix::MarkSet => {
+                if let KeyCode::Char(c @ 'a'..='z') = key.code {
+                    let pos = Self::primary_head(host);
+                    self.sm().marks.insert(c, pos);
+                }
+                self.sm().clear_pending();
+                true
+            }
+            Prefix::MarkJumpExact => {
+                if let KeyCode::Char(c @ 'a'..='z') = key.code {
+                    if let Some(&pos) = self.s().marks.get(&c) {
+                        self.jump_to(pos, host);
+                    }
+                }
+                self.sm().clear_pending();
+                true
+            }
+            Prefix::MarkJumpLine => {
+                if let KeyCode::Char(c @ 'a'..='z') = key.code {
+                    if let Some(pos) = self.s().marks.get(&c).copied() {
+                        let target = Self::read(host, |d| {
+                            let l = d.char_to_line(pos.min(d.len_chars()));
+                            core_vim::first_non_blank(d, l)
+                        });
+                        if let Some(t) = target {
+                            self.jump_to(t, host);
+                        }
+                    }
+                }
+                self.sm().clear_pending();
+                true
+            }
+            Prefix::MacroRecord => {
+                if let KeyCode::Char(c @ 'a'..='z') = key.code {
+                    self.sm().macro_recording = Some((c, Vec::new()));
+                }
+                self.sm().clear_pending();
+                true
+            }
+            Prefix::MacroPlay => {
+                let reg = match key.code {
+                    KeyCode::Char('@') => self.s().last_macro,
+                    KeyCode::Char(c @ 'a'..='z') => Some(c),
+                    _ => None,
+                };
+                if let Some(r) = reg {
+                    self.play_macro(r, host);
+                }
+                self.sm().clear_pending();
+                true
+            }
         }
+    }
+
+    fn play_macro(&mut self, reg: char, host: &mut dyn Host) {
+        let keys = self.s().macros.get(&reg).cloned().unwrap_or_default();
+        if keys.is_empty() || self.s().macro_replaying {
+            return;
+        }
+        self.sm().last_macro = Some(reg);
+        self.sm().macro_replaying = true;
+        for k in keys {
+            self.handle_key(k, host);
+        }
+        self.sm().macro_replaying = false;
     }
 
     fn g_prefix(&mut self, key: Key, host: &mut dyn Host) -> bool {
@@ -309,9 +418,47 @@ impl VimPlugin {
                     core_vim::first_non_blank(doc, l)
                 });
                 match target {
-                    Some(t) => self.motion_result(t, MotionKind::Linewise, host),
+                    Some(t) => {
+                        if op.is_none() {
+                            self.jump_to(t, host);
+                            self.sm().clear_pending();
+                        } else {
+                            self.motion_result(t, MotionKind::Linewise, host);
+                        }
+                    }
                     None => self.sm().clear_pending(),
                 }
+            }
+            KeyCode::Char('j') => {
+                let n = count_opt.unwrap_or(1) as isize;
+                if let Some(op) = op {
+                    // Operator + gj: use visual-row motion target via move then apply — fall back
+                    // to logical linewise j for operators (gj as operator motion is rare).
+                    let from = Self::primary_head(host);
+                    self.move_lines(n, false, host);
+                    let to = Self::primary_head(host);
+                    self.apply_operator_kind(op, from, to, MotionKind::Exclusive, host);
+                    self.sm().clear_pending();
+                } else {
+                    self.move_lines(n, false, host);
+                    self.sm().clear_pending();
+                }
+            }
+            KeyCode::Char('k') => {
+                let n = count_opt.unwrap_or(1) as isize;
+                if let Some(op) = op {
+                    let from = Self::primary_head(host);
+                    self.move_lines(-n, false, host);
+                    let to = Self::primary_head(host);
+                    self.apply_operator_kind(op, from, to, MotionKind::Exclusive, host);
+                    self.sm().clear_pending();
+                } else {
+                    self.move_lines(-n, false, host);
+                    self.sm().clear_pending();
+                }
+            }
+            KeyCode::Char('q') if op.is_none() => {
+                self.sm().operator = Some(Operator::Format);
             }
             KeyCode::Char('e') => {
                 let count = count_opt.unwrap_or(1);

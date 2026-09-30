@@ -4,6 +4,8 @@
 //! query over **only the visible byte range** (plan §4 perf) and returns per-line spans
 //! carrying capture names. The app maps capture names to colors via its theme — this crate
 //! stays UI-free (no ratatui).
+//!
+//! User highlight overrides: see [`load_user_queries`] / the module docs on [`lang`].
 
 mod highlighter;
 mod lang;
@@ -13,7 +15,7 @@ mod rope_provider;
 mod tests;
 
 pub use highlighter::DocHighlighter;
-pub use lang::is_supported;
+pub use lang::{is_supported, load_user_queries, load_user_queries_from};
 
 /// A highlighted span within a single line: `[start, end)` char offsets **within the line**,
 /// carrying the tree-sitter capture name (e.g. `"keyword"`, `"function"`, `"string.special"`).

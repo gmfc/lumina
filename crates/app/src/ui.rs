@@ -26,12 +26,14 @@ mod settings;
 mod sidebar;
 mod tabview;
 mod util;
+mod breadcrumb;
 
 #[cfg(test)]
 pub(crate) use chrome::fit_left;
 pub(crate) use settings::settings_entry_at;
 pub(crate) use tabview::viewer_body_rows;
 
+use breadcrumb::render_breadcrumb;
 use chrome::{render_status, render_tabs};
 use editor::render_editor;
 use overlays::{render_context_menu, render_overlay, render_prompt};
@@ -80,13 +82,74 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         };
 
     render_tabs(f, app, tabs_area);
+
+    // Optional breadcrumb strip under the tabs (when LSP symbols are cached for the active doc).
+    let (breadcrumb_area, editor_body) = {
+        let want = app
+            .editor
+            .workspace
+            .active_doc()
+            .and_then(|id| app.editor.doc_symbols.get(&id))
+            .is_some_and(|s| !s.is_empty());
+        if want && editor_area.height > 1 {
+            let [crumb, rest] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(editor_area);
+            if render_breadcrumb(f, app, crumb) {
+                (Some(crumb), rest)
+            } else {
+                (None, editor_area)
+            }
+        } else {
+            (None, editor_area)
+        }
+    };
+
+    app.editor.ensure_splits();
+    let mut editor_panes: Vec<(Vec<bool>, Rect)> = Vec::new();
     if app.settings_active() {
-        render_settings(f, app, editor_area);
+        render_settings(f, app, editor_body);
+        editor_panes.push((Vec::new(), editor_body));
     } else if let Some(view) = app.editor.active_tab_view() {
         // A notice / plugin-viewer tab replaces the text pane (it has no text to draw).
-        render_tab_view(f, app, editor_area, view);
+        render_tab_view(f, app, editor_body, view);
+        editor_panes.push((Vec::new(), editor_body));
     } else {
-        render_editor(f, app, editor_area);
+        // Lay out split panes; only the focused pane shows the hardware cursor.
+        let layout = app
+            .editor
+            .splits
+            .as_ref()
+            .map(|t| t.layout(editor_body))
+            .unwrap_or_else(|| vec![(Vec::new(), editor_body)]);
+        editor_panes = layout.clone();
+        let focus = app.editor.split_focus.clone();
+        for (path, rect) in &layout {
+            let focused = *path == focus;
+            // Mirror this pane's doc+view for rendering.
+            if let Some(tree) = &app.editor.splits {
+                let pane = tree.focused_pane(path);
+                if let Some(idx) = app.editor.workspace.tabs.iter().position(|&t| t == pane.doc) {
+                    // Temporarily point active tab at this pane's doc for render helpers that
+                    // read `active_document`. Restored after the loop via apply_focused_pane_view.
+                    app.editor.workspace.active_tab = idx;
+                }
+                if let Some(doc) = app.editor.workspace.documents.get_mut(pane.doc) {
+                    doc.view.scroll_line = pane.view.scroll_line;
+                    doc.view.scroll_col = pane.view.scroll_col;
+                    doc.view.scroll_sub = pane.view.scroll_sub;
+                }
+            }
+            // Suppress cursor on non-focused panes by temporarily clearing Editor focus.
+            let prev_focus = app.editor.focus;
+            if !focused {
+                // Keep focus as Editor but render_editor checks focus for cursor — we pass a flag
+                // via temporarily setting focus away only when drawing non-focused panes.
+                app.editor.focus = crate::editor::Focus::Sidebar;
+            }
+            render_editor(f, app, *rect);
+            app.editor.focus = prev_focus;
+        }
+        app.editor.apply_focused_pane_view();
     }
     let lsp_status = render_status(f, app, status_area);
 
@@ -97,8 +160,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
 
     // Overlays draw last, on top of the body above the dock (plan §4).
-    render_completion(f, app, editor_area);
-    render_prompt(f, app, editor_area);
+    render_completion(f, app, editor_body);
+    render_prompt(f, app, editor_body);
     let bottom_panel = render_bottom_panel(f, app, main_body);
     render_picker(f, app, main_body);
     render_overlay(f, app, main_body);
@@ -111,7 +174,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         sidebar: sidebar_area,
         sidebar_inner,
         sidebar_first_row,
-        editor: editor_area,
+        editor: editor_body,
+        editor_panes,
+        breadcrumb: breadcrumb_area,
         panel_header,
         panel_content,
         lsp_content,
@@ -146,7 +211,12 @@ pub struct Regions {
     /// Index of the sidebar panel's first *drawn* row. The panel scrolls, so a click's row
     /// offset within `sidebar_inner` is relative to this, not to the panel's row 0.
     pub sidebar_first_row: usize,
+    /// Full editor area (union of all split panes) — used for coarse hit-tests / overlays.
     pub editor: Rect,
+    /// Per-pane editor rects with their split focus path (for click-to-focus).
+    pub editor_panes: Vec<(Vec<bool>, Rect)>,
+    /// Breadcrumb strip rect (1 row under tabs), when shown.
+    pub breadcrumb: Option<Rect>,
     /// The dock's header (tab strip) row, when the dock is open.
     pub panel_header: Option<Rect>,
     /// The terminal tab's content region (the active shell's grid), when it is the expanded tab.

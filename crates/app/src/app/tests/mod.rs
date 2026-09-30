@@ -19,6 +19,7 @@ mod plugins;
 mod render;
 mod render_overlays;
 mod settings;
+mod splits;
 mod sync;
 mod terminal;
 mod usability;

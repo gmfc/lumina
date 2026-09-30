@@ -130,8 +130,10 @@ real PTY-backed shell session parsed by a VT100 emulator, so colors, cursor addr
 full-screen programs work. While the panel is focused every keystroke — including `Ctrl+C` —
 goes to the shell; click the editor to return there, or use the `terminal.*` commands. The
 header's `▾`/`▸` control minimizes and restores the dock, `×` closes a tab, and `+` opens a new
-one. Mouse-wheel over the panel scrolls its history. It is built to grow (split panes, task
-runners, and other bottom-dock contributions can hang off the same panel later).
+one. Mouse-wheel over the panel scrolls its history. The terminal dock is built to grow (task
+runners and other bottom-dock contributions can hang off the same panel later). **Editor**
+split panes are available separately: `Ctrl+\` splits right, `Ctrl+K Ctrl+\` splits down,
+`Ctrl+K W` closes a split, and `Ctrl+K Ctrl+←`/`→` cycle focus.
 
 ## Source control
 
@@ -159,27 +161,29 @@ list of shortcuts, so combinations compose:
 
 - **Modes** — Normal, Insert, Visual (charwise) and Visual-Line, plus the `:` command line and
   `/` `?` search lines.
-- **Motions** — `h j k l`, `w W b B e E ge gE`, `0 ^ $ g_`, `f t F T` with `; ,`, `{ }`, `%`,
-  `gg G {n}G`, `H M L`, `|`, and `Ctrl-D`/`Ctrl-U`/`Ctrl-F`/`Ctrl-B` scrolling.
-- **Operators** — `d c y > < gu gU g~`, doubled for the current line (`dd`, `yy`, `cc`, `>>`),
-  each combining with every motion and text object, and with **counts** that multiply
+- **Motions** — `h j k l` (logical lines), `gj gk` (visual rows under wrap), `w W b B e E ge gE`,
+  `0 ^ $ g_`, `f t F T` with `; ,`, `{ }`, `%`, `gg G {n}G`, `H M L`, `|`, and
+  `Ctrl-D`/`Ctrl-U`/`Ctrl-F`/`Ctrl-B` scrolling.
+- **Operators** — `d c y > < gu gU g~ = gq`, doubled for the current line (`dd`, `yy`, `cc`, `>>`,
+  `==`), each combining with every motion and text object, and with **counts** that multiply
   (`2d3w` = delete six words).
 - **Text objects** — `iw aw iW aW`, `i( a( i{ a{ i[ a[ i< a<` (and `b`/`B` aliases), `i" a" i'
-  a' i` a` `, and `ip ap`.
+  a' i` a` `, `ip ap`, and HTML-ish tags `it`/`at`.
 - **Edits** — `i I a A o O gi s S c C d D x X r ~ J p P`, `u` / `Ctrl-R`, and the **dot command
   `.`** which repeats the last change (recorded as keystrokes, so `ciwfoo<Esc>` then `.` works).
+- **Macros / marks / jumps** — `q{a-z}` / `q` / `@{a-z}` / `@@`; `m{a-z}`, `` `{a-z} `` /
+  `'{a-z}`; jump list via `Ctrl-O` / `Ctrl-I`.
 - **Registers** — the unnamed register, the yank register `"0`, named `"a`–`"z` (uppercase
   appends), the system clipboard `"+`/`"*`, and the black hole `"_`.
 - **Visual mode** — motions and text objects extend the (inclusive) selection; `o` swaps ends;
   operators (`d c y > < u U ~ r J`) act on it.
 - **Ex commands** — `:w :wq :x :q :q! :wa :qa`, `:{number}` to jump to a line, `:noh`, and a
-  literal `:[%]s/old/new/[g]` substitute.
+  regex `:[%]s/pat/repl/[g]` substitute.
 
 Insert mode is otherwise the normal editor: auto-pairs, auto-indent, completion, and all the
 `Ctrl`-shortcuts above keep working, and `Esc` (or `Ctrl-[`) returns to Normal. Un-owned `Ctrl`
 chords fall through in Normal mode too, so `Ctrl+S`, `Ctrl+P`, `Ctrl+Shift+P`, etc. still do
-their usual thing. Not (yet) implemented: macros (`q`/`@`), marks, jump/change lists, tag
-objects (`it`/`at`), the `=`/`gq` reformat operators, and regex in `:s` (it's literal).
+their usual thing.
 
 ## Large files, binary files, and viewers
 
@@ -244,16 +248,12 @@ tab at once.
 Wrapping is purely a view: the buffer, its transactions, and every character offset are
 untouched, so a wrapped file saves back byte-for-byte identical. `Up`/`Down` move by *visual*
 row and preserve the goal column; `Home`/`End` snap to the visual row; `PageUp`/`PageDown` stay
-logical.
+logical. Continuation rows inherit a capped indent from the logical line's leading whitespace;
+optional `wrap_column` under `[settings]` caps wrap width below the pane; inlay hints draw under
+wrap.
 
-Current limits: wrapped rows carry no continuation indent, wrapping happens at the pane width
-only (there is no fixed wrap column), and inline virtual text — inlay hints — is not drawn
-while wrap is on.
-
-In Vim mode, `j`/`k` follow the visual row under wrap, the same as `Up`/`Down`; operator-pending
-motions such as `dj` and `cj` still act on whole logical lines. Real Vim keeps `j`/`k` logical
-and reserves `gj`/`gk` for display lines, so this is a known deviation rather than a design
-choice — see issue #54.
+In Vim mode, bare `j`/`k` move by logical line; `gj`/`gk` follow the visual row under wrap
+(matching real Vim — [#54](https://github.com/gmfc/lumina/issues/54)).
 
 ## Settings
 

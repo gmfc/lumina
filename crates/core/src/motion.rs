@@ -18,6 +18,13 @@ use char_motion::{
 };
 use word::{word_end_right, word_left, word_right};
 
+/// Move `delta` **logical** lines, preserving the sticky goal column (display cells).
+/// Used by Vim's bare `j`/`k` (issue #54); soft-wrap visual-row motion stays on [`Motion::Up`] /
+/// [`Motion::Down`].
+pub fn vertical_logical(doc: &Document, pos: usize, delta: isize) -> usize {
+    vertical(doc, pos, delta)
+}
+
 /// A cursor motion. Resolved by [`resolve`] against a document + starting offset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Motion {

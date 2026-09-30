@@ -181,7 +181,16 @@ impl App {
                 self.push_locations("References", items);
             }
             LspEvent::DocumentSymbols(syms) => {
-                // Every symbol is in the active document; resolve its path once.
+                // Always cache for the breadcrumb strip.
+                if let Some(id) = self.editor.workspace.active_doc() {
+                    self.editor.doc_symbols.insert(id, syms.clone());
+                    self.force_redraw = true;
+                }
+                // Only open the symbols picker when the user explicitly requested it.
+                if !self.editor.symbols_picker_pending {
+                    return;
+                }
+                self.editor.symbols_picker_pending = false;
                 let Some(path) = self
                     .editor
                     .active_document()

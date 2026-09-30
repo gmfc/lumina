@@ -48,7 +48,33 @@ impl App {
                 return;
             }
         }
-        if in_rect(self.regions.editor, col, row) {
+        // Breadcrumb strip: jump to the clicked symbol.
+        if let Some(crumb) = self.regions.breadcrumb {
+            if in_rect(crumb, col, row) {
+                if let Some((_, line, ch)) = self
+                    .editor
+                    .breadcrumb_hits
+                    .iter()
+                    .find(|(r, _, _)| in_rect(*r, col, row))
+                    .copied()
+                {
+                    if let Some(doc) = self.editor.active_document_mut() {
+                        let off = lsp_pos_to_char(doc, line, ch);
+                        doc.set_caret(off);
+                    }
+                    self.editor.focus = Focus::Editor;
+                    return;
+                }
+            }
+        }
+        if in_rect(self.regions.editor, col, row)
+            || self
+                .regions
+                .editor_panes
+                .iter()
+                .any(|(_, r)| in_rect(*r, col, row))
+        {
+            self.focus_split_at(col, row);
             self.editor_area_click(col, row, mods);
         } else if in_rect(self.regions.tabs, col, row) {
             self.tab_bar_click(col);

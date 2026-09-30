@@ -220,26 +220,43 @@ fn push_symbol(v: &Value, depth: usize, out: &mut Vec<DocumentSymbol>) {
         .to_string();
     let kind = v.get("kind").and_then(|k| k.as_u64()).unwrap_or(0) as u8;
     // DocumentSymbol: selectionRange/range at top level. SymbolInformation: location.range.
-    let range = v
+    let sel = v
         .get("selectionRange")
         .or_else(|| v.get("range"))
         .or_else(|| v.get("location").and_then(|l| l.get("range")));
-    if let Some(start) = range.and_then(|r| r.get("start")) {
+    let full = v
+        .get("range")
+        .or_else(|| v.get("location").and_then(|l| l.get("range")))
+        .or(sel);
+    if let Some(start) = sel.and_then(|r| r.get("start")) {
         let line = start.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32;
         let character = start.get("character").and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+        let (end_line, end_character) = full
+            .and_then(|r| r.get("end"))
+            .map(|e| {
+                (
+                    e.get("line").and_then(|l| l.as_u64()).unwrap_or(line as u64) as u32,
+                    e.get("character")
+                        .and_then(|c| c.as_u64())
+                        .unwrap_or(character as u64) as u32,
+                )
+            })
+            .unwrap_or((line, character));
         if !name.is_empty() {
             out.push(DocumentSymbol {
                 name,
                 kind,
                 line,
                 character,
+                end_line,
+                end_character,
                 depth,
             });
         }
     }
     if let Some(children) = v.get("children").and_then(|c| c.as_array()) {
         for child in children {
-            push_symbol(child, depth + 1, out);
+            push_symbol(child, depth + 1, &mut *out);
         }
     }
 }

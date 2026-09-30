@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Snippet tabstop sessions** — accepting an LSP snippet starts a Tab / Shift-Tab session with
+  mirrored same-number placeholders (Esc cancels).
+- **Editor split panes** — `Ctrl+\` / `Ctrl+K Ctrl+\` split right/down; `Ctrl+K W` closes;
+  `Ctrl+K Ctrl+←`/`→` cycle focus; click focuses a pane.
+- **More syntax languages** — HTML, CSS, Java, Ruby, Bash, YAML, plus user `highlights.scm`
+  overrides under `grammar_dirs` / `~/.config/lumina/grammars/<lang>/`.
+- **Soft-wrap follow-ups** — continuation indent, inlays under wrap, optional `wrap_column`.
+- **Vim parity** — macros `q`/`@`, marks, jump list (`Ctrl-O`/`Ctrl-I`), logical `j`/`k` +
+  visual `gj`/`gk` (#54), regex `:s`, `=` / `gq`, tag objects `it`/`at`.
+- **Breadcrumb strip** — LSP document-symbol path under the tab bar; click to jump.
+
 ## [0.6.0] - 2026-08-06
 
 ### Added

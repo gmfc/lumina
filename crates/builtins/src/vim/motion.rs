@@ -199,6 +199,41 @@ impl VimPlugin {
         }
     }
 
+    /// Logical-line vertical motion (Vim bare `j`/`k`), preserving goal column. Unlike
+    /// [`Self::move_lines`] this ignores soft-wrap visual rows.
+    pub(super) fn move_logical_lines(&mut self, delta: isize, extend: bool, host: &mut dyn Host) {
+        let target = Self::read(host, |d| {
+            let mut pos = d.selections.primary().head;
+            let step: isize = if delta > 0 { 1 } else { -1 };
+            for _ in 0..delta.unsigned_abs() {
+                let next = editor_core::motion::vertical_logical(d, pos, step);
+                if next == pos {
+                    break;
+                }
+                pos = next;
+            }
+            pos
+        });
+        let Some(t) = target else {
+            return;
+        };
+        if extend {
+            let anchor = Self::read(host, |d| d.selections.primary().anchor).unwrap_or(t);
+            Self::select(host, anchor, t);
+        } else {
+            Self::caret(host, t);
+        }
+    }
+
+    /// Record a jump (for G/gg/`/`?/%/marks) then move the caret.
+    pub(super) fn jump_to(&mut self, target: usize, host: &mut dyn Host) {
+        let from = Self::primary_head(host);
+        let same_line = Self::read(host, |d| d.char_to_line(from) == d.char_to_line(target))
+            .unwrap_or(false);
+        self.sm().push_jump(from, target, same_line);
+        Self::caret(host, target);
+    }
+
     pub(super) fn find_apply(
         &mut self,
         fp: FindPending,

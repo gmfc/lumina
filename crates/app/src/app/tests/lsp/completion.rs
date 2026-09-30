@@ -46,6 +46,45 @@ fn snippet_completion_expands_with_tabstop_cursor() {
 }
 
 #[test]
+fn snippet_tab_cycles_tabstops_then_exits() {
+    // Multi-tabstop session: Tab advances $1 → $2 → $0, and a further Tab ends the session.
+    let path = temp_file("f");
+    let mut app = app_with(&path);
+    app.dispatch(Command::Move(Motion::DocEnd));
+    let snippet_item = editor_plugin::LspCompletionItem {
+        label: "for".into(),
+        detail: None,
+        insert_text: "for ${1:item} in ${2:iter} {$0}".into(),
+        kind: Some(3),
+        additional_edits: Vec::new(),
+        is_snippet: true,
+        data: None,
+        command: None,
+    };
+    feed_completion(&mut app, vec![snippet_item]);
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+    let doc = app.editor.active_document().unwrap();
+    assert!(doc.to_string().starts_with("for item in iter"));
+    let sel = doc.selections.primary();
+    assert_eq!(&doc.to_string()[sel.span()], "item");
+    // Tab → stop 2 ("iter")
+    app.on_key(KeyEvent::from(KeyCode::Tab));
+    let doc = app.editor.active_document().unwrap();
+    let sel = doc.selections.primary();
+    assert_eq!(&doc.to_string()[sel.span()], "iter");
+    // Tab → $0 (end of body)
+    app.on_key(KeyEvent::from(KeyCode::Tab));
+    let head = app.editor.active_document().unwrap().selections.primary().head;
+    assert_eq!(
+        &app.editor.active_document().unwrap().to_string()[head..],
+        "}"
+    );
+    // Another Tab ends the session (caret stays / indent would otherwise run).
+    app.on_key(KeyEvent::from(KeyCode::Tab));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn completion_accept_replaces_typed_prefix() {
     // Feed one item, accept it, and confirm it replaces the identifier prefix under the caret —
     // the `completion` plugin's accept path (apply_transaction over the real edit).

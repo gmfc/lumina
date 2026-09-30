@@ -79,7 +79,7 @@ impl VimPlugin {
         })
         .flatten();
         if let Some(pos) = found {
-            Self::caret(host, pos);
+            self.jump_to(pos, host);
         } else {
             host.notify(format!("Pattern not found: {pat}"));
         }

@@ -182,8 +182,16 @@ impl VimPlugin {
         }
 
         // Record keys for `.` (dot-repeat), except while replaying and for `.` itself.
-        let replaying = self.s().replaying;
+        // Macro recording is separate and captures every key while active (except during replay).
+        let replaying = self.s().replaying || self.s().macro_replaying;
         let is_dot = mode == Mode::Normal && key.code == KeyCode::Char('.') && self.s().is_idle();
+        let is_macro_stop = mode == Mode::Normal
+            && key.code == KeyCode::Char('q')
+            && self.s().macro_recording.is_some()
+            && self.s().is_idle();
+        if self.s().macro_recording.is_some() && !self.s().macro_replaying && !is_macro_stop {
+            self.sm().macro_record_key(key);
+        }
         if !replaying && !is_dot {
             let rev = Self::revision(host);
             self.sm().record_key(key, rev);

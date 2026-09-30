@@ -1,6 +1,7 @@
 //! Per-document incremental highlighter and its span-computation helpers.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use editor_core::SyntaxEdit;
 use ropey::Rope;
@@ -27,9 +28,18 @@ pub struct DocHighlighter {
 }
 
 impl DocHighlighter {
-    /// Build a highlighter for `lang_id`, or `None` if unsupported.
+    /// Build a highlighter for `lang_id`, or `None` if unsupported / the query fails to compile.
     pub fn new(lang_id: &str) -> Option<DocHighlighter> {
-        let (language, query_src) = lang_config(lang_id)?;
+        Self::new_with_queries(lang_id, &HashMap::new())
+    }
+
+    /// Like [`Self::new`], but applies user highlight-query overrides from `user_queries`
+    /// (see [`crate::load_user_queries`]).
+    pub fn new_with_queries(
+        lang_id: &str,
+        user_queries: &HashMap<String, String>,
+    ) -> Option<DocHighlighter> {
+        let (language, query_src) = lang_config(lang_id, user_queries)?;
         let mut parser = Parser::new();
         parser.set_language(&language).ok()?;
         let query = Query::new(&language, &query_src).ok()?;
@@ -44,6 +54,12 @@ impl DocHighlighter {
             cached_last: 0,
             primed: false,
         })
+    }
+
+    /// Build a highlighter using queries loaded from `grammar_dirs`.
+    pub fn new_with_dirs(lang_id: &str, grammar_dirs: &[PathBuf]) -> Option<DocHighlighter> {
+        let queries = crate::lang::load_user_queries(grammar_dirs);
+        Self::new_with_queries(lang_id, &queries)
     }
 
     /// Ensure spans for lines `[first, last]` are cached for document `revision`. Reparses

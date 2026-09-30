@@ -1,6 +1,5 @@
 //! Vim modal state — the data the [`super::VimPlugin`] state machine reads and mutates, plus a
-//! little pure bookkeeping (counts, dot-repeat recording). Moved out of the app with vim; the only
-//! change is that dot-repeat records the crossterm-free [`Key`] the plugin sees.
+//! little pure bookkeeping (counts, dot-repeat recording, marks, jump list, macros).
 
 use std::collections::HashMap;
 
@@ -23,6 +22,10 @@ pub(crate) enum Operator {
     Yank,
     Indent,
     Outdent,
+    /// `=` — reindent lines to match the previous line's leading whitespace.
+    Reindent,
+    /// `gq` — hard-wrap / fill lines to the wrap width.
+    Format,
     Lower,
     Upper,
     ToggleCase,
@@ -49,7 +52,7 @@ pub(crate) struct Register {
 /// A multi-key prefix that changes how the next key is read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Prefix {
-    /// `g…` — `gg`, `ge`, `gu`, `gU`, `g~`, `gI`, `g_`.
+    /// `g…` — `gg`, `ge`, `gu`, `gU`, `g~`, `gI`, `g_`, `gj`/`gk`, `gq`.
     G,
     /// `z…` — `zz`, `zt`, `zb`.
     Z,
@@ -59,6 +62,16 @@ pub(crate) enum Prefix {
     Replace,
     /// A register was requested with `"`: the next key names it.
     Register,
+    /// `m{a-z}` — set a mark.
+    MarkSet,
+    /// `` `{a-z} `` — jump to a mark's exact position.
+    MarkJumpExact,
+    /// `'{a-z}` — jump to the first non-blank of a mark's line.
+    MarkJumpLine,
+    /// `q{a-z}` — start recording a macro into that register.
+    MacroRecord,
+    /// `@{a-z}` / `@@` — replay a macro register.
+    MacroPlay,
 }
 
 /// A pending single-char argument for the `f`/`t`/`F`/`T` family.
@@ -69,6 +82,12 @@ pub(crate) enum FindPending {
     FindBack,
     TillBack,
 }
+
+/// Maximum jump-list entries (older entries drop off the front).
+pub(crate) const JUMP_LIST_CAP: usize = 100;
+
+/// Maximum keys stored in one macro register.
+pub(crate) const MACRO_CAP: usize = 4096;
 
 /// The whole Vim layer's state.
 pub(crate) struct VimState {
@@ -95,7 +114,7 @@ pub(crate) struct VimState {
     pub(crate) search: Option<(bool, String)>,
     /// The last search pattern, for `n`/`N`.
     pub(crate) last_search: Option<(bool, String)>,
-    /// Keys captured for the change currently being made.
+    /// Keys captured for the change currently being made (dot-repeat).
     pub(crate) recording: Option<Vec<Key>>,
     /// The finished last change, replayed by `.`.
     pub(crate) last_change: Vec<Key>,
@@ -103,6 +122,19 @@ pub(crate) struct VimState {
     pub(crate) replaying: bool,
     /// Document revision when the current recording began (to detect a real change).
     pub(crate) rev_at_record_start: u64,
+    /// Local marks `a`–`z` → char offset in the current buffer (path-free, per VimState lifetime).
+    pub(crate) marks: HashMap<char, usize>,
+    /// Jump list: older → newer. `jump_idx` points at the current position (or `len` = "at tip").
+    pub(crate) jumps: Vec<usize>,
+    pub(crate) jump_idx: usize,
+    /// Macro register currently being recorded (`q{a-z}` … `q`), separate from dot-repeat.
+    pub(crate) macro_recording: Option<(char, Vec<Key>)>,
+    /// Named macro registers `a`–`z`.
+    pub(crate) macros: HashMap<char, Vec<Key>>,
+    /// Last macro register played, for `@@`.
+    pub(crate) last_macro: Option<char>,
+    /// True while a macro is feeding keys back (blocks nested `@` / re-record).
+    pub(crate) macro_replaying: bool,
 }
 
 impl VimState {
@@ -126,6 +158,13 @@ impl VimState {
             last_change: Vec::new(),
             replaying: false,
             rev_at_record_start: 0,
+            marks: HashMap::new(),
+            jumps: Vec::new(),
+            jump_idx: 0,
+            macro_recording: None,
+            macros: HashMap::new(),
+            last_macro: None,
+            macro_replaying: false,
         }
     }
 
@@ -160,7 +199,7 @@ impl VimState {
     }
 
     /// Clear everything pending after a command completes/cancels — but keep mode, registers,
-    /// and dot-repeat state.
+    /// and dot-repeat / mark / jump / macro state.
     pub(crate) fn clear_pending(&mut self) {
         self.count = None;
         self.op_count = None;
@@ -206,6 +245,61 @@ impl VimState {
         }
     }
 
+    /// Record a jump from `from` before landing at `to`. Skips same-line moves.
+    pub(crate) fn push_jump(&mut self, from: usize, to: usize, same_line: bool) {
+        if from == to || same_line {
+            return;
+        }
+        if self.jump_idx < self.jumps.len() {
+            self.jumps.truncate(self.jump_idx);
+        }
+        if self.jumps.last() != Some(&from) {
+            self.jumps.push(from);
+        }
+        if self.jumps.len() > JUMP_LIST_CAP {
+            let drop = self.jumps.len() - JUMP_LIST_CAP;
+            self.jumps.drain(..drop);
+        }
+        self.jump_idx = self.jumps.len();
+    }
+
+    /// Move to an older jump; returns the offset, or `None` at the oldest end.
+    pub(crate) fn jump_older(&mut self, current: usize) -> Option<usize> {
+        if self.jumps.is_empty() {
+            return None;
+        }
+        if self.jump_idx == self.jumps.len() {
+            self.jumps.push(current);
+            if self.jumps.len() > JUMP_LIST_CAP {
+                self.jumps.remove(0);
+            }
+            self.jump_idx = self.jumps.len() - 1;
+        }
+        if self.jump_idx == 0 {
+            return None;
+        }
+        self.jump_idx -= 1;
+        Some(self.jumps[self.jump_idx])
+    }
+
+    /// Move to a newer jump; returns the offset, or `None` at the tip.
+    pub(crate) fn jump_newer(&mut self) -> Option<usize> {
+        if self.jump_idx + 1 >= self.jumps.len() {
+            return None;
+        }
+        self.jump_idx += 1;
+        Some(self.jumps[self.jump_idx])
+    }
+
+    /// Append `key` to the open macro recording (if any).
+    pub(crate) fn macro_record_key(&mut self, key: Key) {
+        if let Some((_, keys)) = &mut self.macro_recording {
+            if keys.len() < MACRO_CAP {
+                keys.push(key);
+            }
+        }
+    }
+
     /// A short status-line hint for the pending state (count, register, operator), or `None`.
     pub(crate) fn pending_hint(&self) -> Option<String> {
         if let Some((fwd, pat)) = &self.search {
@@ -213,6 +307,9 @@ impl VimState {
         }
         if let Some(cmd) = &self.command {
             return Some(format!(":{cmd}"));
+        }
+        if let Some((reg, _)) = &self.macro_recording {
+            return Some(format!("recording @{reg}"));
         }
         let mut s = String::new();
         if let Some(r) = self.register {
@@ -229,6 +326,8 @@ impl VimState {
                 Operator::Yank => "y",
                 Operator::Indent => ">",
                 Operator::Outdent => "<",
+                Operator::Reindent => "=",
+                Operator::Format => "gq",
                 Operator::Lower => "gu",
                 Operator::Upper => "gU",
                 Operator::ToggleCase => "g~",
