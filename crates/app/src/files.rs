@@ -1066,6 +1066,23 @@ mod tests {
     }
 
     #[test]
+    fn streaming_utf8_open_preserves_text_and_crlf() {
+        let limits = Limits::from_mb(64, 1);
+        let body = "line one\r\nline two\r\n".repeat(80_000);
+        let path = temp_bytes("stream.log", body.as_bytes());
+        match open(&path, &limits) {
+            Ok(Opened::Text(doc)) => {
+                assert!(doc.large);
+                assert_eq!(doc.line_ending, LineEnding::Crlf);
+                assert!(doc.to_string().starts_with("line one\nline two\n"));
+                assert_eq!(doc.disk.len, body.len());
+            }
+            other => panic!("expected streamed Text, got {:?}", other.map(|_| "…")),
+        }
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn a_zero_limit_disables_the_ceiling() {
         let limits = Limits::from_mb(0, 0);
         let path = temp_bytes("any.txt", &vec![b'a'; 4096]);

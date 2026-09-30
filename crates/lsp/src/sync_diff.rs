@@ -110,4 +110,29 @@ mod tests {
         assert_eq!(change.end_character, 3);
         assert_eq!(change.text, "X");
     }
+
+    #[test]
+    fn empty_to_text_covers_full_range() {
+        let change = incremental_change("", "hi");
+        assert_eq!(change.start_line, 0);
+        assert_eq!(change.start_character, 0);
+        assert_eq!(change.end_line, 0);
+        assert_eq!(change.end_character, 0);
+        assert_eq!(change.text, "hi");
+    }
+
+    #[test]
+    fn delete_all_yields_empty_replacement() {
+        let change = incremental_change("bye", "");
+        assert_eq!(change.text, "");
+        assert_eq!(change.start_character, 0);
+        assert_eq!(change.end_character, 3);
+    }
+
+    #[test]
+    fn char_offset_tracks_newlines() {
+        assert_eq!(char_offset_to_position("ab\ncd", 0), (0, 0));
+        assert_eq!(char_offset_to_position("ab\ncd", 3), (1, 0));
+        assert_eq!(char_offset_to_position("ab\ncd", 5), (1, 2));
+    }
 }
