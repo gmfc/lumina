@@ -67,6 +67,29 @@ fn request_allowed_requires_running_and_capability() {
 }
 
 #[test]
+fn sync_kind_none_skips_did_change_without_sending() {
+    let mut mgr = manager();
+    mgr.state.insert(
+        "rust".into(),
+        ClientState::Running(ServerCaps {
+            sync_kind: SyncKind::None,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(mgr.sync_kind("rust"), SyncKind::None);
+    assert!(
+        !mgr.did_change(Path::new("/tmp/x.rs"), "rust", "after", Some("before")),
+        "SyncKind::None must not emit didChange"
+    );
+}
+
+#[test]
+fn sync_kind_defaults_to_full_without_a_running_server() {
+    let mgr = manager();
+    assert_eq!(mgr.sync_kind("rust"), SyncKind::Full);
+}
+
+#[test]
 fn colliding_ids_route_per_language() {
     // Two servers both use id 1; the (language, id) key keeps their responses distinct.
     let mut mgr = manager();
