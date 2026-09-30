@@ -22,6 +22,7 @@ pub(super) fn render_overlay(f: &mut Frame, app: &App, body: Rect) {
         Overlay::ConfirmClose { tab } => render_confirm_close(f, app, body, *tab),
         Overlay::ConfirmQuit { dirty } => render_confirm_quit(f, app, body, dirty),
         Overlay::ConfirmReload => render_confirm_reload(f, app, body),
+        Overlay::ConfirmLossySave => render_confirm_lossy_save(f, app, body),
         Overlay::Info(text) => render_info(f, body, text),
         Overlay::SaveAsInput {
             buffer,
@@ -122,6 +123,29 @@ fn render_confirm_reload(f: &mut Frame, app: &App, body: Rect) {
         Line::from(" [R] Revert   [Esc] Cancel "),
     ];
     boxed(f, centered(body, 62, 6), text);
+}
+
+fn render_confirm_lossy_save(f: &mut Frame, app: &App, body: Rect) {
+    let name = app
+        .editor
+        .active_document()
+        .and_then(|d| d.path.as_ref())
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "This file".into());
+    let text = vec![
+        Line::from(TSpan::styled(
+            format!(" {name} was opened with replacement characters"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(TSpan::styled(
+            " Saving will permanently write U+FFFD over the original bytes.",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(" [S] Save anyway   [Esc] Cancel "),
+    ];
+    boxed(f, centered(body, 66, 6), text);
 }
 
 /// A hover/info popup: the text wrapped into a centered box, capped in size.

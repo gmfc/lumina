@@ -6,6 +6,7 @@ mod cli;
 mod clipboard;
 mod commands;
 mod config;
+mod drafts;
 mod editor;
 mod files;
 mod git;

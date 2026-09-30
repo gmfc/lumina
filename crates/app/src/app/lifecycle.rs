@@ -71,6 +71,10 @@ impl App {
             );
         }
 
+        // Crash drafts overlay session restore: if a dirty snapshot outlived the last process,
+        // put that text back and mark the buffer dirty so the user can save or discard.
+        restore_crash_drafts(&mut editor, None);
+
         let truecolor = crate::theme::truecolor_supported();
         let mut theme = crate::theme::Theme::default_dark(truecolor);
         theme.load_user_overrides();
@@ -131,6 +135,8 @@ impl App {
             keymap,
             pending: Vec::new(),
             autosave_mark: None,
+            draft_mark: None,
+            drafts_root_override: None,
             terminate: crate::install_termination_handler(),
             config,
             drag_anchor: None,
@@ -307,6 +313,119 @@ impl App {
         }
         let session = crate::session::Session { files, active };
         crate::session::save(&ws.root, &session);
+    }
+
+    /// Root directory for crash-recovery drafts (`None` → platform data dir).
+    pub(crate) fn drafts_root(&self) -> Option<PathBuf> {
+        self.drafts_root_override
+            .clone()
+            .or_else(crate::drafts::default_drafts_root)
+    }
+
+    /// Periodic crash-draft flush. Runs even when autosave is off: every ~1s of dirty idle,
+    /// snapshot every dirty buffer (path-backed and untitled) so a kill cannot lose the text.
+    pub(super) fn draft_tick(&mut self) {
+        const DRAFT_IDLE_MS: u64 = 1_000;
+        let Some(fingerprint) = self.draft_fingerprint() else {
+            self.draft_mark = None;
+            return;
+        };
+        let now = std::time::Instant::now();
+        match self.draft_mark {
+            Some((mark, _)) if mark != fingerprint => {
+                self.draft_mark = Some((fingerprint, now + Duration::from_millis(DRAFT_IDLE_MS)));
+            }
+            Some((_, deadline)) if now >= deadline => {
+                self.draft_mark = None;
+                self.flush_crash_drafts();
+            }
+            Some(_) => {}
+            None => {
+                self.draft_mark = Some((fingerprint, now + Duration::from_millis(DRAFT_IDLE_MS)));
+            }
+        }
+    }
+
+    /// Fingerprint of every dirty editable buffer (including untitled). Distinct from
+    /// [`Self::dirty_fingerprint`], which only watches path-backed buffers for autosave.
+    fn draft_fingerprint(&self) -> Option<u64> {
+        let mut acc: u64 = 0;
+        let mut any = false;
+        for (id, doc) in self.editor.workspace.documents.iter() {
+            if !doc.dirty || self.editor.is_tab_view(id) {
+                continue;
+            }
+            any = true;
+            acc = acc
+                .rotate_left(5)
+                .wrapping_add(doc.revision)
+                .wrapping_add(doc.len_chars() as u64);
+        }
+        any.then_some(acc)
+    }
+
+    /// Write a draft for every dirty editable buffer. Best-effort; IO errors are ignored so a
+    /// full disk cannot stall the editor mid-keystroke.
+    pub(crate) fn flush_crash_drafts(&self) {
+        let Some(root) = self.drafts_root() else {
+            return;
+        };
+        let ws = &self.editor.workspace.root;
+        let mut untitled_i = 0usize;
+        for &id in &self.editor.workspace.tabs {
+            if self.editor.is_tab_view(id) {
+                continue;
+            }
+            let Some(doc) = self.editor.workspace.documents.get(id) else {
+                continue;
+            };
+            if !doc.dirty {
+                continue;
+            }
+            let (path, untitled_key) = match &doc.path {
+                Some(p) => (Some(p.clone()), None),
+                None => {
+                    let key = format!("untitled-{untitled_i}");
+                    untitled_i += 1;
+                    (None, Some(key))
+                }
+            };
+            let draft = crate::drafts::Draft {
+                path,
+                untitled_key,
+                text: doc.to_string(),
+                cursor: doc.selections.primary().head,
+                scroll: doc.view.scroll_line,
+                encoding: encoding_tag(doc.encoding).into(),
+                line_ending: line_ending_tag(doc.line_ending).into(),
+                mixed_line_endings: doc.mixed_line_endings,
+                lossy_decode: doc.lossy_decode,
+                revision: doc.revision,
+            };
+            let _ = crate::drafts::save_draft(&root, ws, &draft);
+        }
+    }
+
+    /// Drop the draft that matches a just-saved (or discarded) path.
+    pub(crate) fn clear_path_draft(&self, path: &std::path::Path) {
+        let Some(root) = self.drafts_root() else {
+            return;
+        };
+        crate::drafts::clear_path_draft(&root, &self.editor.workspace.root, path);
+    }
+
+    /// Drop every draft for this workspace (intentional discard-all quit).
+    pub(crate) fn clear_all_drafts(&self) {
+        let Some(root) = self.drafts_root() else {
+            return;
+        };
+        crate::drafts::clear_workspace_drafts(&root, &self.editor.workspace.root);
+    }
+
+    /// Test/helper: apply drafts from an explicit root onto the current editor.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn restore_drafts_from(&mut self, drafts_root: &std::path::Path) {
+        restore_crash_drafts(&mut self.editor, Some(drafts_root));
     }
 
     /// Re-clamp the viewport to the caret **only when the caret (or active doc) moved** since the
@@ -522,6 +641,94 @@ fn open_at_startup(
         }
     }
     Ok(())
+}
+
+/// Apply crash drafts onto the restored workspace. Path-backed drafts replace the on-disk text
+/// when they differ; untitled drafts open as new dirty tabs. `drafts_root` of `None` uses the
+/// platform data directory (production); tests pass an explicit temp root.
+pub(crate) fn restore_crash_drafts(
+    editor: &mut EditorState,
+    drafts_root: Option<&std::path::Path>,
+) {
+    let root = match drafts_root {
+        Some(p) => p.to_path_buf(),
+        None => match crate::drafts::default_drafts_root() {
+            Some(p) => p,
+            None => return,
+        },
+    };
+    let drafts = crate::drafts::load_drafts(&root, &editor.workspace.root);
+    if drafts.is_empty() {
+        return;
+    }
+    let mut restored = 0usize;
+    for draft in drafts {
+        if let Some(path) = &draft.path {
+            if let Some(id) = editor.workspace.find_by_path(path) {
+                if let Some(doc) = editor.workspace.documents.get_mut(id) {
+                    if doc.to_string() != draft.text {
+                        doc.reload_from_str(&draft.text);
+                        doc.dirty = true;
+                        doc.lossy_decode = draft.lossy_decode;
+                        doc.mixed_line_endings = draft.mixed_line_endings;
+                        let pos = doc.clamp(draft.cursor);
+                        doc.set_caret(pos);
+                        doc.view.scroll_line = draft.scroll;
+                        restored += 1;
+                    }
+                }
+            } else if path.exists() {
+                // Draft for a file that was not in the session — open it and apply the draft.
+                if let Ok(files::Opened::Text(mut doc)) =
+                    files::open(path, &files::Limits::from_mb(64, 8))
+                {
+                    if doc.to_string() != draft.text {
+                        doc.reload_from_str(&draft.text);
+                        doc.dirty = true;
+                        doc.lossy_decode = draft.lossy_decode;
+                        doc.mixed_line_endings = draft.mixed_line_endings;
+                        let pos = doc.clamp(draft.cursor);
+                        doc.set_caret(pos);
+                        doc.view.scroll_line = draft.scroll;
+                        editor.workspace.open_document(*doc);
+                        restored += 1;
+                    }
+                }
+            }
+        } else if draft.untitled_key.is_some() {
+            let mut doc = Document::from_str(&draft.text);
+            doc.dirty = true;
+            doc.lossy_decode = draft.lossy_decode;
+            doc.mixed_line_endings = draft.mixed_line_endings;
+            let pos = doc.clamp(draft.cursor);
+            doc.set_caret(pos);
+            doc.view.scroll_line = draft.scroll;
+            editor.workspace.open_document(doc);
+            restored += 1;
+        }
+    }
+    if restored > 0 {
+        editor.notify_warn(format!(
+            "Restored {restored} unsaved buffer(s) from a previous crash"
+        ));
+    }
+}
+
+fn encoding_tag(enc: editor_core::Encoding) -> &'static str {
+    match enc {
+        editor_core::Encoding::Utf8 => "utf8",
+        editor_core::Encoding::Utf8Bom => "utf8bom",
+        editor_core::Encoding::Utf16Le => "utf16le",
+        editor_core::Encoding::Utf16Be => "utf16be",
+    }
+}
+
+fn line_ending_tag(le: editor_core::LineEnding) -> &'static str {
+    match le {
+        editor_core::LineEnding::Lf => "lf",
+        editor_core::LineEnding::Crlf => "crlf",
+        editor_core::LineEnding::Cr => "cr",
+    }
 }
 
 /// Status line shown when the user config exists but fails to parse: the settings fall back

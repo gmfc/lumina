@@ -17,6 +17,7 @@ mod lsp;
 mod mouse;
 mod palette_theme;
 mod plugins;
+mod reliability;
 mod render;
 mod render_overlays;
 mod settings;

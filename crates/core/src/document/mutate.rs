@@ -96,7 +96,7 @@ impl Document {
     /// Replace the whole buffer from a string, normalizing CRLF to internal LF. `pub(crate)`; see
     /// [`Document::set_text`] — callers outside `core` use [`Document::reload_from_str`].
     pub(crate) fn set_text_str(&mut self, s: &str) {
-        let normalized = s.replace("\r\n", "\n");
+        let normalized = crate::document::normalize_to_lf(s);
         self.set_text(Rope::from_str(&normalized));
     }
 }
