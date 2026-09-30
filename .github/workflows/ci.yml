@@ -80,3 +80,15 @@ jobs:
       - run: cargo test -p editor-core --features proptests --test transaction_roundtrip --test selection_invariants   # Phase 2
       - run: cargo test -p editor-core --features proptests --test coordinate_mapping                                  # Phase 3
       - run: cargo test -p editor-builtins --features proptests --test self_hosting                                    # Phase 7 (explorer exists at Phase 4)
+
+  # Performance §2: CI-gated microbench smoke (open / scroll / keystroke on 1k/10k/100k LOC)
+  # with regress ceilings. Release profile so timings are meaningful; existing ignored
+  # `perfbench` A/B harnesses stay opt-in and are not run here.
+  perf-smoke:
+    name: perf smoke (regress ceilings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p editor-core --release --test perf_smoke -- --nocapture
