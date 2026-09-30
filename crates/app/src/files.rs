@@ -609,6 +609,26 @@ fn open_streaming_utf8(path: &Path, limits: &Limits, expected_len: u64) -> Resul
 /// tree-sitter parse plus a full-buffer `didOpen` on the file they were just warned about is
 /// the opposite of what "open anyway" asks for.
 pub fn open_forced(path: &Path, limits: &Limits) -> Result<Document> {
+    // Prefer the streaming path for plain UTF-8 (the usual "huge log / Open Anyway" case).
+    if is_utf8_streamable(path, FileKind::Text) {
+        match open_streaming_utf8(
+            path,
+            &Limits {
+                max_bytes: 0,
+                large_bytes: limits.large_bytes,
+            },
+            0,
+        )? {
+            Opened::Text(mut doc) => {
+                let len = doc.disk.len as u64;
+                doc.large = limits.is_large(len) || limits.is_over(len);
+                return Ok(*doc);
+            }
+            Opened::Refused(_) => {
+                // Fall through to the whole-buffer path (e.g. encoding refused mid-stream).
+            }
+        }
+    }
     // Uncapped by definition — the user asked for the whole thing.
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let len = bytes.len() as u64;

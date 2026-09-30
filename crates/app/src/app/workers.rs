@@ -254,9 +254,6 @@ impl App {
             // Force a fresh didOpen once LSP is eligible again.
             self.lsp_sent_revision.remove(&id);
             self.lsp_last_text.remove(&id);
-            self.editor.notify_info(
-                "left large-file mode — syntax highlighting, git gutter, and LSP can resume",
-            );
         }
         let fp = crate::files::fingerprint(&bytes);
 
@@ -264,6 +261,13 @@ impl App {
             Change::Ignore => {}
             Change::Conflict => self.flag_conflict(id, path, fp),
             Change::Reload => self.reload_clean(id, path, &bytes, fp),
+        }
+        // Announce after reload so the status slot isn't overwritten by the reload notice.
+        if was_large && !now_large {
+            self.editor.notify_info(
+                "left large-file mode — syntax highlighting, git gutter, and LSP can resume",
+            );
+            self.request_git_status(id);
         }
     }
 
