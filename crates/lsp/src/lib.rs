@@ -11,9 +11,11 @@
 
 pub mod client;
 pub mod position;
+pub mod sync_diff;
 pub mod transport;
 
 pub use client::{LspClient, LspHandle};
+pub use sync_diff::{incremental_change, ContentChange};
 
 /// A message from a server to the client.
 #[derive(Debug, Clone)]
@@ -201,8 +203,12 @@ pub enum PositionEncoding {
     Utf8,
 }
 
-/// `TextDocumentSyncKind`: how the server wants document changes. Stored on the caps; PR1
-/// always sends full text (`didChange` with no range) regardless — incremental is a later PR.
+/// `TextDocumentSyncKind`: how the server wants document changes.
+///
+/// The client honors this when sending `textDocument/didChange`:
+/// - [`SyncKind::Incremental`] → ranged `contentChanges` derived from the last synced snapshot
+/// - [`SyncKind::Full`] → whole-document `contentChanges`
+/// - [`SyncKind::None`] → no `didChange` (document stays at the last `didOpen` text)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SyncKind {
     None,

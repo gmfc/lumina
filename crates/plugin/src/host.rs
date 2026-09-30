@@ -181,7 +181,8 @@ pub trait Host {
 
     /// The project's files (ignore-honoring walk of the workspace root), for quick-open. Default
     /// empty; the app owns the `ignore`-crate walk policy so plugins need no filesystem deps.
-    fn project_files(&self) -> Vec<DirEntry> {
+    /// Takes `&mut self` so the host can fill/reuse a lightweight file index across opens.
+    fn project_files(&mut self) -> Vec<DirEntry> {
         Vec::new()
     }
 

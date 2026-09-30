@@ -134,9 +134,13 @@ impl Host for EditorState {
         self.command_catalog.clone()
     }
 
-    fn project_files(&self) -> Vec<DirEntry> {
+    fn project_files(&mut self) -> Vec<DirEntry> {
+        if let Some(cached) = &self.project_files_index {
+            return cached.clone();
+        }
         // Ignore-honoring walk of the project root (files only), capped so a huge tree can't
         // stall the picker. The app owns this policy so builtins need no `ignore` dependency.
+        // The result is cached until `Event::FilesChanged` clears it (see broadcast).
         let mut out = Vec::new();
         let walker = ignore::WalkBuilder::new(&self.workspace.root)
             .hidden(false)
@@ -151,6 +155,7 @@ impl Host for EditorState {
                 });
             }
         }
+        self.project_files_index = Some(out.clone());
         out
     }
 

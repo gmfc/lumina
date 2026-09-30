@@ -30,7 +30,7 @@ fn lsp_manager_is_inert_without_a_configured_server() {
     // Forwarding a disk change with no registered watcher is a no-op (must not panic).
     mgr.notify_watched_file_change(p);
     mgr.did_open(p, "rust", "text"); // no server → no-op
-    mgr.did_change(p, "rust", "text"); // no open doc → no-op
+    mgr.did_change(p, "rust", "text", None); // no open doc → no-op
     assert!(mgr.poll().is_empty());
 }
 

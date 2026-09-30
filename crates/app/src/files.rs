@@ -9,12 +9,13 @@
 //! and yields a buffer of replacement characters that would corrupt the file if saved.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use editor_core::document::DiskFingerprint;
 use editor_core::{Document, Encoding, LineEnding};
+use ropey::RopeBuilder;
 
 /// Cheap content hash used for change detection + save-echo suppression.
 pub fn fingerprint(bytes: &[u8]) -> DiskFingerprint {
@@ -488,6 +489,11 @@ pub fn open(path: &Path, limits: &Limits) -> Result<Opened> {
     } else {
         limits.max_bytes.saturating_add(1)
     };
+    // Large UTF-8 logs stream into a rope without holding a second full `Vec`/`String` copy.
+    // Smaller files and non-UTF-8 encodings keep the existing whole-buffer path.
+    if limits.is_large(probe.len) && is_utf8_streamable(path, probe.kind) {
+        return open_streaming_utf8(path, limits, probe.len);
+    }
     let bytes = read_capped(path, cap)?;
     let len = bytes.len() as u64;
     if limits.is_over(len) {
@@ -503,6 +509,96 @@ pub fn open(path: &Path, limits: &Limits) -> Result<Opened> {
     }
     let mut doc = document_from(path, &bytes);
     doc.large = limits.is_large(len);
+    Ok(Opened::Text(Box::new(doc)))
+}
+
+/// Text without a UTF-16/32 BOM — safe for the chunked UTF-8 decoder.
+fn is_utf8_streamable(path: &Path, kind: FileKind) -> bool {
+    if kind != FileKind::Text {
+        return false;
+    }
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 4];
+    let n = file.read(&mut head).unwrap_or(0);
+    let head = &head[..n];
+    !(head.starts_with(&[0xFF, 0xFE])
+        || head.starts_with(&[0xFE, 0xFF])
+        || head.starts_with(&[0xFF, 0xFE, 0x00, 0x00])
+        || head.starts_with(&[0x00, 0x00, 0xFE, 0xFF]))
+}
+
+/// Stream a large UTF-8 file into a rope via [`RopeBuilder`], normalizing CRLF as chunks arrive.
+fn open_streaming_utf8(path: &Path, limits: &Limits, expected_len: u64) -> Result<Opened> {
+    let file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut builder = RopeBuilder::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut leftover = Vec::new();
+    let mut total = 0u64;
+    let mut saw_crlf = false;
+    let mut hasher: u64 = 0xcbf29ce484222325;
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if limits.is_over(total) {
+            return Ok(Opened::Refused(Refusal::TooLarge {
+                len: expected_len.max(total),
+                limit: limits.max_bytes,
+            }));
+        }
+        for &b in &buf[..n] {
+            hasher ^= b as u64;
+            hasher = hasher.wrapping_mul(0x100000001b3);
+        }
+        leftover.extend_from_slice(&buf[..n]);
+        match std::str::from_utf8(&leftover) {
+            Ok(s) => {
+                saw_crlf |= s.contains("\r\n");
+                let normalized = s.replace("\r\n", "\n");
+                builder.append(&normalized);
+                leftover.clear();
+            }
+            Err(err) if err.error_len().is_none() => {
+                let valid = err.valid_up_to();
+                if valid > 0 {
+                    let s = std::str::from_utf8(&leftover[..valid]).expect("valid_up_to");
+                    saw_crlf |= s.contains("\r\n");
+                    let normalized = s.replace("\r\n", "\n");
+                    builder.append(&normalized);
+                    leftover.drain(..valid);
+                }
+            }
+            Err(_) => {
+                return Ok(Opened::Refused(Refusal::UnsupportedEncoding {
+                    len: expected_len.max(total),
+                }));
+            }
+        }
+    }
+    if !leftover.is_empty() {
+        return Ok(Opened::Refused(Refusal::UnsupportedEncoding {
+            len: expected_len.max(total),
+        }));
+    }
+    let line_ending = if saw_crlf {
+        LineEnding::Crlf
+    } else {
+        LineEnding::Lf
+    };
+    let mut doc = Document::from_rope(builder.finish(), line_ending);
+    doc.path = Some(absolute_path(path));
+    doc.language = language_for(path);
+    doc.encoding = Encoding::Utf8;
+    doc.disk = DiskFingerprint {
+        hash: hasher,
+        len: total as usize,
+    };
+    doc.large = limits.is_large(total);
     Ok(Opened::Text(Box::new(doc)))
 }
 

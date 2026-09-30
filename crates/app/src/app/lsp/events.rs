@@ -335,6 +335,7 @@ impl App {
     fn forget_synced_docs(&mut self, lang: &str) {
         for id in self.doc_ids_of_lang(lang) {
             self.lsp_sent_revision.remove(&id);
+            self.lsp_last_text.remove(&id);
             self.lsp_pulled_revision.remove(&id);
             self.lsp_pull_deadline.remove(&id);
         }

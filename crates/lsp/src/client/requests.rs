@@ -285,13 +285,41 @@ impl LspHandle {
         )
     }
 
-    /// Full-document sync (simplest correct change mode).
+    /// Full-document sync (`TextDocumentSyncKind::Full`).
     pub fn did_change(&self, uri: &str, version: i64, text: &str) -> io::Result<()> {
         self.notify(
             "textDocument/didChange",
             json!({
                 "textDocument": { "uri": uri, "version": version },
                 "contentChanges": [ { "text": text } ]
+            }),
+        )
+    }
+
+    /// Incremental sync (`TextDocumentSyncKind::Incremental`) with ranged content changes.
+    pub fn did_change_incremental(
+        &self,
+        uri: &str,
+        version: i64,
+        changes: &[crate::ContentChange],
+    ) -> io::Result<()> {
+        let content_changes: Vec<serde_json::Value> = changes
+            .iter()
+            .map(|c| {
+                json!({
+                    "range": {
+                        "start": { "line": c.start_line, "character": c.start_character },
+                        "end": { "line": c.end_line, "character": c.end_character },
+                    },
+                    "text": c.text,
+                })
+            })
+            .collect();
+        self.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": uri, "version": version },
+                "contentChanges": content_changes,
             }),
         )
     }

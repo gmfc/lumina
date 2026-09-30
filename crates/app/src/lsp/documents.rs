@@ -1,9 +1,18 @@
-//! Document synchronization: forwarding `didOpen`/`didChange`/`didClose` for open buffers (full
-//! text sync) and tracking the per-document version the server last saw.
+//! Document synchronization: forwarding `didOpen`/`didChange`/`didClose` for open buffers
+//! (full or incremental sync per server caps) and tracking the per-document version the
+//! server last saw.
 
 use super::*;
 
 impl LspManager {
+    /// The server's advertised [`SyncKind`] for `language`, or [`SyncKind::Full`] when unknown.
+    pub fn sync_kind(&self, language: &str) -> SyncKind {
+        match self.state.get(language) {
+            Some(ClientState::Running(caps)) => caps.sync_kind,
+            _ => SyncKind::Full,
+        }
+    }
+
     /// Notify the server that a document opened. Sends only once the connection is `Running`;
     /// returns whether the notification was actually sent (so the caller records the sent
     /// revision only on a real send).
@@ -26,17 +35,57 @@ impl LspManager {
         false
     }
 
-    /// Notify the server that a document changed (full sync). Sends only once `Running`.
-    pub fn did_change(&mut self, path: &Path, language: &str, text: &str) -> bool {
+    /// Notify the server that a document changed. Honors [`SyncKind`]:
+    /// - `Incremental` + `previous` → ranged change from the last synced snapshot
+    /// - `Full` (or missing `previous`) → whole-document text
+    /// - `None` → no notification (still bumps the local version bookkeeping? No — skip entirely)
+    ///
+    /// Returns whether a notification was actually sent.
+    pub fn did_change(
+        &mut self,
+        path: &Path,
+        language: &str,
+        text: &str,
+        previous: Option<&str>,
+    ) -> bool {
         if !self.is_ready(language) {
             return false;
         }
+        match self.sync_kind(language) {
+            SyncKind::None => false,
+            SyncKind::Full => self.did_change_full(path, language, text),
+            SyncKind::Incremental => match previous {
+                Some(prev) => self.did_change_incremental(path, language, prev, text),
+                None => self.did_change_full(path, language, text),
+            },
+        }
+    }
+
+    fn did_change_full(&mut self, path: &Path, language: &str, text: &str) -> bool {
         let uri = uri_for(path);
         let version = self.versions.entry(uri.clone()).or_insert(1);
         *version += 1;
         let v = *version;
         if let Some(client) = self.clients.get(language) {
             return client.did_change(&uri, v, text).is_ok();
+        }
+        false
+    }
+
+    fn did_change_incremental(
+        &mut self,
+        path: &Path,
+        language: &str,
+        previous: &str,
+        text: &str,
+    ) -> bool {
+        let uri = uri_for(path);
+        let version = self.versions.entry(uri.clone()).or_insert(1);
+        *version += 1;
+        let v = *version;
+        let change = incremental_change(previous, text);
+        if let Some(client) = self.clients.get(language) {
+            return client.did_change_incremental(&uri, v, &[change]).is_ok();
         }
         false
     }

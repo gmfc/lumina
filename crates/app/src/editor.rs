@@ -365,6 +365,9 @@ pub(crate) struct EditorState {
     pub(crate) symbols_picker_pending: bool,
     /// Clickable breadcrumb segments from the last frame: `(rect, line, character)`.
     pub(crate) breadcrumb_hits: Vec<(ratatui::layout::Rect, u32, u32)>,
+    /// Cached workspace file list for quick-open (`Host::project_files`). Invalidated on
+    /// [`Event::FilesChanged`] so the picker does not re-walk the tree on every Ctrl+P.
+    pub(crate) project_files_index: Option<Vec<editor_plugin::host::DirEntry>>,
 }
 
 impl EditorState {
@@ -421,6 +424,7 @@ impl EditorState {
             doc_symbols: HashMap::new(),
             symbols_picker_pending: false,
             breadcrumb_hits: Vec::new(),
+            project_files_index: None,
         }
     }
 
