@@ -343,4 +343,100 @@ mod tests {
         assert_eq!(laid.len(), 2);
         assert_eq!(laid[0].1.width + laid[1].1.width, 100);
     }
+
+    #[test]
+    fn vertical_layout_stacks_heights() {
+        let doc = dummy_doc();
+        let mut tree = SplitTree::single(doc, ViewState::default());
+        let mut path = Vec::new();
+        tree.split_focused(&mut path, SplitDir::Vertical);
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 40,
+        };
+        let laid = tree.layout(area);
+        assert_eq!(laid.len(), 2);
+        assert_eq!(laid[0].1.height + laid[1].1.height, 40);
+        assert_eq!(laid[0].1.width, 80);
+    }
+
+    #[test]
+    fn focus_delta_cycles_leaves() {
+        let doc = dummy_doc();
+        let mut tree = SplitTree::single(doc, ViewState::default());
+        let mut path = Vec::new();
+        tree.split_focused(&mut path, SplitDir::Horizontal);
+        tree.split_focused(&mut path, SplitDir::Vertical); // 3 leaves
+        let paths: Vec<Vec<bool>> = tree.leaves().into_iter().map(|(p, _)| p).collect();
+        assert_eq!(paths.len(), 3);
+        let mut focus = paths[0].clone();
+        SplitTree::focus_delta(&mut focus, &paths, true);
+        assert_eq!(focus, paths[1]);
+        SplitTree::focus_delta(&mut focus, &paths, true);
+        assert_eq!(focus, paths[2]);
+        SplitTree::focus_delta(&mut focus, &paths, true);
+        assert_eq!(focus, paths[0]); // wrap
+        SplitTree::focus_delta(&mut focus, &paths, false);
+        assert_eq!(focus, paths[2]);
+    }
+
+    #[test]
+    fn leaves_enumerate_in_order() {
+        let doc = dummy_doc();
+        let mut tree = SplitTree::single(doc, ViewState::default());
+        let mut path = Vec::new();
+        tree.split_focused(&mut path, SplitDir::Horizontal);
+        let leaves = tree.leaves();
+        assert_eq!(leaves.len(), 2);
+        assert_eq!(leaves[0].0, vec![false]);
+        assert_eq!(leaves[1].0, vec![true]);
+    }
+
+    #[test]
+    fn close_focused_keeps_sibling_first_or_second() {
+        let doc = dummy_doc();
+        let mut tree = SplitTree::single(doc, ViewState::default());
+        let mut path = Vec::new();
+        tree.split_focused(&mut path, SplitDir::Horizontal); // path → second
+        assert!(tree.close_focused(&mut path));
+        assert_eq!(tree.leaf_count(), 1);
+
+        // Close the *first* child instead.
+        let mut tree = SplitTree::single(doc, ViewState::default());
+        let mut path = Vec::new();
+        tree.split_focused(&mut path, SplitDir::Horizontal);
+        path = vec![false];
+        assert!(tree.close_focused(&mut path));
+        assert_eq!(tree.leaf_count(), 1);
+    }
+
+    #[test]
+    fn nested_close_collapses_inner_branch() {
+        let doc = dummy_doc();
+        let mut tree = SplitTree::single(doc, ViewState::default());
+        let mut path = Vec::new();
+        tree.split_focused(&mut path, SplitDir::Horizontal);
+        tree.split_focused(&mut path, SplitDir::Vertical); // 3 leaves; path deep
+        assert_eq!(tree.leaf_count(), 3);
+        assert!(tree.close_focused(&mut path));
+        assert_eq!(tree.leaf_count(), 2);
+    }
+
+    #[test]
+    fn focused_pane_falls_back_on_stale_path() {
+        let doc = dummy_doc();
+        let tree = SplitTree::single(doc, ViewState::default());
+        // Empty path on a leaf, and a bogus deep path, both resolve.
+        let _ = tree.focused_pane(&[]);
+        let _ = tree.focused_pane(&[true, false]);
+    }
+
+    #[test]
+    fn focus_delta_noop_on_empty_leaf_list() {
+        let mut path = vec![false];
+        SplitTree::focus_delta(&mut path, &[], true);
+        assert_eq!(path, vec![false]);
+    }
 }

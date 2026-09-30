@@ -14,6 +14,7 @@ use editor_plugin::VimMode as Mode;
 mod ex;
 mod motions;
 mod operators;
+mod parity;
 mod registers;
 mod visual;
 

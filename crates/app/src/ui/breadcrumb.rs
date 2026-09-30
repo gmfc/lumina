@@ -119,3 +119,68 @@ pub(super) fn render_breadcrumb(f: &mut Frame, app: &mut App, area: Rect) -> boo
     );
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sym(name: &str, line: u32, end_line: u32, depth: usize) -> DocumentSymbol {
+        DocumentSymbol {
+            name: name.into(),
+            kind: 12,
+            line,
+            character: 0,
+            end_line,
+            end_character: 0,
+            depth,
+        }
+    }
+
+    #[test]
+    fn enclosing_chain_uses_range_enclosure() {
+        let syms = vec![
+            sym("mod", 0, 20, 0),
+            sym("fn_a", 2, 8, 1),
+            sym("fn_b", 10, 15, 1),
+        ];
+        let chain = enclosing_symbols(&syms, 4, 0);
+        assert_eq!(
+            chain.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["mod", "fn_a"]
+        );
+    }
+
+    #[test]
+    fn enclosing_falls_back_when_end_ranges_are_zero() {
+        // Servers that omit end ranges leave end_line == start; fallback walks by depth.
+        let syms = vec![
+            DocumentSymbol {
+                name: "outer".into(),
+                kind: 5,
+                line: 0,
+                character: 0,
+                end_line: 0,
+                end_character: 0,
+                depth: 0,
+            },
+            DocumentSymbol {
+                name: "inner".into(),
+                kind: 12,
+                line: 3,
+                character: 0,
+                end_line: 3,
+                end_character: 0,
+                depth: 1,
+            },
+        ];
+        let chain = enclosing_symbols(&syms, 5, 0);
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].name, "outer");
+        assert_eq!(chain[1].name, "inner");
+    }
+
+    #[test]
+    fn empty_symbols_yield_empty_chain() {
+        assert!(enclosing_symbols(&[], 0, 0).is_empty());
+    }
+}
