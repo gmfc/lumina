@@ -91,6 +91,78 @@ fn snippet_tab_cycles_tabstops_then_exits() {
 }
 
 #[test]
+fn snippet_shift_tab_moves_backward_and_mirrors_sync() {
+    // Prefix "p" keeps the "pair" item visible in the filtered popup.
+    let path = temp_file("p");
+    let mut app = app_with(&path);
+    app.dispatch(Command::Move(Motion::DocEnd));
+    let snippet_item = editor_plugin::LspCompletionItem {
+        label: "pair".into(),
+        detail: None,
+        insert_text: "${1:foo} = ${1:foo}; $0".into(),
+        kind: Some(3),
+        additional_edits: Vec::new(),
+        is_snippet: true,
+        data: None,
+        command: None,
+    };
+    feed_completion(&mut app, vec![snippet_item]);
+    assert!(popup_rows(&app) >= 1, "snippet item should be listed");
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+    // Primary stop selected ("foo"); type over it — mirror of $1 must follow.
+    app.on_key(KeyEvent::from(KeyCode::Char('z')));
+    app.drain_workers();
+    let buf = app.editor.active_document().unwrap().to_string();
+    assert!(
+        buf.matches('z').count() >= 2,
+        "mirrored $1 should sync on type: {buf:?}"
+    );
+    assert!(
+        !buf.contains("foo"),
+        "placeholder replaced on both sides: {buf:?}"
+    );
+    // Type more into the stop so sync_mirrors runs again with a longer primary.
+    app.on_key(KeyEvent::from(KeyCode::Char('y')));
+    app.drain_workers();
+    let buf = app.editor.active_document().unwrap().to_string();
+    assert!(
+        buf.matches("zy").count() >= 2,
+        "continued typing keeps mirrors aligned: {buf:?}"
+    );
+    // Advance to $0 then Shift-Tab back to $1.
+    app.on_key(KeyEvent::from(KeyCode::Tab));
+    app.on_key(KeyEvent::from(KeyCode::BackTab));
+    let sel = app.editor.active_document().unwrap().selections.primary();
+    let buf = app.editor.active_document().unwrap().to_string();
+    assert_eq!(&buf[sel.span()], "zy");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn snippet_without_tabstops_places_caret_at_end() {
+    let path = temp_file("h");
+    let mut app = app_with(&path);
+    app.dispatch(Command::Move(Motion::DocEnd));
+    let snippet_item = editor_plugin::LspCompletionItem {
+        label: "hello_world".into(),
+        detail: None,
+        insert_text: "hello_world".into(),
+        kind: Some(3),
+        additional_edits: Vec::new(),
+        is_snippet: true,
+        data: None,
+        command: None,
+    };
+    feed_completion(&mut app, vec![snippet_item]);
+    assert!(popup_rows(&app) >= 1);
+    app.on_key(KeyEvent::from(KeyCode::Enter));
+    let doc = app.editor.active_document().unwrap();
+    assert_eq!(doc.to_string(), "hello_world");
+    assert_eq!(doc.selections.primary().head, "hello_world".len());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn completion_accept_replaces_typed_prefix() {
     // Feed one item, accept it, and confirm it replaces the identifier prefix under the caret —
     // the `completion` plugin's accept path (apply_transaction over the real edit).

@@ -235,3 +235,29 @@ fn tag_object_inner_and_around() {
     let around = text_object(&d, 5, TextObject::Tag, true);
     assert_eq!(around, Some((0, 16))); // whole <div>…</div>
 }
+
+#[test]
+fn tag_object_nested_picks_innermost() {
+    let d = doc("<div><span>hi</span></div>");
+    // Cursor on 'h' of hi.
+    let pos = d.to_string().find('h').unwrap();
+    let inner = text_object(&d, pos, TextObject::Tag, false).unwrap();
+    assert_eq!(&d.to_string()[inner.0..inner.1], "hi");
+    let around = text_object(&d, pos, TextObject::Tag, true).unwrap();
+    assert_eq!(&d.to_string()[around.0..around.1], "<span>hi</span>");
+}
+
+#[test]
+fn tag_object_skips_self_closing_and_closing() {
+    let d = doc("<br/><div>x</div>");
+    let pos = d.to_string().find('x').unwrap();
+    let around = text_object(&d, pos, TextObject::Tag, true).unwrap();
+    assert_eq!(&d.to_string()[around.0..around.1], "<div>x</div>");
+}
+
+#[test]
+fn tag_object_none_without_tags() {
+    let d = doc("plain text");
+    assert_eq!(text_object(&d, 3, TextObject::Tag, false), None);
+    assert_eq!(text_object(&d, 0, TextObject::Tag, false), None);
+}

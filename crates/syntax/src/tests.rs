@@ -139,7 +139,36 @@ fn load_user_queries_reads_highlights_scm() {
     let lang_dir = dir.join("rust");
     std::fs::create_dir_all(&lang_dir).unwrap();
     std::fs::write(lang_dir.join("highlights.scm"), "(line_comment) @comment\n").unwrap();
+    // A sibling file (not a dir) and an empty query must be skipped.
+    std::fs::write(dir.join("readme.txt"), "ignore").unwrap();
+    let empty = dir.join("python");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::fs::write(empty.join("highlights.scm"), "   \n").unwrap();
     let map = load_user_queries(std::slice::from_ref(&dir));
     assert!(map.get("rust").is_some_and(|s| s.contains("@comment")));
+    assert!(!map.contains_key("python"));
+    // Convenience wrapper covers the same path.
+    let map2 = load_user_queries_from(&dir);
+    assert_eq!(map2.get("rust"), map.get("rust"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn new_with_dirs_applies_user_query() {
+    let dir = std::env::temp_dir().join(format!("lumina-grammar-dirs-{}", std::process::id()));
+    let lang_dir = dir.join("rust");
+    std::fs::create_dir_all(&lang_dir).unwrap();
+    std::fs::write(
+        lang_dir.join("highlights.scm"),
+        "(line_comment) @comment\n(block_comment) @comment\n",
+    )
+    .unwrap();
+    let mut h = DocHighlighter::new_with_dirs("rust", &[dir.clone()]).expect("loads");
+    let rope = Rope::from_str("// hi\nfn main() {}\n");
+    h.ensure(&rope, 1, &[], true, 0, rope.len_lines() - 1);
+    assert!(h
+        .line_spans(0)
+        .iter()
+        .any(|s| s.capture.starts_with("comment")));
     let _ = std::fs::remove_dir_all(&dir);
 }

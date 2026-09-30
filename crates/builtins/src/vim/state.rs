@@ -349,3 +349,50 @@ impl Default for VimState {
         VimState::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use editor_plugin::input::Key;
+
+    #[test]
+    fn jump_list_older_newer_and_truncate() {
+        let mut s = VimState::new();
+        assert_eq!(s.jump_older(0), None);
+        s.push_jump(0, 10, false);
+        s.push_jump(10, 20, false);
+        s.push_jump(20, 20, false); // same pos — skip
+        s.push_jump(20, 25, true); // same line — skip
+        assert_eq!(s.jumps.len(), 2);
+        let older = s.jump_older(30).expect("back");
+        assert_eq!(older, 10);
+        assert_eq!(s.jump_newer(), Some(30));
+        assert_eq!(s.jump_newer(), None);
+
+        // Cap: flood past JUMP_LIST_CAP.
+        let mut s = VimState::new();
+        for i in 0..JUMP_LIST_CAP + 5 {
+            s.push_jump(i * 10, i * 10 + 5, false);
+        }
+        assert!(s.jumps.len() <= JUMP_LIST_CAP);
+        // Mid-list jump then push truncates forward history.
+        let _ = s.jump_older(9999);
+        let _ = s.jump_older(9999);
+        s.push_jump(1, 100, false);
+        assert!(s.jump_idx <= s.jumps.len());
+    }
+
+    #[test]
+    fn macro_record_key_and_pending_hint() {
+        let mut s = VimState::new();
+        s.macro_recording = Some(('a', Vec::new()));
+        s.macro_record_key(Key::char('x'));
+        assert_eq!(s.macro_recording.as_ref().unwrap().1.len(), 1);
+        assert_eq!(s.pending_hint().as_deref(), Some("recording @a"));
+        s.macro_recording = None;
+        s.operator = Some(Operator::Reindent);
+        assert_eq!(s.pending_hint().as_deref(), Some("="));
+        s.operator = Some(Operator::Format);
+        assert_eq!(s.pending_hint().as_deref(), Some("gq"));
+    }
+}

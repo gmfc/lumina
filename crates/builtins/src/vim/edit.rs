@@ -21,9 +21,9 @@ impl VimPlugin {
             self.leave_insert(host);
             return true;
         }
-        // During dot-repeat replay there's no app pipeline behind us, so insert the literal char
+        // During `.` / macro replay there's no app pipeline behind us, so insert the literal char
         // ourselves; live typing falls through to the editor (auto-pairs / auto-indent).
-        if self.s().replaying {
+        if self.s().replaying || self.s().macro_replaying {
             if let KeyCode::Char(c) = key.code {
                 if !key.ctrl && !key.alt {
                     let head = Self::primary_head(host);
