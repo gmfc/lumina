@@ -573,6 +573,68 @@ fn a_file_that_grows_across_the_degraded_threshold_picks_it_up_on_reload() {
 }
 
 #[test]
+fn a_file_that_shrinks_below_the_degraded_threshold_leaves_large_mode() {
+    // LARGE→normal: shrinking an open buffer under `large_file_mb` clears the flag, forgets
+    // the LSP sync snapshot (so the next tick re-`didOpen`s), and announces the transition.
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("lumina_shrink_{}_{}.rs", std::process::id(), n));
+    std::fs::write(&path, "fn a() {}\n".repeat(200_000)).unwrap();
+    let mut app = app_with(&path);
+    app.config.large_file_mb = 1;
+    app.close_and_forget(0);
+    app.open_path(&path);
+    assert!(app.editor.active_document().unwrap().large);
+
+    std::fs::write(&path, "fn tiny() {}\n").unwrap();
+    app.on_disk_changed(&path);
+
+    assert!(
+        !app.editor.active_document().unwrap().large,
+        "flag cleared on shrink"
+    );
+    assert!(
+        app.editor
+            .status_text()
+            .is_some_and(|m| m.contains("left large-file mode")),
+        "transition announced: {:?}",
+        app.editor.status_message
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn project_files_index_caches_until_files_changed() {
+    use editor_plugin::Host;
+    let dir = std::env::temp_dir().join(format!(
+        "lumina_pfi_{}_{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
+    let path = dir.join("a.rs");
+    let mut app = app_with(&path);
+    // Point the workspace root at the temp dir so the index walks our fixture.
+    app.editor.workspace.root = dir.clone();
+    app.editor.project_files_index = None;
+    let n1 = app.editor.project_files().len();
+    assert!(n1 >= 1);
+    assert!(app.editor.project_files_index.is_some());
+    let n2 = app.editor.project_files().len();
+    assert_eq!(n1, n2);
+
+    app.editor
+        .pending_events
+        .push(editor_plugin::event::Event::FilesChanged);
+    app.drain_workers();
+    assert!(
+        app.editor.project_files_index.is_none(),
+        "FilesChanged clears the index"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_chord_still_resolves_while_a_view_tab_is_focused() {
     // `tab_view_key` swallows plain characters so the placeholder can't be typed into — but a
     // chord's continuation key is a plain character too, which made every `ctrl+k <key>` chord

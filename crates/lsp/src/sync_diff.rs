@@ -102,4 +102,12 @@ mod tests {
         assert_eq!(change.end_line, 1);
         assert_eq!(change.text, "X");
     }
+
+    #[test]
+    fn emoji_counts_two_utf16_units() {
+        let change = incremental_change("a😀b", "a😀Xb");
+        assert_eq!(change.start_character, 3); // after a + 😀
+        assert_eq!(change.end_character, 3);
+        assert_eq!(change.text, "X");
+    }
 }
