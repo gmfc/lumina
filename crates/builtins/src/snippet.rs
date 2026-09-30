@@ -2,9 +2,12 @@
 //! `${1|a,b,c|}` choice, `$0`, `${VAR}` / `${VAR:default}` variables, and `\$ \} \\ \,` escapes.
 //!
 //! Expands the snippet to plain text plus the tabstop ranges. On accept the completion plugin
-//! inserts the text and places the caret at the first tabstop (selecting its placeholder). A full
-//! multi-tabstop session (Tab/Shift-Tab cycling, mirrored edits) is a follow-up; unknown variables
-//! resolve to their `:default` text (or empty), never to a literal `$name`.
+//! inserts the text, starts a [`SnippetSession`], and places the caret on the first tabstop
+//! (selecting its placeholder). Tab / Shift-Tab cycle stops; mirrored same-number placeholders
+//! stay in sync while the session is active. Unknown variables resolve to their `:default` text
+//! (or empty), never to a literal `$name`.
+
+use editor_core::DocId;
 
 /// A tabstop's number and its char range within the expanded [`Snippet::text`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,12 +26,157 @@ pub(crate) struct Snippet {
 impl Snippet {
     /// The tabstop the caret should land on after insertion: the lowest positive tabstop, else
     /// `$0`, else `None` (caret goes to the end of the inserted text).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn first_stop(&self) -> Option<&Tabstop> {
         self.tabstops
             .iter()
             .filter(|t| t.number > 0)
             .min_by_key(|t| t.number)
             .or_else(|| self.tabstops.iter().find(|t| t.number == 0))
+    }
+
+    /// Unique tabstop numbers in visit order: ascending positives, then `$0` if present.
+    pub(crate) fn visit_order(&self) -> Vec<u32> {
+        let mut nums: Vec<u32> = self
+            .tabstops
+            .iter()
+            .map(|t| t.number)
+            .filter(|&n| n > 0)
+            .collect();
+        nums.sort_unstable();
+        nums.dedup();
+        if self.tabstops.iter().any(|t| t.number == 0) {
+            nums.push(0);
+        }
+        nums
+    }
+}
+
+/// An active multi-tabstop snippet session after accept.
+#[derive(Debug, Clone)]
+pub(crate) struct SnippetSession {
+    pub(crate) doc: DocId,
+    /// Absolute document ranges for each recorded tabstop (updated as the user edits).
+    pub(crate) stops: Vec<Tabstop>,
+    /// Visit order of tabstop numbers (positives ascending, then `$0`).
+    pub(crate) order: Vec<u32>,
+    /// Index into [`Self::order`] for the active tabstop group.
+    pub(crate) index: usize,
+}
+
+impl SnippetSession {
+    /// Build a session from an expanded snippet inserted at document char offset `base`.
+    pub(crate) fn from_snippet(doc: DocId, base: usize, snip: &Snippet) -> Option<Self> {
+        let order = snip.visit_order();
+        if order.is_empty() {
+            return None;
+        }
+        let stops: Vec<Tabstop> = snip
+            .tabstops
+            .iter()
+            .map(|t| Tabstop {
+                number: t.number,
+                range: (base + t.range.0, base + t.range.1),
+            })
+            .collect();
+        Some(SnippetSession {
+            doc,
+            stops,
+            order,
+            index: 0,
+        })
+    }
+
+    pub(crate) fn active_number(&self) -> Option<u32> {
+        self.order.get(self.index).copied()
+    }
+
+    /// Primary (first recorded) range for the active tabstop number.
+    pub(crate) fn primary_range(&self) -> Option<(usize, usize)> {
+        let n = self.active_number()?;
+        self.stops
+            .iter()
+            .find(|t| t.number == n)
+            .map(|t| t.range)
+    }
+
+    /// All absolute ranges sharing the active tabstop number (primary first).
+    pub(crate) fn active_mirrors(&self) -> Vec<(usize, usize)> {
+        let Some(n) = self.active_number() else {
+            return Vec::new();
+        };
+        self.stops
+            .iter()
+            .filter(|t| t.number == n)
+            .map(|t| t.range)
+            .collect()
+    }
+
+    /// Advance to the next tabstop group. Returns `false` when the session should end (past `$0`
+    /// or past the last stop).
+    pub(crate) fn next(&mut self) -> bool {
+        if self.index + 1 >= self.order.len() {
+            return false;
+        }
+        self.index += 1;
+        true
+    }
+
+    /// Move to the previous tabstop group. Stays put at the first.
+    pub(crate) fn prev(&mut self) -> bool {
+        if self.index == 0 {
+            return true;
+        }
+        self.index -= 1;
+        true
+    }
+
+    /// True when the caret lies inside any active-group range (or at a zero-width stop).
+    pub(crate) fn caret_in_active(&self, head: usize) -> bool {
+        self.active_mirrors().iter().any(|&(a, b)| {
+            if a == b {
+                head == a
+            } else {
+                head >= a && head <= b
+            }
+        })
+    }
+
+    /// Shift every stop range for an insertion/deletion of `delta` chars at `at`.
+    /// Stops that start strictly after `at` move; stops that contain `at` grow/shrink their end.
+    #[cfg(test)]
+    pub(crate) fn shift_after(&mut self, at: usize, delta: isize) {
+        for t in &mut self.stops {
+            if t.range.0 > at {
+                t.range.0 = add_delta(t.range.0, delta);
+                t.range.1 = add_delta(t.range.1, delta);
+            } else if t.range.1 >= at {
+                // Edit landed at/inside this range — grow/shrink the end.
+                t.range.1 = add_delta(t.range.1, delta);
+            }
+        }
+    }
+
+    /// Replace the absolute ranges for tabstop `number` with `ranges` (same length expected).
+    pub(crate) fn set_ranges_for(&mut self, number: u32, ranges: &[(usize, usize)]) {
+        let mut i = 0;
+        for t in &mut self.stops {
+            if t.number == number {
+                if let Some(&r) = ranges.get(i) {
+                    t.range = r;
+                }
+                i += 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn add_delta(pos: usize, delta: isize) -> usize {
+    if delta >= 0 {
+        pos.saturating_add(delta as usize)
+    } else {
+        pos.saturating_sub((-delta) as usize)
     }
 }
 
@@ -182,6 +330,12 @@ fn consume_close(chars: &[char], i: &mut usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use editor_core::{Document, Workspace};
+
+    fn dummy_doc() -> editor_core::DocId {
+        let mut ws = Workspace::new(std::path::PathBuf::from("/tmp"));
+        ws.open_document(Document::from_str(""))
+    }
 
     #[test]
     fn empty_tabstop_and_final_cursor() {
@@ -190,6 +344,7 @@ mod tests {
         // $1 at the '(' + 1 = char 9; $0 at end (10).
         assert_eq!(s.first_stop().unwrap().number, 1);
         assert_eq!(s.first_stop().unwrap().range, (9, 9));
+        assert_eq!(s.visit_order(), vec![1, 0]);
     }
 
     #[test]
@@ -199,6 +354,7 @@ mod tests {
         let t1 = s.first_stop().unwrap();
         assert_eq!(t1.number, 1);
         assert_eq!(&s.text[t1.range.0..t1.range.1], "item");
+        assert_eq!(s.visit_order(), vec![1, 2, 0]);
     }
 
     #[test]
@@ -207,5 +363,38 @@ mod tests {
         assert_eq!(expand("${TM_UNKNOWN:def}").text, "def"); // unknown var → default
         assert_eq!(expand("$UNKNOWN").text, ""); // bare unknown var → empty
         assert_eq!(expand("cost is \\$5").text, "cost is $5"); // escaped $
+    }
+
+    #[test]
+    fn mirrored_placeholders_share_a_number() {
+        let s = expand("${1:x} = ${1:x}");
+        assert_eq!(s.text, "x = x");
+        let ones: Vec<_> = s.tabstops.iter().filter(|t| t.number == 1).collect();
+        assert_eq!(ones.len(), 2);
+        assert_eq!(&s.text[ones[0].range.0..ones[0].range.1], "x");
+        assert_eq!(&s.text[ones[1].range.0..ones[1].range.1], "x");
+    }
+
+    #[test]
+    fn session_cycles_and_ends_after_last() {
+        let snip = expand("${1:a}${2:b}$0");
+        let mut session = SnippetSession::from_snippet(dummy_doc(), 10, &snip).unwrap();
+        assert_eq!(session.active_number(), Some(1));
+        assert_eq!(session.primary_range(), Some((10, 11))); // "a" at base 10
+        assert!(session.next());
+        assert_eq!(session.active_number(), Some(2));
+        assert!(session.next());
+        assert_eq!(session.active_number(), Some(0));
+        assert!(!session.next());
+    }
+
+    #[test]
+    fn session_shift_after_adjusts_later_stops() {
+        let snip = expand("${1:a}${2:b}");
+        let mut session = SnippetSession::from_snippet(dummy_doc(), 0, &snip).unwrap();
+        // Insert 2 chars inside stop 1 (at char 0) → end grows; later stop shifts.
+        session.shift_after(0, 2);
+        assert_eq!(session.stops[0].range, (0, 3)); // was (0,1), end grew
+        assert_eq!(session.stops[1].range, (3, 4)); // was (1,2)
     }
 }

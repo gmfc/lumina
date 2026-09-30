@@ -120,12 +120,13 @@ pub(super) fn vertical_visual(doc: &Document, pos: usize, delta: isize) -> usize
     let cur_body = line_body(doc, line);
     let cur_segs = wrap_segments(&cur_body, width, tab);
     let mut seg_idx = cur_segs
-        .partition_point(|&s| s <= char_in_line)
+        .partition_point(|s| s.start <= char_in_line)
         .saturating_sub(1);
-    let goal = doc
-        .view
-        .goal_col
-        .unwrap_or_else(|| col_within_segment(&cur_body, cur_segs[seg_idx], char_in_line, tab));
+    // Sticky goal is the screen column within the visual row (indent + text column).
+    let goal = doc.view.goal_col.unwrap_or_else(|| {
+        cur_segs[seg_idx].indent_cells
+            + col_within_segment(&cur_body, cur_segs[seg_idx].start, char_in_line, tab)
+    });
 
     // Walk `delta` visual rows, crossing logical-line boundaries.
     let mut tline = line;
@@ -152,17 +153,19 @@ pub(super) fn vertical_visual(doc: &Document, pos: usize, delta: isize) -> usize
         }
     }
 
-    // Map the goal column onto the target visual row.
+    // Map the goal column onto the target visual row (past its continuation indent).
     let tbody = line_body(doc, tline);
     let tlen = tbody.chars().count();
-    let ts_start = tsegs[seg_idx];
-    let ts_end = tsegs.get(seg_idx + 1).copied().unwrap_or(tlen);
+    let ts = tsegs[seg_idx];
+    let ts_start = ts.start;
+    let ts_end = tsegs.get(seg_idx + 1).map(|s| s.start).unwrap_or(tlen);
     let seg_text: String = tbody
         .chars()
         .skip(ts_start)
         .take(ts_end - ts_start)
         .collect();
-    let off = crate::view::display_col_to_char(&seg_text, goal, tab);
+    let text_goal = goal.saturating_sub(ts.indent_cells);
+    let off = crate::view::display_col_to_char(&seg_text, text_goal, tab);
     let mut char_in_target = (ts_start + off).min(ts_end);
     // `ts_end` on a *non-final* visual row is the next row's first char (and renders there), so a
     // goal past this row's width would skip a whole visual row. Clamp to the row's last char so

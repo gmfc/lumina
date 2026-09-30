@@ -29,6 +29,16 @@ fn ex_substitute_global() {
 }
 
 #[test]
+fn ex_substitute_regex_character_class() {
+    // `:s` is regex-backed: `\d+` matches digits (literal `str::replace` would not).
+    let (mut app, path) = vim_app("id=42 id=7");
+    keys(&mut app, ":%s/\\d+/N/g");
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(text(&app), "id=N id=N");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn ex_write_saves() {
     let (mut app, path) = vim_app("data");
     keys(&mut app, "x"); // dirty

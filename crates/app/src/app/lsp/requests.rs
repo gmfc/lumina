@@ -161,6 +161,7 @@ impl App {
             Some((path, lang))
         });
         if let Some((path, lang)) = info {
+            self.editor.symbols_picker_pending = true;
             self.lsp.request_document_symbols(&path, &lang);
         }
     }

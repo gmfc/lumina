@@ -109,9 +109,11 @@ pub(super) fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     let buf = f.buffer_mut();
     // One scratch, reused for every row: no per-line heap allocation in the render loop.
     let mut scratch = RowScratch::default();
-    // Wrap at the *live* pane text width, so a terminal resize renders correctly on the very next
-    // frame regardless of when `view.wrap_width` (used by motions/clicks) was last refreshed.
-    let wrap_cols = area.width.saturating_sub(gutter) as usize;
+    // Wrap at the *live* pane text width (capped by optional `wrap_column`), so a terminal resize
+    // renders correctly on the very next frame regardless of when `view.wrap_width` (used by
+    // motions/clicks) was last refreshed.
+    let pane_cols = area.width.saturating_sub(gutter) as usize;
+    let wrap_cols = crate::config::effective_wrap_width(pane_cols, app.config.wrap_column);
     let primary_screen = if doc.view.wrap && wrap_cols > 0 {
         // Soft word-wrap: iterate *visual* rows (a logical line may span several).
         render_wrapped(buf, &ctx, &mut scratch, wrap_cols)
@@ -273,13 +275,10 @@ fn render_editor_row<'a>(
 }
 
 /// Soft word-wrap render: iterate **visual rows** (from `editor_core::view::visual_rows`), each a
-/// segment of a logical line, drawn from display column 0. The line number shows on a line's first
-/// visual row and continuation rows blank the gutter. Syntax styles + decorations are resolved once
-/// per logical line and reused across its segments. Returns the primary caret's screen position.
-///
-/// Inline virtual text (inlay hints / code lens) and horizontal scrolling are intentionally not
-/// drawn here — wrap pins hscroll to 0, and inline virtual text under wrap is a follow-up (§out of
-/// scope in the design). Everything else — syntax, decorations, selection, bracket, cursors — works.
+/// segment of a logical line, drawn from display column 0 (plus any continuation indent). The line
+/// number shows on a line's first visual row and continuation rows blank the gutter. Syntax styles
+/// and decorations are resolved once per logical line and reused across its segments. Returns the
+/// primary caret's screen position.
 fn render_wrapped<'a>(
     buf: &mut ratatui::buffer::Buffer,
     ctx: &EditorCtx<'a>,
@@ -348,6 +347,7 @@ fn render_wrapped<'a>(
             y,
             vr,
             line_start,
+            width,
             &scratch.styles,
             &scratch.line_decos,
         ) {
@@ -361,22 +361,48 @@ fn render_wrapped<'a>(
     primary_screen
 }
 
-/// Draw one visual row's segment `[vr.start, vr.end)` of `vr.line` from display column 0 (no
-/// hscroll under wrap; each segment fits `wrap_width` by construction). Returns the primary caret's
-/// screen position when it falls on this segment (including the end-of-line caret on the last row).
+/// Draw one visual row's segment `[vr.start, vr.end)` of `vr.line`, starting after the row's
+/// continuation indent. Inline virtual text anchored inside the segment is drawn in-flow. Returns
+/// the primary caret's screen position when it falls on this segment (including the end-of-line
+/// caret on the last row).
+#[allow(clippy::too_many_arguments)]
 fn draw_segment(
     buf: &mut ratatui::buffer::Buffer,
     ctx: &EditorCtx,
     y: u16,
     vr: &editor_core::view::VisualRow,
     line_start: usize,
+    view_width: usize,
     char_styles: &[Option<Style>],
     line_decos: &[&Decoration],
 ) -> Option<(u16, u16)> {
     let body = ctx.doc.line_str(vr.line);
     let body = body.trim_end_matches(['\n', '\r']);
     let mut primary = None;
-    let mut col = 0usize; // display column within this visual row (rows start at 0)
+    // Absolute display column from the visual-row start (indent first, then text / inlays).
+    let mut col = vr.indent_cells;
+    let seg_start_off = line_start + vr.start;
+    let seg_end_off = line_start + vr.end;
+    let mut vts: Vec<&VirtualText> = ctx
+        .deco_virtual
+        .iter()
+        .copied()
+        .filter(|v| v.offset >= seg_start_off && v.offset <= seg_end_off)
+        .collect();
+    // Trailing EOL inlays only on the line's final visual row.
+    let line_len = body.chars().count();
+    let eol_off = line_start + line_len;
+    if vr.end == line_len {
+        let extras: Vec<&VirtualText> = ctx
+            .deco_virtual
+            .iter()
+            .copied()
+            .filter(|v| v.offset == eol_off && !vts.iter().any(|x| std::ptr::eq(*x, *v)))
+            .collect();
+        vts.extend(extras);
+    }
+    vts.sort_by_key(|v| v.offset);
+    let mut vi = 0;
     for (ci, ch) in body
         .chars()
         .enumerate()
@@ -384,23 +410,30 @@ fn draw_segment(
         .take(vr.end - vr.start)
     {
         let char_off = line_start + ci;
+        vi = drain_virtual_at(buf, ctx, y, &vts, vi, char_off, &mut col, view_width);
         let cells = char_cells(ch, col, ctx.doc.tab_width);
         let sx = ctx.text_x + col as u16;
         let style = cell_style(ctx, char_styles, line_decos, ci, char_off);
         if ctx.doc.selections.primary().head == char_off {
             primary = Some((sx, y));
         }
-        draw_char_cells(buf, sx, y, ch, style, cells, 0);
+        if col < view_width {
+            draw_char_cells(buf, sx, y, ch, style, cells, 0);
+        }
         col += cells;
     }
     // End-of-line caret: only on the line's final visual row (its `end` is the line's char count),
     // placed just past the last char. On a row that exactly fills the pane the caret would sit one
     // past the right edge (hidden by `place_cursor`'s bound and unrescued by hscroll under wrap), so
     // clamp it to the last cell instead of vanishing.
-    let line_len = body.chars().count();
     if vr.end == line_len && ctx.doc.selections.primary().head == line_start + vr.end {
         let right_edge = ctx.area.x + ctx.area.width.saturating_sub(1);
         primary = Some(((ctx.text_x + col as u16).min(right_edge), y));
+    }
+    // Trailing virtual text still unconsumed (anchors at segment end / EOL).
+    while vi < vts.len() {
+        col = emit_virtual(buf, ctx, y, vts[vi], col, view_width);
+        vi += 1;
     }
     primary
 }

@@ -50,6 +50,12 @@ fn all_wired_grammars_load_and_highlight() {
         ("go", "package main\n", "line 0 has a keyword"),
         ("toml", "[table]\nkey = 42\n", "line 1 has a number"),
         ("markdown", "# Title\n", "loads"),
+        ("html", "<div class=\"x\">hi</div>\n", "loads"),
+        ("css", "body { color: red; }\n", "loads"),
+        ("java", "class A { int x = 1; }\n", "loads"),
+        ("ruby", "def f\n  x = 1\nend\n", "loads"),
+        ("bash", "echo hello\n", "loads"),
+        ("yaml", "key: value\n", "loads"),
     ];
     for (lang, src, _why) in cases {
         let mut h = DocHighlighter::new(lang)
@@ -107,4 +113,33 @@ fn json_highlights_keys_and_numbers() {
     let l1 = h.line_spans(1);
     assert!(l1.iter().any(|s| s.capture.starts_with("property")));
     assert!(l1.iter().any(|s| s.capture.starts_with("number")));
+}
+
+#[test]
+fn user_query_override_is_applied() {
+    // A minimal rust query that only captures comments — proves the override path runs.
+    let mut map = std::collections::HashMap::new();
+    map.insert(
+        "rust".to_string(),
+        "(line_comment) @comment\n(block_comment) @comment\n".to_string(),
+    );
+    let mut h = DocHighlighter::new_with_queries("rust", &map).expect("override compiles");
+    let rope = Rope::from_str("// hi\nfn main() {}\n");
+    h.ensure(&rope, 1, &[], true, 0, rope.len_lines() - 1);
+    let l0 = h.line_spans(0);
+    assert!(
+        l0.iter().any(|s| s.capture.starts_with("comment")),
+        "override query should highlight the comment: {l0:?}"
+    );
+}
+
+#[test]
+fn load_user_queries_reads_highlights_scm() {
+    let dir = std::env::temp_dir().join(format!("lumina-grammar-test-{}", std::process::id()));
+    let lang_dir = dir.join("rust");
+    std::fs::create_dir_all(&lang_dir).unwrap();
+    std::fs::write(lang_dir.join("highlights.scm"), "(line_comment) @comment\n").unwrap();
+    let map = load_user_queries(&[dir.clone()]);
+    assert!(map.get("rust").is_some_and(|s| s.contains("@comment")));
+    let _ = std::fs::remove_dir_all(&dir);
 }

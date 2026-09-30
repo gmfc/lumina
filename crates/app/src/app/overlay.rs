@@ -29,6 +29,11 @@ impl App {
             "view.notifications" => self.open_notification_log(),
             "view.nextSidebarPanel" => self.cycle_sidebar_panel(),
             "view.dismissNotice" => self.editor.dismiss_status(),
+            "view.splitRight" => self.split_editor(crate::splits::SplitDir::Horizontal),
+            "view.splitDown" => self.split_editor(crate::splits::SplitDir::Vertical),
+            "view.closeSplit" => self.close_editor_split(),
+            "view.focusNextSplit" => self.focus_split(true),
+            "view.focusPrevSplit" => self.focus_split(false),
             other => {
                 let palette = self.chord_for("view.commandPalette", "Ctrl+Shift+P");
                 self.editor.notify_error(format!(

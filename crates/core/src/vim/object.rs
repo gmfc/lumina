@@ -17,6 +17,8 @@ pub enum TextObject {
     Quote { quote: char },
     /// `ip`/`ap` — a run of non-blank (or blank) lines.
     Paragraph,
+    /// `it`/`at` — an HTML-ish tag pair enclosing the cursor.
+    Tag,
 }
 
 /// Resolve `obj` at `pos`. `around` selects the `a` variant (delimiters/trailing
@@ -33,6 +35,7 @@ pub fn text_object(
         TextObject::Pair { open, close } => pair_object(doc, pos, open, close, around),
         TextObject::Quote { quote } => quote_object(doc, pos, quote, around),
         TextObject::Paragraph => Some(paragraph_object(doc, pos, around)),
+        TextObject::Tag => tag_object(doc, pos, around),
     }
 }
 
@@ -242,4 +245,121 @@ fn extend_over_blanks(doc: &Document, first: usize, last: usize, n_lines: usize)
         first -= 1;
     }
     (first, last)
+}
+
+/// Parse a simple HTML/XML open-tag name starting at `open_lt` (the `<` char). Returns
+/// `(name, end_of_open_tag)` where `end_of_open_tag` is the index just past `>`.
+fn parse_open_tag(doc: &Document, open_lt: usize) -> Option<(String, usize)> {
+    let n = doc.len_chars();
+    if open_lt >= n || doc.text.char(open_lt) != '<' {
+        return None;
+    }
+    let mut i = open_lt + 1;
+    if i < n && doc.text.char(i) == '/' {
+        return None; // closing tag
+    }
+    // Skip `!` / `?` (comments / processing).
+    if i < n && matches!(doc.text.char(i), '!' | '?') {
+        return None;
+    }
+    let name_start = i;
+    while i < n {
+        let c = doc.text.char(i);
+        if c.is_alphanumeric() || c == '-' || c == ':' || c == '_' {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if i == name_start {
+        return None;
+    }
+    let name: String = (name_start..i).map(|k| doc.text.char(k)).collect();
+    // Find closing `>` (self-closing allowed).
+    while i < n && doc.text.char(i) != '>' {
+        i += 1;
+    }
+    if i >= n {
+        return None;
+    }
+    // Self-closing `<br/>` has no inner content — treat as no tag object.
+    let self_closing = i > open_lt && doc.text.char(i - 1) == '/';
+    if self_closing {
+        return None;
+    }
+    Some((name.to_ascii_lowercase(), i + 1))
+}
+
+/// Find the matching close tag `</name>` starting from `from`, with nesting awareness.
+fn find_close_tag(doc: &Document, from: usize, name: &str) -> Option<usize> {
+    let n = doc.len_chars();
+    let close = format!("</{name}>");
+    let open_pat = format!("<{name}");
+    let mut depth = 1i32;
+    let mut i = from;
+    while i < n {
+        // Cheap char-scan; tag names are ASCII-ish.
+        if doc.text.char(i) != '<' {
+            i += 1;
+            continue;
+        }
+        let rest: String = (i..n.min(i + close.len().max(open_pat.len()) + 8))
+            .map(|k| doc.text.char(k))
+            .collect();
+        let lower = rest.to_ascii_lowercase();
+        if lower.starts_with(&close) {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+            i += close.len();
+            continue;
+        }
+        if lower.starts_with(&open_pat) {
+            // Only count a real open tag (`<name…>` / `<name `), not a prefix of another name.
+            let after = open_pat.len();
+            let next = rest.chars().nth(after);
+            if matches!(next, Some('>' | ' ' | '\t' | '\n' | '/' | '\r')) {
+                // Self-closing opens don't deepen.
+                if let Some(gt) = rest.find('>') {
+                    if rest.as_bytes().get(gt.saturating_sub(1)) == Some(&b'/') {
+                        i += gt + 1;
+                        continue;
+                    }
+                }
+                depth += 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `it`/`at`: innermost HTML-ish tag enclosing `pos`. `around` includes the tags themselves.
+fn tag_object(doc: &Document, pos: usize, around: bool) -> Option<(usize, usize)> {
+    let n = doc.len_chars();
+    if n == 0 {
+        return None;
+    }
+    let p = pos.min(n - 1);
+    // Scan left for open tags; keep the innermost whose close is past `pos`.
+    let mut i = p as isize;
+    while i >= 0 {
+        if doc.text.char(i as usize) == '<' {
+            if let Some((name, open_end)) = parse_open_tag(doc, i as usize) {
+                if let Some(close_start) = find_close_tag(doc, open_end, &name) {
+                    let close_end = close_start + 3 + name.len(); // </name>
+                    if open_end <= p && p < close_end {
+                        return if around {
+                            Some((i as usize, close_end.min(n)))
+                        } else {
+                            Some((open_end, close_start))
+                        };
+                    }
+                }
+            }
+        }
+        i -= 1;
+    }
+    None
 }

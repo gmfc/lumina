@@ -113,6 +113,8 @@ impl VimPlugin {
             }
             Operator::Indent => self.indent_range(start, end, true, host),
             Operator::Outdent => self.indent_range(start, end, false, host),
+            Operator::Reindent => self.reindent_range(start, end, host),
+            Operator::Format => self.format_range(start, end, host),
             Operator::Lower => {
                 self.transform_range(start, end, |c| c.to_lowercase().collect(), host)
             }
@@ -259,5 +261,115 @@ impl VimPlugin {
             self.apply_operator_range(op, s, e, linewise, host);
         }
         self.sm().clear_pending();
+    }
+
+    /// `=` — copy each line's leading indent from the previous non-blank line (simple reindent).
+    fn reindent_range(&mut self, start: usize, end: usize, host: &mut dyn Host) {
+        let Some(id) = host.active_doc() else {
+            return;
+        };
+        let (changes, caret) = match host.workspace().documents.get(id) {
+            Some(d) => {
+                let fl = d.char_to_line(start);
+                let ll = d.char_to_line(end.saturating_sub(1).max(start));
+                let mut changes = Vec::new();
+                for l in fl..=ll {
+                    let want = if l == 0 {
+                        String::new()
+                    } else {
+                        // Indent of the nearest previous non-blank line.
+                        let mut prev = l;
+                        let mut indent = String::new();
+                        while prev > 0 {
+                            prev -= 1;
+                            let t = d.line_text(prev);
+                            let body = t.trim_end_matches(['\n', '\r']);
+                            if !body.trim().is_empty() {
+                                indent = body
+                                    .chars()
+                                    .take_while(|c| *c == ' ' || *c == '\t')
+                                    .collect();
+                                break;
+                            }
+                        }
+                        indent
+                    };
+                    let t = d.line_text(l);
+                    let body = t.trim_end_matches(['\n', '\r']);
+                    let have: String = body.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+                    if have == want {
+                        continue;
+                    }
+                    let ls = d.line_to_char(l);
+                    changes.push(Change {
+                        at: ls,
+                        removed: have,
+                        inserted: want,
+                    });
+                }
+                (changes, core_vim::first_non_blank(d, fl))
+            }
+            None => return,
+        };
+        if !changes.is_empty() {
+            host.apply_transaction(id, Transaction::from_changes(changes));
+        }
+        let caret = Self::read(host, |d| {
+            core_vim::first_non_blank(d, d.char_to_line(d.clamp(caret)))
+        })
+        .unwrap_or(caret);
+        Self::caret(host, caret);
+    }
+
+    /// `gq` — hard-wrap the selected lines to the pane wrap width (or 80).
+    fn format_range(&mut self, start: usize, end: usize, host: &mut dyn Host) {
+        let plan = Self::read(host, |d| {
+            let fl = d.char_to_line(start);
+            let ll = d.char_to_line(end.saturating_sub(1).max(start));
+            let wrap = if d.view.wrap_width > 0 {
+                d.view.wrap_width
+            } else {
+                80
+            };
+            let mut words: Vec<String> = Vec::new();
+            for l in fl..=ll {
+                let t = d.line_text(l);
+                let body = t.trim_end_matches(['\n', '\r']);
+                for w in body.split_whitespace() {
+                    words.push(w.to_string());
+                }
+            }
+            let mut lines: Vec<String> = Vec::new();
+            let mut cur = String::new();
+            for w in words {
+                if cur.is_empty() {
+                    cur = w;
+                } else if cur.chars().count() + 1 + w.chars().count() <= wrap {
+                    cur.push(' ');
+                    cur.push_str(&w);
+                } else {
+                    lines.push(cur);
+                    cur = w;
+                }
+            }
+            if !cur.is_empty() || lines.is_empty() {
+                lines.push(cur);
+            }
+            let s = d.line_to_char(fl);
+            let e = if ll + 1 < d.len_lines() {
+                d.line_to_char(ll + 1)
+            } else {
+                d.len_chars()
+            };
+            let mut out = lines.join("\n");
+            if e > s && d.rope().char(e.saturating_sub(1)) == '\n' {
+                out.push('\n');
+            }
+            (s, e, out)
+        });
+        if let Some((s, e, out)) = plan {
+            Self::replace(host, s, e, out);
+            Self::caret(host, s);
+        }
     }
 }

@@ -66,6 +66,14 @@ tree-sitter-c = "0.24"
 tree-sitter-go = "0.25"
 tree-sitter-toml-ng = "0.7"
 tree-sitter-md = "0.5"
+tree-sitter-html = "0.23"
+tree-sitter-css = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-bash = "0.25"
+tree-sitter-yaml = "0.7"
+# Pin below 0.1.8 (MSRV 1.90) so the workspace stays on Rust 1.88.
+tree-sitter-language = "=0.1.7"
 streaming-iterator = "0.1"
 # viewers
 # Pure-Rust DEFLATE (`rust_backend`, no C toolchain): PDF content streams are almost always

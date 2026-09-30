@@ -84,6 +84,7 @@ impl App {
                 doc.view.wrap = true;
             }
         }
+        editor.grammar_dirs = config.grammar_dirs.clone();
         // The terminal dock lifecycle lives in the `terminal` plugin; the app keeps the PTY
         // sessions on `EditorState`. Seed the render height + default shell from config.
         editor.terminal_height = config.terminal_height.clamp(3, 60);
@@ -166,6 +167,11 @@ impl App {
         self.editor.terminal_height = self.config.terminal_height.clamp(3, 60);
         self.editor.terminal_shell =
             crate::terminal::default_shell(self.config.terminal_shell.as_deref());
+        // Grammar dirs affect highlighter construction; clear so they rebuild with new overrides.
+        if self.editor.grammar_dirs != self.config.grammar_dirs {
+            self.editor.grammar_dirs = self.config.grammar_dirs.clone();
+            self.editor.highlighters.clear();
+        }
         self.keymap = build_keymap(&self.config, &self.registry);
         // The palette shows each command's chord, so the catalog has to follow the keymap.
         self.editor.command_catalog = command_catalog(&self.registry, &self.keymap);
@@ -314,10 +320,12 @@ impl App {
             .editor
             .active_document()
             .map(|doc| {
-                self.regions
+                let pane = self
+                    .regions
                     .editor
                     .width
-                    .saturating_sub(ui::gutter_width(doc)) as usize
+                    .saturating_sub(ui::gutter_width(doc)) as usize;
+                crate::config::effective_wrap_width(pane, self.config.wrap_column)
             })
             .unwrap_or(0);
         let wrap_enabled = self.editor.wrap_enabled;
@@ -325,6 +333,7 @@ impl App {
             doc.view.wrap = wrap_enabled;
             doc.view.wrap_width = text_width;
         }
+        self.editor.store_focused_pane_view();
         let cur = self.editor.workspace.active_doc().and_then(|id| {
             self.editor
                 .workspace
@@ -348,10 +357,12 @@ impl App {
             .editor
             .active_document()
             .map(|doc| {
-                self.regions
+                let pane = self
+                    .regions
                     .editor
                     .width
-                    .saturating_sub(ui::gutter_width(doc)) as usize
+                    .saturating_sub(ui::gutter_width(doc)) as usize;
+                crate::config::effective_wrap_width(pane, self.config.wrap_column)
             })
             .unwrap_or(0);
         let wrap_enabled = self.editor.wrap_enabled;

@@ -97,7 +97,7 @@ impl VimPlugin {
         }
     }
 
-    fn substitute_ex(&mut self, cmd: &str, host: &mut dyn Host) {
+fn substitute_ex(&mut self, cmd: &str, host: &mut dyn Host) {
         let whole = cmd.starts_with('%');
         let body = cmd.trim_start_matches('%');
         let body = body.strip_prefix('s').unwrap_or(body);
@@ -109,8 +109,13 @@ impl VimPlugin {
         if old.is_empty() {
             return;
         }
-        let global = parts.next().unwrap_or("").contains('g');
-        let (old, new) = (old.to_string(), new.to_string());
+        let flags = parts.next().unwrap_or("");
+        let global = flags.contains('g');
+        let Ok(re) = regex::Regex::new(old) else {
+            host.notify(format!("Invalid regex: {old}"));
+            return;
+        };
+        let new = new.to_string();
         let plan = Self::read(host, |d| {
             let (start, end) = if whole {
                 (0, d.len_chars())
@@ -121,9 +126,9 @@ impl VimPlugin {
             };
             let src = d.rope().slice(start..end).to_string();
             let out = if global {
-                src.replace(&old, &new)
+                re.replace_all(&src, new.as_str()).into_owned()
             } else {
-                src.replacen(&old, &new, 1)
+                re.replace(&src, new.as_str()).into_owned()
             };
             (start, end, src, out)
         });

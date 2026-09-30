@@ -134,6 +134,7 @@ mod palette;
 mod panel;
 mod run_loop;
 mod settings;
+mod splits;
 pub(crate) mod tabview;
 mod workers;
 

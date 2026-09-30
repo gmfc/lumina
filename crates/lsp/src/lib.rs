@@ -61,12 +61,16 @@ pub struct Location {
 
 /// A document symbol flattened to a jump target: its name, `SymbolKind`, and start position
 /// in the current file (line, UTF-16 char). Hierarchy is flattened with a depth for display.
+/// `end_line`/`end_character` come from the symbol's full `range` when the server sends one
+/// (used by the breadcrumb strip to decide enclosure).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentSymbol {
     pub name: String,
     pub kind: u8,
     pub line: u32,
     pub character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
     pub depth: usize,
 }
 

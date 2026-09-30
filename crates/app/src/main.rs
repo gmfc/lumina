@@ -15,6 +15,7 @@ mod lsp;
 mod picker;
 mod session;
 mod settings;
+mod splits;
 mod sync;
 mod terminal;
 mod theme;

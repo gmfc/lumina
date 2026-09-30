@@ -92,12 +92,12 @@ impl VimPlugin {
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 let n = self.s().effective_count() as isize;
-                self.move_lines(n, true, host);
+                self.move_logical_lines(n, true, host);
                 self.sm().count = None;
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let n = self.s().effective_count() as isize;
-                self.move_lines(-n, true, host);
+                self.move_logical_lines(-n, true, host);
                 self.sm().count = None;
             }
             _ => {

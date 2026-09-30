@@ -312,6 +312,9 @@ pub(crate) struct EditorState {
     pub(crate) overlay: Option<Overlay>,
     /// Per-document syntax highlighters (created lazily for supported languages).
     pub(crate) highlighters: HashMap<DocId, editor_syntax::DocHighlighter>,
+    /// Directories scanned for user highlight-query overrides (`<dir>/<lang>/highlights.scm`).
+    /// Seeded from config `grammar_dirs` at construction / reload.
+    pub(crate) grammar_dirs: Vec<std::path::PathBuf>,
     /// Per-document, per-layer decorations (styled spans + gutter marks) published by plugins
     /// via `Host::set_decorations`. The renderer merges these layers on top of syntax; keeping
     /// them here (not on the plugin) keeps render a pure function of state (invariant #8).
@@ -352,6 +355,16 @@ pub(crate) struct EditorState {
     /// Viewer tabs requested via `Host::open_viewer`: `(path, viewer_id)`, opened by `App` (it
     /// owns file IO policy) on the next drain — the same effect-queue idiom as `pending_opens`.
     pub(crate) pending_viewers: Vec<(PathBuf, String)>,
+    /// Editor split tree. `None` until the first document is shown (then seeded as a single leaf).
+    pub(crate) splits: Option<crate::splits::SplitTree>,
+    /// Focus path into [`Self::splits`] (`false` = first child, `true` = second).
+    pub(crate) split_focus: Vec<bool>,
+    /// Cached LSP document symbols per doc (breadcrumb strip + outline).
+    pub(crate) doc_symbols: HashMap<DocId, Vec<editor_lsp::DocumentSymbol>>,
+    /// When true, the next `DocumentSymbols` LSP response also opens the symbols picker.
+    pub(crate) symbols_picker_pending: bool,
+    /// Clickable breadcrumb segments from the last frame: `(rect, line, character)`.
+    pub(crate) breadcrumb_hits: Vec<(ratatui::layout::Rect, u32, u32)>,
 }
 
 impl EditorState {
@@ -390,6 +403,7 @@ impl EditorState {
             lsp_panel: LspPanelUi::default(),
             overlay: None,
             highlighters: HashMap::new(),
+            grammar_dirs: Vec::new(),
             decorations: HashMap::new(),
             prompt: None,
             picker: None,
@@ -402,6 +416,11 @@ impl EditorState {
             clipboard: crate::clipboard::Clipboard::new(),
             tab_views: HashMap::new(),
             pending_viewers: Vec::new(),
+            splits: None,
+            split_focus: Vec::new(),
+            doc_symbols: HashMap::new(),
+            symbols_picker_pending: false,
+            breadcrumb_hits: Vec::new(),
         }
     }
 
@@ -638,8 +657,10 @@ impl EditorState {
             return;
         };
 
+        let dirs = self.grammar_dirs.clone();
         let hl = self.highlighters.entry(id).or_insert_with(|| {
-            editor_syntax::DocHighlighter::new(&lang).expect("language checked as supported")
+            editor_syntax::DocHighlighter::new_with_dirs(&lang, &dirs)
+                .expect("language checked as supported")
         });
         hl.ensure(&rope, rev, &edits, edits_valid, first, last);
     }
@@ -650,6 +671,72 @@ impl EditorState {
 
     pub(crate) fn active_document_mut(&mut self) -> Option<&mut Document> {
         self.workspace.active_document_mut()
+    }
+
+    /// Ensure the split tree exists for the active document (single leaf).
+    pub(crate) fn ensure_splits(&mut self) {
+        let Some(id) = self.workspace.active_doc() else {
+            self.splits = None;
+            self.split_focus.clear();
+            return;
+        };
+        let view = self
+            .workspace
+            .documents
+            .get(id)
+            .map(|d| d.view.clone())
+            .unwrap_or_default();
+        if self.splits.is_none() {
+            self.splits = Some(crate::splits::SplitTree::single(id, view));
+            self.split_focus.clear();
+        } else if let Some(tree) = &mut self.splits {
+            // Keep the focused leaf's doc in sync with the active tab when there's a single pane.
+            if tree.leaf_count() == 1 {
+                let pane = tree.focused_pane_mut(&[]);
+                pane.doc = id;
+            }
+        }
+    }
+
+    /// Push the focused pane's view onto its document (so motions/render see it).
+    pub(crate) fn apply_focused_pane_view(&mut self) {
+        let Some(tree) = &self.splits else {
+            return;
+        };
+        let pane = tree.focused_pane(&self.split_focus).clone();
+        if let Some(doc) = self.workspace.documents.get_mut(pane.doc) {
+            doc.view.scroll_line = pane.view.scroll_line;
+            doc.view.scroll_col = pane.view.scroll_col;
+            doc.view.scroll_sub = pane.view.scroll_sub;
+            doc.view.goal_col = pane.view.goal_col;
+        }
+        // Sync active tab when the focused pane's doc differs.
+        if let Some(idx) = self.workspace.tabs.iter().position(|&t| t == pane.doc) {
+            if self.workspace.active_tab != idx {
+                self.workspace.active_tab = idx;
+            }
+        }
+    }
+
+    /// Pull the document's view back into the focused pane (after motions/scroll).
+    pub(crate) fn store_focused_pane_view(&mut self) {
+        let focus = self.split_focus.clone();
+        let doc_id = self
+            .splits
+            .as_ref()
+            .map(|t| t.focused_pane(&focus).doc);
+        let Some(doc_id) = doc_id else {
+            return;
+        };
+        let view = self
+            .workspace
+            .documents
+            .get(doc_id)
+            .map(|d| d.view.clone())
+            .unwrap_or_default();
+        if let Some(tree) = &mut self.splits {
+            tree.focused_pane_mut(&focus).view = view;
+        }
     }
 
     /// Queue an event for `App` to broadcast to plugins.
