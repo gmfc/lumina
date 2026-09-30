@@ -423,7 +423,7 @@ impl App {
     }
 
     /// Test/helper: apply drafts from an explicit root onto the current editor.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)] // used from `app::tests::reliability`
     pub(crate) fn restore_drafts_from(&mut self, drafts_root: &std::path::Path) {
         restore_crash_drafts(&mut self.editor, Some(drafts_root));
     }
