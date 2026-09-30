@@ -132,8 +132,8 @@ goes to the shell; click the editor to return there, or use the `terminal.*` com
 header's `▾`/`▸` control minimizes and restores the dock, `×` closes a tab, and `+` opens a new
 one. Mouse-wheel over the panel scrolls its history. The terminal dock is built to grow (task
 runners and other bottom-dock contributions can hang off the same panel later). **Editor**
-split panes are available separately: `Ctrl+\` splits right, `Ctrl+K Ctrl+\` splits down,
-`Ctrl+K W` closes a split, and `Ctrl+K Ctrl+←`/`→` cycle focus.
+split panes are available separately: `Ctrl+K \` splits right, `Ctrl+K Ctrl+\` splits down,
+`Ctrl+K W` closes a split, and `Ctrl+K Ctrl+←`/`→` cycle focus (`Ctrl+\` stays Jump to Bracket).
 
 ## Source control
 

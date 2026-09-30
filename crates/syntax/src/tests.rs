@@ -139,7 +139,7 @@ fn load_user_queries_reads_highlights_scm() {
     let lang_dir = dir.join("rust");
     std::fs::create_dir_all(&lang_dir).unwrap();
     std::fs::write(lang_dir.join("highlights.scm"), "(line_comment) @comment\n").unwrap();
-    let map = load_user_queries(&[dir.clone()]);
+    let map = load_user_queries(std::slice::from_ref(&dir));
     assert!(map.get("rust").is_some_and(|s| s.contains("@comment")));
     let _ = std::fs::remove_dir_all(&dir);
 }

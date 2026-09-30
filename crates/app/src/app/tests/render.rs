@@ -145,8 +145,7 @@ fn soft_wrap_splits_a_long_line_across_rows() {
     // A row past the wrapped line shows the EOF tilde.
     assert!(
         rows.iter().any(|r| r.contains('~')),
-        "past-EOF tilde: {:?}",
-        rows
+        "past-EOF tilde: {rows:?}"
     );
 }
 

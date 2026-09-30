@@ -333,7 +333,6 @@ impl App {
             doc.view.wrap = wrap_enabled;
             doc.view.wrap_width = text_width;
         }
-        self.editor.store_focused_pane_view();
         let cur = self.editor.workspace.active_doc().and_then(|id| {
             self.editor
                 .workspace
@@ -345,6 +344,9 @@ impl App {
             self.ensure_cursor_visible();
             self.last_caret = cur;
         }
+        // After any caret clamp, mirror the document view into the focused leaf so the next
+        // draw doesn't restore a stale scroll_col/scroll_line from the pane tree.
+        self.editor.store_focused_pane_view();
     }
 
     /// Keep the primary cursor within the viewport by adjusting the active doc's scroll,

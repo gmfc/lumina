@@ -105,6 +105,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
 
     app.editor.ensure_splits();
+    // Pull the live document view (scroll from ensure_cursor_visible, etc.) into the focused
+    // pane *before* the per-pane render loop mirrors pane → doc — otherwise a stale leaf view
+    // would wipe horizontal/vertical scroll every frame.
+    app.editor.store_focused_pane_view();
     let mut editor_panes: Vec<(Vec<bool>, Rect)> = Vec::new();
     if app.settings_active() {
         render_settings(f, app, editor_body);
