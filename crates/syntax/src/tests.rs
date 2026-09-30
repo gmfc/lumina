@@ -163,7 +163,7 @@ fn new_with_dirs_applies_user_query() {
         "(line_comment) @comment\n(block_comment) @comment\n",
     )
     .unwrap();
-    let mut h = DocHighlighter::new_with_dirs("rust", &[dir.clone()]).expect("loads");
+    let mut h = DocHighlighter::new_with_dirs("rust", std::slice::from_ref(&dir)).expect("loads");
     let rope = Rope::from_str("// hi\nfn main() {}\n");
     h.ensure(&rope, 1, &[], true, 0, rope.len_lines() - 1);
     assert!(h

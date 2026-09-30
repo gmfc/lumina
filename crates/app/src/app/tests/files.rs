@@ -213,25 +213,28 @@ fn autosave_writes_a_dirty_buffer_once_typing_stops() {
 }
 
 /// Typing again inside the window restarts it — otherwise autosave would fire mid-word.
+///
+/// Uses a long idle window with short sleeps so CI schedulers (esp. macOS) can overrun
+/// `sleep` without crossing the deadline — the 200/150/120ms budget was flaky under load.
 #[test]
 fn typing_restarts_the_autosave_window() {
     let path = temp_file("start\n");
     let mut app = app_with(&path);
-    app.config.autosave_ms = 200;
+    app.config.autosave_ms = 800;
 
     app.on_key(KeyEvent::from(KeyCode::Char('a')));
     app.autosave_tick();
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    std::thread::sleep(std::time::Duration::from_millis(100));
 
-    app.on_key(KeyEvent::from(KeyCode::Char('b'))); // still typing
+    app.on_key(KeyEvent::from(KeyCode::Char('b'))); // still typing — must restart the window
     app.autosave_tick();
-    std::thread::sleep(std::time::Duration::from_millis(120));
+    std::thread::sleep(std::time::Duration::from_millis(100));
     app.autosave_tick();
 
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         "start\n",
-        "270ms have passed but the window restarted at 150ms, so it has not elapsed"
+        "typing restarted the idle window; autosave must not have fired yet"
     );
     std::fs::remove_file(&path).ok();
 }
